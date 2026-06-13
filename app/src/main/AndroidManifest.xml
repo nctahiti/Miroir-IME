@@ -1,0 +1,45 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:name=".MiroirApp"
+        android:allowBackup="false"
+        android:hardwareAccelerated="true"
+        android:usesCleartextTraffic="true"
+        android:label="Miroir"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Translucent.NoTitleBar"
+        tools:replace="android:label,android:allowBackup">
+
+        <activity
+            android:name=".CaptureActivity"
+            android:exported="true"
+            android:launchMode="singleInstance"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="false"
+            android:noHistory="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".CalibrationActivity"
+            android:exported="false"
+            android:label="Calibration" />
+
+        <service
+            android:name=".MiroirService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+    </application>
+
+</manifest>
