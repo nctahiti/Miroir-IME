@@ -907,9 +907,21 @@ class CaptureView(context: Context) : View(context) {
                         if (hitIdx != null) {
                             val group = findWordGroup(hitIdx)
                             if (group != null) {
-                                val allGroups = fullGroupsCache ?: computeWordGroups()
-                                val groupIndex = allGroups.indexOfFirst { it == group }
-                                if (groupIndex >= 0 && groupIndex < inferredGroupCount) {
+                                // Chercher dans fullGroupsCache (archivés) ou wordGroupsCache (actif)
+                                val allGroups = fullGroupsCache
+                                val groupIndex: Int
+                                val canReactivate: Boolean
+                                if (allGroups != null) {
+                                    groupIndex = allGroups.indexOfFirst { it == group }
+                                    // Les groupes archivés sont tous inférés → réactivables
+                                    canReactivate = groupIndex >= 0 && groupIndex < allGroups.size
+                                } else {
+                                    // Pas d'archivage : utiliser wordGroupsCache + inferredGroupCount
+                                    val activeGroups = wordGroupsCache ?: return
+                                    groupIndex = activeGroups.indexOfFirst { it == group }
+                                    canReactivate = groupIndex >= 0 && groupIndex < inferredGroupCount
+                                }
+                                if (canReactivate) {
                                     Log.i(TAG, "Appui long — réactivation du groupe $groupIndex")
                                     reactivatedGroupIndex = groupIndex
                                     // Réactiver tous les strokes archivés pour permettre la correction
@@ -1486,7 +1498,11 @@ class CaptureView(context: Context) : View(context) {
                 if (newBase > activeStrokeBase) {
                     Log.i(TAG, "Archive immédiate: base $activeStrokeBase → $newBase (${ordered.size} groupes, garde dernier)")
                     activeStrokeBase = newBase
-                    inferredGroupCount = 1  // seul le dernier groupe reste actif
+                    // ⚠️ NE PAS mettre inferredGroupCount=1 :
+                    // le groupe actif (dernier) n'a PAS été inféré.
+                    // inferredGroupCount=0 → le prochain nouveau groupe
+                    // déclenchera l'inférence immédiate (0+1 < 2).
+                    inferredGroupCount = 0
                     // ═══ Construire fullGroupsCache incrémentalement ═══
                     // Ajouter les groupes archivés (tous sauf le dernier) au cache complet.
                     // Ainsi findWordGroup() n'aura jamais besoin de recalculer O(n).
@@ -1534,7 +1550,8 @@ class CaptureView(context: Context) : View(context) {
                 if (newBase > activeStrokeBase) {
                     Log.i(TAG, "Archive: avance base $activeStrokeBase → $newBase (${g.size} groupes, garde dernier)")
                     activeStrokeBase = newBase
-                    inferredGroupCount = 1  // seul le dernier groupe reste, il est inféré
+                    // Même logique que l'archivage immédiat : le groupe actif n'est pas inféré
+                    inferredGroupCount = 0
                     // ═══ Construire fullGroupsCache incrémentalement ═══
                     val archivedGroups = g.dropLast(1)
                     if (fullGroupsCache == null) {
@@ -1973,13 +1990,17 @@ class CaptureView(context: Context) : View(context) {
         for (i in (base + 1) until strokeRegistry.size) {
             val xGapRaw = leftX[i] - rightX[i - 1]
 
-            // Retour a la ligne :
-            //  - le stroke COMMENCE nettement PLUS BAS que la fin du precedent
-            //    (sinon c'est un jambage descendant qui chevauche en Y)
-            //  - ET le stroke commence NETTEMENT a gauche de la fin du precedent
-            //    (descendante du 'g' : xGapRaw ~0~20, retour ligne : xGapRaw << -200)
-            val startsBelow = yMin[i] > yMax[i - 1] + lineWrapThreshold * 0.3f
-            if (startsBelow && xGapRaw < -distX) {
+            // Retour a la ligne — deux paliers :
+            //   ÉCART VERTICAL LARGE (> distY) : toujours nouvelle ligne
+            //   ÉCART VERTICAL MODÉRÉ (distY*0.3 à distY) : nouvelle ligne si à gauche
+            //   ÉCART VERTICAL FAIBLE (< distY*0.3) : même groupe (jambage/descender)
+            val yGap = yMin[i] - yMax[i - 1]  // positif = stroke i commence plus bas
+            val isNewLine = when {
+                yGap > lineWrapThreshold -> true           // >70px : clairement nouvelle ligne
+                yGap > lineWrapThreshold * 0.3f && xGapRaw < 0 -> true  // >21px ET à gauche
+                else -> false
+            }
+            if (isNewLine) {
                 groups.add(current)
                 current = mutableListOf(i)
             } else {
@@ -2094,12 +2115,12 @@ class CaptureView(context: Context) : View(context) {
     }
 
     /** Retourne le groupe de mots contenant l'index stroke, ou null.
-     *  Utilise fullGroupsCache construit incrémentalement — jamais de recalcul O(n). */
+     *  Cherche dans les deux caches : fullGroupsCache (archivés) + wordGroupsCache (actif). */
     private fun findWordGroup(strokeIndex: Int): List<Int>? {
-        // Le cache complet est construit incrémentalement lors des archivages.
-        // S'il est vide, c'est qu'aucun archivage n'a eu lieu → utiliser le cache actif.
-        val cache = fullGroupsCache ?: wordGroupsCache
-        return cache?.find { strokeIndex in it }
+        // Chercher d'abord dans le groupe actif (wordGroupsCache)
+        wordGroupsCache?.find { strokeIndex in it }?.let { return it }
+        // Puis dans les groupes archivés (fullGroupsCache, construit incrémentalement)
+        return fullGroupsCache?.find { strokeIndex in it }
     }
 
     /**
