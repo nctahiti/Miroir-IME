@@ -7,11 +7,11 @@ android {
     compileSdk = 35  // compilation toujours sur SDK 35
 
     defaultConfig {
-        applicationId = "com.parnasse.miroir"
+        applicationId = "com.parnasse.miroir.v4"
         minSdk = 29
         targetSdk = 29  // Onyx SDK nécessite targetSdk<=29 pour les hidden API
         versionCode = 1
-        versionName = "0.0.1"
+        versionName = "0.4.0"
     }
 
     buildTypes {
@@ -47,7 +47,8 @@ android {
         noCompress("tflite")  // TFLite requiert des fichiers non compressés
     }
 
-    namespace = "com.parnasse.miroir"
+    namespace = "com.parnasse.miroir"  // namespace Kotlin inchangé (R, BuildConfig)
+    // applicationId = "com.parnasse.miroir.v4" → installable en parallèle du stable
 }
 
 dependencies {

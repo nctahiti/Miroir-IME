@@ -174,6 +174,22 @@ class CaptureView(context: Context) : View(context) {
     /** Registre de tous les strokes traces (pour edition) */
     private val strokeRegistry = mutableListOf<StrokeRecord>()
 
+    // ═══ V4 — CONDUIT V★ + INFÉRENCE ASYNCHRONE ═══
+    /** Écriture temps réel des strokes en V★ delta binaire (le conduit) */
+    var vstarWriter: VStarWriter? = null
+    /** Processeur d'inférence asynchrone (thread background dédié) */
+    var strokeProcessor: StrokeProcessor? = null
+
+    /** Compteur monotone pour l'ordre d'écriture (indépendant de l'archivage) */
+    private val groupSequenceCounter = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** Throttling du rafraîchissement (e-ink ~35Hz, pas besoin de 60Hz) */
+    private var lastInvalidateTime = 0L
+    private val minInvalidateIntervalMs = 30L  // ~33 Hz
+
+    /** Désactive tous les overlays visuels (blob, debug, ancres EDIT) pour diagnostic latence */
+    var showVisualOverlays = true
+
     /** Stroke en cours de dessin (null si pas en train de tracer) */
     private var drawingStroke: StrokeRecord? = null
 
@@ -574,7 +590,8 @@ class CaptureView(context: Context) : View(context) {
 
             // Notifier pour relancer la reconnaissance
             val snapshot = strokeRegistry.toList()
-            onWordGroupCompleted?.invoke(snapshot, group.toList())
+            val seq = groupSequenceCounter.getAndIncrement()
+            onWordGroupCompleted?.invoke(snapshot, group.toList(), seq)
 
             // Feedback visuel : faire pulser le point plus fort
             lastTapTime = 0  // reset pour éviter triple-tap
@@ -853,6 +870,8 @@ class CaptureView(context: Context) : View(context) {
                     pressures = mutableListOf(0.5f)
                 )
                 writeRawPoint("DOWN", x, y, 0.5f, t)
+                // ═══ V4 CONDUIT : écriture delta V★ ═══
+                vstarWriter?.writePoint(x, y, t, 0.5f, isPenDown = true)
             }
 
             MotionEvent.ACTION_MOVE -> {
@@ -880,12 +899,13 @@ class CaptureView(context: Context) : View(context) {
                                     }
                                     cancelAutoInferTimeout()
                                     val snapshot = strokeRegistry.toList()
-                                    onWordGroupCompleted?.invoke(snapshot, group.toList())
+                                    val seq = groupSequenceCounter.getAndIncrement()
+            onWordGroupCompleted?.invoke(snapshot, group.toList(), seq)
                                     // Annuler le stroke en cours
                                     drawingStroke = null
                                     currentPath.clear()
                                     hasPrevPoint = false
-                                    postInvalidate()
+                                    throttledInvalidate()
                                     return
                                 }
                             }
@@ -919,6 +939,8 @@ class CaptureView(context: Context) : View(context) {
                     drawingStroke?.timestamps?.add(ht)
                     drawingStroke?.pressures?.add(hp)
                     writeRawPoint("MOVE", hx, hy, hp, ht)
+                    // ═══ V4 CONDUIT ═══
+                    vstarWriter?.writePoint(hx, hy, ht, hp)
                 }
 
                 // Point courant
@@ -930,7 +952,9 @@ class CaptureView(context: Context) : View(context) {
                 drawingStroke?.timestamps?.add(t)
                 drawingStroke?.pressures?.add(p)
                 writeRawPoint("MOVE", x, y, p, t)
-                postInvalidate()
+                // ═══ V4 CONDUIT ═══
+                vstarWriter?.writePoint(x, y, t, p)
+                throttledInvalidate()
             }
 
             MotionEvent.ACTION_UP -> {
@@ -944,12 +968,14 @@ class CaptureView(context: Context) : View(context) {
                 drawingStroke?.timestamps?.add(t)
                 drawingStroke?.pressures?.add(p)
                 writeRawPoint("UP", x, y, p, t)
+                // ═══ V4 CONDUIT ═══
+                vstarWriter?.writePoint(x, y, t, p, isPenUp = true)
 
                 hasPrevPoint = false
                 rasterizeCurrentPath()
                 registerCompletedStroke()
                 logProgress()
-                postInvalidate()
+                throttledInvalidate()
                 currentPath.clear()
             }
         }
@@ -1198,7 +1224,7 @@ class CaptureView(context: Context) : View(context) {
             currentMode = CaptureMode.EDIT
             onModeChanged?.invoke(currentMode)
             Log.i(TAG, "Note chargee: ${file.name} — ${strokeRegistry.size} strokes, ${loadedGroups.size} groupes")
-            postInvalidate(); true
+            throttledInvalidate(); true
         } catch (e: Exception) {
             Log.w(TAG, "Erreur chargement note: ${e.message}"); false
         }
@@ -1279,6 +1305,10 @@ class CaptureView(context: Context) : View(context) {
         currentMode = CaptureMode.CAPTURE
         reloadAutoInferDelay()  // charger le délai configuré
         startCursorAnimation()  // point clignotant
+        // ═══ V4 : ouvrir le conduit V★ ═══
+        vstarWriter?.close()
+        vstarWriter = VStarWriter(context)
+        vstarWriter?.openNewSession()
         onModeChanged?.invoke(currentMode)
         Log.i(TAG, "Bloc-note: nouvelle page (lazy, mode CAPTURE)")
     }
@@ -1307,8 +1337,11 @@ class CaptureView(context: Context) : View(context) {
     }
 
     /** Enregistre le stroke termine dans le registre */
-    /** Callback appele quand un groupe de mots est complete par la detection spatiale */
-    var onWordGroupCompleted: ((strokes: List<StrokeRecord>, group: List<Int>) -> Unit)? = null
+    /** Callback appelé quand un groupe de mots est complété par la détection spatiale.
+     * @param strokes Snapshot de strokeRegistry
+     * @param group Indices des strokes dans ce groupe
+     * @param groupIndex Index du groupe dans l'ordre visuel (pour ordre d'écriture stable) */
+    var onWordGroupCompleted: ((strokes: List<StrokeRecord>, group: List<Int>, groupIndex: Int) -> Unit)? = null
 
     /** Nombre de groupes deja inferes (pour eviter les doublons) */
     private var inferredGroupCount = 0
@@ -1405,7 +1438,10 @@ class CaptureView(context: Context) : View(context) {
             val ordered = computeVisualOrder(groups) ?: groups
             for (gi in inferredGroupCount until ordered.size - 1) {
                 Log.i(TAG, "Auto-infer: groupe $gi/${ordered.size} (${ordered[gi].size} strokes)")
-                onWordGroupCompleted?.invoke(snapshot, ordered[gi].toList())
+                val seq = groupSequenceCounter.getAndIncrement()
+                onWordGroupCompleted?.invoke(snapshot, ordered[gi].toList(), seq)
+                // V4 CONDUIT : marquer la fin du groupe
+                vstarWriter?.writeGroupSep()
             }
             inferredGroupCount = ordered.size - 1
         }
@@ -1421,14 +1457,18 @@ class CaptureView(context: Context) : View(context) {
             // Inférence pour les groupes non-inférés normaux
             for (gi in inferredGroupCount until ordered.size) {
                 Log.i(TAG, "Auto-infer TIMEOUT: groupe $gi/${ordered.size} (${ordered[gi].size} strokes)")
-                onWordGroupCompleted?.invoke(snapshot, ordered[gi].toList())
+                val seq = groupSequenceCounter.getAndIncrement()
+                onWordGroupCompleted?.invoke(snapshot, ordered[gi].toList(), seq)
+                // V4 CONDUIT
+                vstarWriter?.writeGroupSep()
             }
             inferredGroupCount = ordered.size
 
             // Si un groupe réactivé existe, le ré-inférer aussi
             if (reactivatedGroupIndex >= 0 && reactivatedGroupIndex < ordered.size) {
                 Log.i(TAG, "Auto-infer TIMEOUT: groupe réactivé #$reactivatedGroupIndex (${ordered[reactivatedGroupIndex].size} strokes)")
-                onWordGroupCompleted?.invoke(snapshot, ordered[reactivatedGroupIndex].toList())
+                val seq = groupSequenceCounter.getAndIncrement()
+                onWordGroupCompleted?.invoke(snapshot, ordered[reactivatedGroupIndex].toList(), seq)
                 reactivatedGroupIndex = -1  // réactivation terminée
             }
 
@@ -1523,7 +1563,20 @@ class CaptureView(context: Context) : View(context) {
     // RENDU
     // =========================================================================
 
+    /**
+     * Invalide la vue avec throttling (max ~33 Hz au lieu de 60 Hz).
+     * L'e-ink ne peut pas afficher plus de 35 images/seconde.
+     */
+    private fun throttledInvalidate() {
+        val now = System.currentTimeMillis()
+        if (now - lastInvalidateTime >= minInvalidateIntervalMs) {
+            lastInvalidateTime = now
+            super.postInvalidate()
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
+        val t0 = System.currentTimeMillis()
         super.onDraw(canvas)
         bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
 
@@ -1544,7 +1597,7 @@ class CaptureView(context: Context) : View(context) {
         }
 
         // Blob visuel — rectangle pointillé autour du dernier groupe non-inféré
-        drawActiveGroupBlob(canvas)
+        if (showVisualOverlays) drawActiveGroupBlob(canvas)
 
         // Curseur de survol en mode CAPTURE — contour bleu-violet pointillé
         drawHoverFeedback(canvas)
@@ -1553,23 +1606,25 @@ class CaptureView(context: Context) : View(context) {
         drawActiveGroupCursor(canvas)
 
         // ── DEBUG : indices des groupes ────────────────────────────────
-        drawGroupDebugInfo(canvas)
+        if (showVisualOverlays) drawGroupDebugInfo(canvas)
 
         // SURCOUCHE EDITION
         if (currentMode == CaptureMode.EDIT) {
             // Points d'ancrage : tous les strokes montrent leur premier/dernier point
-            for (s in strokeRegistry) {
-                if (s.activePoints >= 2) {
-                    val first = s.points[0]
-                    val last = s.points[s.activePoints - 1]
-                    canvas.drawCircle(first.first, first.second, 5f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                        color = Color.argb(80, 100, 149, 237)  // bleu-gris discret
-                        style = Paint.Style.FILL
-                    })
-                    canvas.drawCircle(last.first, last.second, 5f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                        color = Color.argb(80, 100, 149, 237)
-                        style = Paint.Style.FILL
-                    })
+            if (showVisualOverlays) {
+                for (s in strokeRegistry) {
+                    if (s.activePoints >= 2) {
+                        val first = s.points[0]
+                        val last = s.points[s.activePoints - 1]
+                        canvas.drawCircle(first.first, first.second, 5f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                            color = Color.argb(80, 100, 149, 237)  // bleu-gris discret
+                            style = Paint.Style.FILL
+                        })
+                        canvas.drawCircle(last.first, last.second, 5f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                            color = Color.argb(80, 100, 149, 237)
+                            style = Paint.Style.FILL
+                        })
+                    }
                 }
             }
 
@@ -1745,7 +1800,7 @@ class CaptureView(context: Context) : View(context) {
         invalidateWordGroups()
         val groups = computeWordGroups()
         Log.i(TAG, "♻️ Recalcul groupes: ${groups.size} groupes, ${strokeRegistry.size} strokes")
-        postInvalidate()
+        throttledInvalidate()
     }
 
     // =========================================================================
@@ -1776,7 +1831,7 @@ class CaptureView(context: Context) : View(context) {
         }
         wordGroupsCache = newGroups
         Log.i(TAG, "🪄 Décompose: groupe [$targetGroupIdx] (${targetGroup.size} strokes) → ${targetGroup.size} groupes unitaires")
-        postInvalidate()
+        throttledInvalidate()
         return true
     }
 
@@ -2353,7 +2408,7 @@ class CaptureView(context: Context) : View(context) {
             }
 
             Log.i(TAG, "CSV charge: ${file.name} — ${strokeRegistry.size} strokes")
-            postInvalidate()
+            throttledInvalidate()
             return true
 
         } catch (e: Exception) {
@@ -2405,7 +2460,7 @@ class CaptureView(context: Context) : View(context) {
         onModeChanged?.invoke(currentMode)
 
         Log.i(TAG, "VStar charge: ${file.name} — ${doc.strokes.size} strokes | hasOrigin=${doc.hasOrigin}")
-        postInvalidate()
+        throttledInvalidate()
         return true
     }
 
@@ -2518,14 +2573,14 @@ class CaptureView(context: Context) : View(context) {
     }
 
     /**
-     * Curseur clignotant noir — style éditeur de texte.
-     * Binaire on/off 500ms, positionné à l'origine du premier stroke du groupe actif.
+     * Symbole d'activation statique — tiret horizontal à gauche du groupe actif.
+     * Remplace le clignotement (qui forçait un invalidate() toutes les 500ms).
+     * Placé à 10px à gauche du premier stroke, aligné sur le snapY.
      */
     private fun drawActiveGroupCursor(canvas: Canvas) {
-        if (!cursorVisible) return
         if (currentMode != CaptureMode.CAPTURE) return
         if (!isBlocnoteMode) return
-        val groups = wordGroupsCache ?: computeWordGroups()
+        val groups = wordGroupsCache ?: return  // pas de fallback computeWordGroups()
         if (groups.isEmpty()) return
 
         val activeGroup: List<Int>? = if (reactivatedGroupIndex >= 0 && reactivatedGroupIndex < groups.size) {
@@ -2540,38 +2595,35 @@ class CaptureView(context: Context) : View(context) {
         val s = strokeRegistry[firstStrokeIdx]
         if (s.activePoints < 1) return
 
-        val originX = s.points[0].first
-        val originY = s.points[0].second
-
-        // Curseur éditeur : barre verticale noire + petit cercle
-        val barWidth = 3f
-        val barHeight = 28f
-        canvas.drawRect(
-            originX - barWidth/2, originY - barHeight/2,
-            originX + barWidth/2, originY + barHeight/2,
-            cursorPaint
-        )
-        canvas.drawCircle(originX, originY - barHeight/2, 3f, cursorPaint)
-    }
-
-    /** Démarre l'animation du curseur (clignotement binaire 500ms) */
-    private fun startCursorAnimation() {
-        if (cursorAnimRunning) return
-        cursorAnimRunning = true
-        cursorVisible = true
-        val runnable = object : Runnable {
-            override fun run() {
-                if (!cursorAnimRunning) return
-                cursorVisible = !cursorVisible
-                invalidate()
-                cursorAnimHandler.postDelayed(this, 500)
+        // Position : 10px à gauche du premier point, centré verticalement sur le snapY du groupe
+        val originX = s.points[0].first - 10f
+        // Calculer le snapY du groupe (moyenne des Y)
+        var sumY = 0f; var count = 0
+        for (si in activeGroup) {
+            if (si < strokeRegistry.size) {
+                for ((_, y) in strokeRegistry[si].points) { sumY += y; count++ }
             }
         }
-        cursorAnimHandler.postDelayed(runnable, 500)
+        val snapY = if (count > 0) sumY / count else s.points[0].second
+
+        // Tiret horizontal statique (12×2 px, noir)
+        val dashWidth = 12f
+        val dashHeight = 2f
+        canvas.drawRect(
+            originX - dashWidth / 2, snapY - dashHeight / 2,
+            originX + dashWidth / 2, snapY + dashHeight / 2,
+            cursorPaint
+        )
+    }
+
+    /** Animation du curseur désactivée — le symbole est statique (pas de clignotement). */
+    private fun startCursorAnimation() {
+        // Symbole statique : pas d'animation nécessaire.
+        // On garde la méthode pour compatibilité, mais elle ne fait rien.
     }
 
     private fun stopCursorAnimation() {
-        cursorAnimRunning = false
+        // Plus rien à arrêter.
     }
 
     /**
@@ -2605,6 +2657,9 @@ class CaptureView(context: Context) : View(context) {
         stopCursorAnimation()
         closeRawWriter()
         closeDebugLog()
+        // V4 : fermer le conduit
+        vstarWriter?.writeEnd()
+        vstarWriter?.close()
         bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         currentPath.clear()
         strokeRegistry.clear()
@@ -2624,6 +2679,6 @@ class CaptureView(context: Context) : View(context) {
         pointInStroke = 0
         hasPrevPoint = false
         insertPending = false
-        postInvalidate()
+        throttledInvalidate()
     }
 }

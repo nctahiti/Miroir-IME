@@ -63,6 +63,10 @@ class CaptureActivity : Activity() {
     private var accumulatedText: String = ""
     private val wordTranscriptions = mutableListOf<String>()  // pour sauvegarde
 
+    // ═══ SOURCE UNIQUE HORIZON ═══
+    /** Source unique de vérité pour le texte reconnu (fichier .transcription) */
+    private var transcriptionWriter: TranscriptionWriter? = null
+
     // ── Mode ───────────────────────────────────────────────────────────
     private var isBlocNote = true
     private var currentWord: String = ""
@@ -74,17 +78,58 @@ class CaptureActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.i(TAG, "=== CAPTURE ACTIVITY V3 (Google ML Kit) ===")
+        Log.i(TAG, "=== CAPTURE ACTIVITY V4 (VStar conduit + inference asynchrone) ===")
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         createNotificationChannel()
         showPersistentNotification()
 
-        // ── CaptureView ────────────────────────────────────────────────
+        // ── Initialisation du reconnaisseur ────────────────────────────
+        wordRecognizer = DigitalInkWrapper(this)
+        wordRecognizer!!.load()
+
+        // ── StrokeProcessor (thread background dédié) ─────
+        val processor = StrokeProcessor(wordRecognizer)
+
+        // ═══ SOURCE UNIQUE HORIZON : fichier .transcription ═══
+        val noteDir = java.io.File(filesDir, "blocnote")
+        val baseName = "note_${java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())}"
+        val tw = TranscriptionWriter(noteDir, baseName, CalibrationActivity.getSpatialDistanceY(this).toFloat())
+        transcriptionWriter = tw
+        processor.transcriptionWriter = tw
+
+        // ═══ RASTÉRISATION DE CONTRÔLE (V4 Horizon) ═══
+        // Rastérise les strokes AVANT inférence ML Kit dans une zone
+        // NORMALISÉE par l'interligne (hauteur fixe = 3×IL).
+        // → Tous les mots ont la même échelle verticale.
+        // → Un point isolé n'est plus reconnu comme grand caractère.
+        val rasterDir = java.io.File(filesDir, "debug_rasters")
+        // Nettoyer les rasters de la session précédente (évite l'accumulation)
+        rasterDir.listFiles()?.forEach { it.delete() }
+        processor.debugDir = rasterDir
+        processor.enableRasterDebug = false  // désactivé par défaut (debug uniquement)
+        processor.maxRasterCount = 0  // illimité si réactivé manuellement
+        processor.lineHeight = CalibrationActivity.getSpatialDistanceY(this).toFloat()
+        processor.onRasterized = { bitmap, groupIdx ->
+            Log.d(TAG, "📸 Raster groupe #$groupIdx reçu: ${bitmap.width}×${bitmap.height}")
+        }
+
+        // ── CaptureView ───────────────────────────────────
         captureView = CaptureView(this).also { cv ->
-            // Reconnaissance automatique quand un groupe de mots est terminé
-            cv.onWordGroupCompleted = { strokes, group ->
-                onWordRecognize(strokes, group)
+            cv.strokeProcessor = processor
+            // Reconnaissance automatique via StrokeProcessor (thread background)
+            cv.onWordGroupCompleted = { strokes, group, groupIndex ->
+                processor.processGroup(
+                    strokes = strokes,
+                    group = group,
+                    groupIndex = groupIndex,
+                    onResult = { text ->
+                        onWordRecognized(text)
+                    },
+                    onError = { err ->
+                        Log.e(TAG, "Erreur reconnaissance: $err")
+                    }
+                )
             }
         }
 
@@ -123,7 +168,7 @@ class CaptureActivity : Activity() {
 
         // ✕ Fermer
         topBar.addView(makeToolbarButton("✕", android.graphics.Color.argb(200, 150, 0, 0)) {
-            captureView?.saveCurrentNote(mode = "blocnote", transcriptions = wordTranscriptions.toList())
+            captureView?.saveCurrentNote(mode = "blocnote", transcriptions = transcriptionWriter?.getOrderedWords() ?: wordTranscriptions.toList())
             finish()
         })
 
@@ -134,6 +179,24 @@ class CaptureActivity : Activity() {
         topBar.addView(makeToolbarButton("➡", android.graphics.Color.argb(200, 0, 80, 160)) {
             goToNextPage()
         })
+
+        // 👁 Toggle overlays visuels (diagnostic latence)
+        val overlayBtn = makeToolbarButton("👁", android.graphics.Color.argb(180, 80, 80, 80)).apply {
+            setOnClickListener {
+                val cv = captureView ?: return@setOnClickListener
+                cv.showVisualOverlays = !cv.showVisualOverlays
+                this.text = if (cv.showVisualOverlays) "👁" else "👁‍🗨"
+                this.setBackgroundColor(if (cv.showVisualOverlays)
+                    android.graphics.Color.argb(180, 80, 80, 80)
+                else
+                    android.graphics.Color.argb(200, 180, 120, 0))
+                cv.postInvalidate()
+                Toast.makeText(this@CaptureActivity,
+                    if (cv.showVisualOverlays) "👁 Overlays ON" else "👁‍🗨 Overlays OFF (diagnostic)",
+                    Toast.LENGTH_SHORT).show()
+            }
+        }
+        topBar.addView(overlayBtn)
 
         // Espace flexible
         topBar.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
@@ -148,7 +211,7 @@ class CaptureActivity : Activity() {
         topBar.addView(makeToolbarButton("💾", android.graphics.Color.argb(200, 0, 100, 50)) {
             val path = captureView?.saveCurrentNote(
                 mode = "blocnote",
-                transcriptions = wordTranscriptions.toList()
+                transcriptions = transcriptionWriter?.getOrderedWords() ?: wordTranscriptions.toList()
             )
             if (path != null) {
                 Toast.makeText(this, "💾 Sauvegardé", Toast.LENGTH_SHORT).show()
@@ -247,10 +310,6 @@ class CaptureActivity : Activity() {
 
         setContentView(root)
 
-        // ── Initialisation du reconnaisseur ────────────────────────────
-        wordRecognizer = DigitalInkWrapper(this)
-        wordRecognizer!!.load()
-
         // Démarrer en mode Bloc-notes
         applyMode()
         captureView?.startBlocNoteSession()
@@ -293,42 +352,37 @@ class CaptureActivity : Activity() {
 
     // ── Reconnaissance ─────────────────────────────────────────────────
 
-    /** Appelé par CaptureView quand un groupe de mots est terminé */
-    private fun onWordRecognize(strokes: List<StrokeRecord>, group: List<Int>) {
-        val recognizer = wordRecognizer ?: return
-        if (!recognizer.isLoaded) return
-
-        Thread {
-            try {
-                val text = recognizer.recognize(strokes, group)
-                if (text.isNotBlank()) {
-                    runOnUiThread {
-                        // Accumuler en mode Bloc-notes
-                        if (isBlocNote) {
-                            if (accumulatedText.isNotEmpty()) accumulatedText += " "
-                            accumulatedText += text
-                            wordTranscriptions.add(text)  // stocker pour sauvegarde
-                            // Afficher avec le dernier mot encadré
-                            updatePoemText()
-                            poemText?.setTextColor(android.graphics.Color.argb(220, 40, 120, 200))
-                        } else {
-                            // Mode Dictée : comparer au mot cible
-                            val match = text.equals(currentWord, ignoreCase = true)
-                            if (match) {
-                                poemText?.text = "✓ $text"
-                                poemText?.setTextColor(android.graphics.Color.argb(220, 40, 160, 60))
-                            } else {
-                                poemText?.text = "$text ≠ $currentWord"
-                                poemText?.setTextColor(android.graphics.Color.argb(220, 200, 50, 50))
-                            }
-                        }
-                        Log.i(TAG, "Reconnu: '$text'")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Erreur reco: ${e.message}")
+    /** Appelé par StrokeProcessor quand un mot est reconnu (déjà sur UI thread). */
+    private fun onWordRecognized(text: String) {
+        // Le mot est DÉJÀ écrit dans le .transcription par StrokeProcessor.
+        // On recharge simplement depuis le fichier pour afficher.
+        if (isBlocNote) {
+            reloadFromTranscription()
+            poemText?.setTextColor(android.graphics.Color.argb(220, 40, 120, 200))
+        } else {
+            // Mode Dictée : comparer au mot cible
+            val match = text.equals(currentWord, ignoreCase = true)
+            if (match) {
+                poemText?.text = "✓ $text"
+                poemText?.setTextColor(android.graphics.Color.argb(220, 40, 160, 60))
+            } else {
+                poemText?.text = "$text ≠ $currentWord"
+                poemText?.setTextColor(android.graphics.Color.argb(220, 200, 50, 50))
             }
-        }.apply { name = "google-ink-reco"; start() }
+        }
+        Log.i(TAG, "Reconnu: '$text'")
+    }
+
+    /**
+     * Recharge le texte depuis le fichier .transcription (source unique Horizon).
+     * Appelé après chaque mot reconnu, et lors du chargement d'une page existante.
+     */
+    private fun reloadFromTranscription() {
+        val tw = transcriptionWriter ?: return
+        accumulatedText = tw.getOrderedText()
+        wordTranscriptions.clear()
+        wordTranscriptions.addAll(tw.getOrderedWords())
+        updatePoemText()
     }
 
     // ── Actions ────────────────────────────────────────────────────────
@@ -337,12 +391,19 @@ class CaptureActivity : Activity() {
         Log.i(TAG, "✓ Validation")
         captureView?.saveCurrentNote(
             mode = "blocnote",
-            transcriptions = wordTranscriptions.toList()
+            transcriptions = transcriptionWriter?.getOrderedWords() ?: wordTranscriptions.toList()
         )
 
         if (isBlocNote) {
             // Nouvelle page blanche
             captureView?.startBlocNoteSession()
+            // ═══ Recréer le .transcription pour la nouvelle page ═══
+            transcriptionWriter?.delete()
+            val noteDir = java.io.File(filesDir, "blocnote")
+            val baseName = "note_${java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())}"
+            val newTw = TranscriptionWriter(noteDir, baseName, CalibrationActivity.getSpatialDistanceY(this).toFloat())
+            transcriptionWriter = newTw
+            captureView?.strokeProcessor?.transcriptionWriter = newTw
             accumulatedText = ""
             wordTranscriptions.clear()
             currentPageIndex = -1  // nouvelle page
@@ -404,7 +465,7 @@ class CaptureActivity : Activity() {
         
         // Sauver la page courante d'abord
         if (currentPageIndex < 0 && captureView?.hasStrokes() == true) {
-            captureView?.saveCurrentNote(mode = "blocnote", transcriptions = wordTranscriptions.toList())
+            captureView?.saveCurrentNote(mode = "blocnote", transcriptions = transcriptionWriter?.getOrderedWords() ?: wordTranscriptions.toList())
             scanBlocnoteFiles()
         }
         
@@ -428,20 +489,33 @@ class CaptureActivity : Activity() {
         // Charger la note
         captureView?.loadNoteFile(file)
         
-        // Afficher les transcriptions sauvegardées
-        val tx = captureView?.getNoteTranscriptions()
-        if (tx != null && tx.isNotEmpty()) {
-            accumulatedText = tx.joinToString(" ")
-            wordTranscriptions.clear(); wordTranscriptions.addAll(tx)
-            poemText?.text = accumulatedText
+        // ═══ SOURCE UNIQUE HORIZON : charger le .transcription compagnon ═══
+        val noteDir = file.parentFile ?: java.io.File(filesDir, "blocnote")
+        val baseName = file.nameWithoutExtension  // ex: "note_20260614-001101"
+        val tw = TranscriptionWriter(noteDir, baseName, CalibrationActivity.getSpatialDistanceY(this).toFloat())
+        transcriptionWriter = tw
+        captureView?.strokeProcessor?.transcriptionWriter = tw
+        
+        // Afficher les transcriptions depuis le .transcription (source unique)
+        if (tw.exists()) {
+            reloadFromTranscription()
         } else {
-            accumulatedText = ""
-            wordTranscriptions.clear()
-            poemText?.text = "📝 Note ${index + 1}/${blocNoteFiles.size}"
+            // Fallback : charger depuis le .note (ancien format)
+            val tx = captureView?.getNoteTranscriptions()
+            if (tx != null && tx.isNotEmpty()) {
+                // Migrer vers .transcription
+                accumulatedText = tx.joinToString(" ")
+                wordTranscriptions.clear(); wordTranscriptions.addAll(tx)
+                poemText?.text = accumulatedText
+            } else {
+                accumulatedText = ""
+                wordTranscriptions.clear()
+                poemText?.text = "📝 Note ${index + 1}/${blocNoteFiles.size}"
+            }
         }
         poemText?.textSize = 28f
         poemText?.setTextColor(android.graphics.Color.argb(220, 40, 120, 200))
-        Log.i(TAG, "Page ${index + 1}/${blocNoteFiles.size}: ${file.name}")
+        Log.i(TAG, "Page ${index + 1}/${blocNoteFiles.size}: ${file.name} (transcription: ${tw.exists()})")
     }
 
     // ── Rafraîchir toutes les transcriptions ─────────────────────────
@@ -454,7 +528,17 @@ class CaptureActivity : Activity() {
         val groups = captureView?.computeWordGroupsForSave() ?: return
         if (groups.isEmpty()) return
 
-        // Vider les transcriptions existantes
+        // Vider le .transcription et recréer
+        val tw = transcriptionWriter
+        tw?.delete()
+        val newTw = tw ?: run {
+            val noteDir = java.io.File(filesDir, "blocnote")
+            val baseName = "note_${java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())}"
+            TranscriptionWriter(noteDir, baseName, CalibrationActivity.getSpatialDistanceY(this).toFloat()).also { transcriptionWriter = it }
+        }
+        // Mettre à jour le processor
+        captureView?.strokeProcessor?.transcriptionWriter = newTw
+
         accumulatedText = ""
         wordTranscriptions.clear()
 
@@ -462,18 +546,22 @@ class CaptureActivity : Activity() {
         
         Thread {
             val results = mutableListOf<String>()
-            for (group in groups) {
+            for ((idx, group) in groups.withIndex()) {
                 val text = recognizer.recognize(strokes, group)
                 results.add(text.ifBlank { "?" })
+                // Écrire dans le .transcription avec snapY et ordre
+                val snapY = StrokeRenderer.computeSnapY(strokes, group)
+                if (text.isNotBlank()) {
+                    newTw.writeWord(snapY, text, orderIndex = idx)
+                }
             }
             runOnUiThread {
-                wordTranscriptions.addAll(results)
-                accumulatedText = results.joinToString(" ")
-                updatePoemText()
+                reloadFromTranscription()
                 poemText?.setTextColor(android.graphics.Color.argb(220, 40, 120, 200))
                 Log.i(TAG, "🔄 Transcriptions rafraîchies: $accumulatedText")
-                // Sauvegarder dans le fichier .note
-                val path = captureView?.saveCurrentNote(mode = "blocnote", transcriptions = results)
+                // Sauvegarder dans le fichier .note aussi
+                val txWords = newTw.getOrderedWords()
+                val path = captureView?.saveCurrentNote(mode = "blocnote", transcriptions = txWords)
                 if (path != null) {
                     Toast.makeText(this@CaptureActivity, "💾 Transcriptions sauvegardées", Toast.LENGTH_SHORT).show()
                     Log.i(TAG, "💾 Transcriptions sauvegardées dans .note: $path")
