@@ -28,12 +28,14 @@ class CalibrationActivity : Activity() {
         private const val KEY_SPATIAL_DISTANCE_Y = "spatial_distance_y_px"
         private const val KEY_TEMPORAL_DISTANCE = "temporal_distance_ms"
         private const val KEY_LONG_HOVER_DELAY = "long_hover_delay_ms"
+        private const val KEY_ABSORB_CONTACTS = "absorb_contacts"
 
         const val DEFAULT_AUTO_INFER_DELAY = 1500L
         const val DEFAULT_SPATIAL_DISTANCE_X = 40f
         const val DEFAULT_SPATIAL_DISTANCE_Y = 70f
         const val DEFAULT_TEMPORAL_DISTANCE = 800L
         const val DEFAULT_LONG_HOVER_DELAY = 1000L
+        const val DEFAULT_ABSORB_CONTACTS = 1  // 1 = binaire, 10 = amorti
 
         fun prefs(ctx: Context): SharedPreferences =
             ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -52,6 +54,9 @@ class CalibrationActivity : Activity() {
 
         fun getLongHoverDelay(ctx: Context): Long =
             prefs(ctx).getLong(KEY_LONG_HOVER_DELAY, DEFAULT_LONG_HOVER_DELAY)
+
+        fun getAbsorbContacts(ctx: Context): Int =
+            prefs(ctx).getInt(KEY_ABSORB_CONTACTS, DEFAULT_ABSORB_CONTACTS)
     }
 
     private lateinit var delaySeek: SeekBar
@@ -59,11 +64,13 @@ class CalibrationActivity : Activity() {
     private lateinit var spatialYSeek: SeekBar
     private lateinit var temporalSeek: SeekBar
     private lateinit var hoverSeek: SeekBar
+    private lateinit var absorbSeek: SeekBar
     private lateinit var delayLabel: TextView
     private lateinit var spatialXLabel: TextView
     private lateinit var spatialYLabel: TextView
     private lateinit var temporalLabel: TextView
     private lateinit var hoverLabel: TextView
+    private lateinit var absorbLabel: TextView
     private var testView: CaptureView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,6 +82,7 @@ class CalibrationActivity : Activity() {
         val currentSpatialY = p.getFloat(KEY_SPATIAL_DISTANCE_Y, DEFAULT_SPATIAL_DISTANCE_Y)
         val currentTemporal = p.getLong(KEY_TEMPORAL_DISTANCE, DEFAULT_TEMPORAL_DISTANCE)
         val currentHover = p.getLong(KEY_LONG_HOVER_DELAY, DEFAULT_LONG_HOVER_DELAY)
+        val currentAbsorb = p.getInt(KEY_ABSORB_CONTACTS, DEFAULT_ABSORB_CONTACTS)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -110,6 +118,10 @@ class CalibrationActivity : Activity() {
         hoverLabel = addSlider(root, "Survol long (réactivation)", 300, 3000, currentHover.toInt(), "ms")
         hoverSeek = root.getChildAt(root.childCount - 1) as SeekBar
 
+        // Densité d'absorption (contacts requis)
+        absorbLabel = addSlider(root, "Densité absorption (contacts)", 1, 50, currentAbsorb, "contacts")
+        absorbSeek = root.getChildAt(root.childCount - 1) as SeekBar
+
         // ── Boutons ────────────────────────────────────────────────────
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -124,6 +136,7 @@ class CalibrationActivity : Activity() {
                 spatialYSeek.progress = DEFAULT_SPATIAL_DISTANCE_Y.toInt() - 5
                 temporalSeek.progress = DEFAULT_TEMPORAL_DISTANCE.toInt() - 100
                 hoverSeek.progress = DEFAULT_LONG_HOVER_DELAY.toInt() - 300
+                absorbSeek.progress = DEFAULT_ABSORB_CONTACTS - 1
                 save()
             }
         })
@@ -178,6 +191,17 @@ class CalibrationActivity : Activity() {
                 spatialYLabel.text = "Distance spatiale Y (↕) : ${v + 5} px"
                 if (fromUser) {
                     prefs(this@CalibrationActivity).edit().putFloat(KEY_SPATIAL_DISTANCE_Y, (v + 5).toFloat()).apply()
+                    updateTestView()
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+        absorbSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sk: SeekBar, v: Int, fromUser: Boolean) {
+                absorbLabel.text = "Densité absorption (contacts) : ${v + 1}"
+                if (fromUser) {
+                    prefs(this@CalibrationActivity).edit().putInt(KEY_ABSORB_CONTACTS, v + 1).apply()
                     updateTestView()
                 }
             }

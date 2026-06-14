@@ -219,6 +219,8 @@ class CaptureView(context: Context) : View(context) {
     /** Cache des groupes COMPLETS (tous les strokes, ignore activeStrokeBase).
      *  Utilisé par findWordGroup() pour la sélection même après archivage. */
     private var fullGroupsCache: MutableList<List<Int>>? = null
+    /** Map groupIndex → orderIndex pour la ré-inférence (évite les doublons de transcription) */
+    private val groupOrderMap = mutableMapOf<Int, Int>()
     private var hoverWordGroup: List<Int>? = null
     private var selectedWordGroup: List<Int>? = null
     private var dragWordGroup: List<Int>? = null
@@ -1417,8 +1419,10 @@ class CaptureView(context: Context) : View(context) {
             val newIdx = strokeRegistry.size - 1
             Log.i(TAG, "⚡ ABSORB CHECK: reactIdx=$reactivatedGroupIndex groups=${groups.size} target=${targetGroup?.size} newIdx=$newIdx")
             if (targetGroup != null && targetGroup.isNotEmpty()) {
-                // Chercher la distance min entre le nouveau stroke et le groupe cible
-                var minDist = Float.MAX_VALUE
+                // ═══ DENSITÉ D'ABSORPTION : compter les contacts proches ═══
+                val distThreshold = CalibrationActivity.getSpatialDistanceX(context)
+                val contactThreshold = CalibrationActivity.getAbsorbContacts(context)
+                var contacts = 0
                 for (tidx in targetGroup) {
                     if (tidx >= newIdx) continue
                     val st = strokeRegistry[tidx]
@@ -1428,14 +1432,17 @@ class CaptureView(context: Context) : View(context) {
                             val dx = p1x - ds.points[k2].first
                             val dy = p1y - ds.points[k2].second
                             val d = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
-                            if (d < minDist) minDist = d
+                            if (d < distThreshold) {
+                                contacts++
+                                if (contacts >= contactThreshold) break
+                            }
                         }
+                        if (contacts >= contactThreshold) break
                     }
+                    if (contacts >= contactThreshold) break
                 }
-                // ═══ SEUIL D'ABSORPTION — distX (↔) = rayon horizontal du blob ═══
-                val threshold = CalibrationActivity.getSpatialDistanceX(context)
-                Log.i(TAG, "⚡ ABSORB: minDist=$minDist threshold=$threshold")
-                if (minDist < threshold) {
+                Log.i(TAG, "⚡ ABSORB: contacts=$contacts/${contactThreshold} distThreshold=$distThreshold")
+                if (contacts >= contactThreshold) {
                     val sourceGroupIdx = groups.indexOfFirst { newIdx in it }
                     val merged = groups.mapIndexed { gi, g ->
                         when {
@@ -1487,6 +1494,7 @@ class CaptureView(context: Context) : View(context) {
             for (gi in inferredGroupCount until ordered.size - 1) {
                 Log.i(TAG, "Auto-infer: groupe $gi/${ordered.size} (${ordered[gi].size} strokes)")
                 val seq = groupSequenceCounter.getAndIncrement()
+                groupOrderMap[gi] = seq  // enregistrer pour ré-inférence future
                 onWordGroupCompleted?.invoke(snapshot, ordered[gi].toList(), seq)
                 // V4 CONDUIT : marquer la fin du groupe
                 vstarWriter?.writeGroupSep()
@@ -1536,6 +1544,7 @@ class CaptureView(context: Context) : View(context) {
             for (gi in inferredGroupCount until ordered.size) {
                 Log.i(TAG, "Auto-infer TIMEOUT: groupe $gi/${ordered.size} (${ordered[gi].size} strokes)")
                 val seq = groupSequenceCounter.getAndIncrement()
+                groupOrderMap[gi] = seq  // enregistrer pour ré-inférence future
                 onWordGroupCompleted?.invoke(snapshot, ordered[gi].toList(), seq)
                 // V4 CONDUIT
                 vstarWriter?.writeGroupSep()
@@ -1545,7 +1554,8 @@ class CaptureView(context: Context) : View(context) {
             // Si un groupe réactivé existe, le ré-inférer aussi
             if (reactivatedGroupIndex >= 0 && reactivatedGroupIndex < ordered.size) {
                 Log.i(TAG, "Auto-infer TIMEOUT: groupe réactivé #$reactivatedGroupIndex (${ordered[reactivatedGroupIndex].size} strokes)")
-                val seq = groupSequenceCounter.getAndIncrement()
+                // Réutiliser l'orderIndex original (pas de nouveau → éviter doublon)
+                val seq = groupOrderMap[reactivatedGroupIndex] ?: groupSequenceCounter.getAndIncrement()
                 onWordGroupCompleted?.invoke(snapshot, ordered[reactivatedGroupIndex].toList(), seq)
                 reactivatedGroupIndex = -1  // réactivation terminée
             }
@@ -2140,8 +2150,18 @@ class CaptureView(context: Context) : View(context) {
      * le fichier VStar (tokens ps=4 separateurs).
      */
     fun computeWordGroupsForSave(): List<List<Int>> {
+        // Sauvegarder/restaurer activeStrokeBase pour voir tous les strokes
+        val savedBase = activeStrokeBase
+        val savedInferred = inferredGroupCount
+        activeStrokeBase = 0
+        invalidateWordGroups()
         val groups = computeWordGroups()
-        return computeVisualOrder(groups) ?: groups  // ordre visuel pour la sauvegarde
+        val ordered = computeVisualOrder(groups) ?: groups
+        // Restaurer l'état de la fenêtre active
+        activeStrokeBase = savedBase
+        inferredGroupCount = savedInferred
+        invalidateWordGroups()
+        return ordered
     }
 
     /**
@@ -2776,6 +2796,7 @@ class CaptureView(context: Context) : View(context) {
         dragWordGroup = null
         wordGroupsCache = null
         fullGroupsCache = null
+        groupOrderMap.clear()
         strokeCount = 0
         pointSeq = 0
         inferredGroupCount = 0
