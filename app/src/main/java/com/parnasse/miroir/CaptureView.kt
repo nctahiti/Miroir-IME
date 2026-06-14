@@ -1399,10 +1399,17 @@ class CaptureView(context: Context) : View(context) {
         val ds = drawingStroke ?: return
         strokeRegistry.add(ds)
 
-        // ═══ GROUPES CALCULÉS UNE SEULE FOIS — partagés absorption + inférence ═══
-        invalidateWordGroups()
-        // fullGroupsCache est construit incrémentalement — NE PAS le vider ici
-        val groups = computeWordGroups()
+        // ═══ GROUPES : incrémental si réactivé, recalcul sinon ═══
+        val groups: List<List<Int>>
+        if (reactivatedGroupIndex >= 0 && wordGroupsCache != null) {
+            // Mode réactivation : préserver le cache incrémentalement
+            // (ne pas recalculer → l'absorption précédente serait perdue)
+            groups = wordGroupsCache!!
+        } else {
+            invalidateWordGroups()
+            // fullGroupsCache est construit incrémentalement — NE PAS le vider ici
+            groups = computeWordGroups()
+        }
 
         // Absorption directe si groupe réactivé
         if (reactivatedGroupIndex >= 0 && strokeRegistry.size >= 2) {
