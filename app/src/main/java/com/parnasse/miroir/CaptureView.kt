@@ -1676,7 +1676,17 @@ class CaptureView(context: Context) : View(context) {
         super.onDraw(canvas)
         bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
 
-        // Stroke en cours de dessin
+        // Lignes guides (cahier)
+        val spacing = height.toFloat() / (guideLines + 1)
+        for (i in 1..guideLines) {
+            canvas.drawLine(0f, spacing * i, width.toFloat(), spacing * i, guidePaint)
+        }
+
+        // Blob visuel — rectangle pointillé autour du dernier groupe non-inféré
+        // ⚠️ Dessiné AVANT le stroke courant pour ne pas le cacher
+        if (showVisualOverlays) drawActiveGroupBlob(canvas)
+
+        // Stroke en cours de dessin — AU-DESSUS du blob
         if (currentPath.size >= 2) {
             val path = Path()
             path.moveTo(currentPath[0].first, currentPath[0].second)
@@ -1685,15 +1695,6 @@ class CaptureView(context: Context) : View(context) {
             }
             canvas.drawPath(path, strokePaint)
         }
-
-        // Lignes guides (cahier)
-        val spacing = height.toFloat() / (guideLines + 1)
-        for (i in 1..guideLines) {
-            canvas.drawLine(0f, spacing * i, width.toFloat(), spacing * i, guidePaint)
-        }
-
-        // Blob visuel — rectangle pointillé autour du dernier groupe non-inféré
-        if (showVisualOverlays) drawActiveGroupBlob(canvas)
 
         // Curseur de survol en mode CAPTURE — contour bleu-violet pointillé
         drawHoverFeedback(canvas)

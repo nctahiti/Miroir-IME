@@ -282,7 +282,7 @@ class CaptureActivity : Activity() {
 
         overlay.addView(topBar)
 
-        // ── Texte affiché ──────────────────────────────────────────────
+        // ── Texte affiché — vue glissante qui suit l'écriture ──────────
         poemText = TextView(this).apply {
             text = "📝 Bloc-notes"
             textSize = 36f
@@ -291,11 +291,13 @@ class CaptureActivity : Activity() {
             setLineSpacing(8f, 1.0f)
             setPadding(40, 12, 40, 12)
             setBackgroundColor(android.graphics.Color.rgb(255, 255, 220))
-            maxLines = 3
+            maxLines = 4
         }
+        // Hauteur fixe pour la fenêtre glissante
+        val textHeight = (36f * 1.5f * 4 + 24).toInt()  // ~4 lignes visibles
         overlay.addView(poemText, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
+            textHeight
         ))
 
         // Espace capture
@@ -610,6 +612,24 @@ class CaptureActivity : Activity() {
         }
         poemText?.text = spannable
         poemText?.textSize = 28f
+
+        // ═══ Vue glissante : centrer le mot actif dans la fenêtre ═══
+        poemText?.post {
+            try {
+                val layout = poemText?.layout ?: return@post
+                if (layout.lineCount == 0 || text.isEmpty()) return@post
+                val safeOffset = charStart.coerceIn(0, text.length - 1)
+                val activeLine = layout.getLineForOffset(safeOffset)
+                val viewHeight = poemText?.height ?: return@post
+                if (viewHeight <= 0) return@post
+                val lineTop = layout.getLineTop(activeLine)
+                val lineHeight = layout.getLineBottom(activeLine) - lineTop
+                val scrollY = (lineTop - viewHeight / 2 + lineHeight / 2).coerceAtLeast(0)
+                poemText?.scrollTo(0, scrollY)
+            } catch (e: Exception) {
+                // Layout pas encore prêt — ignoré
+            }
+        }
     }
 
     private fun makeToolbarButton(

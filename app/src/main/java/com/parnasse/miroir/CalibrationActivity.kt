@@ -94,12 +94,12 @@ class CalibrationActivity : Activity() {
         delayLabel = addSlider(root, "Timeout inférence", 500, 5000, currentDelay.toInt(), "ms")
         delaySeek = root.getChildAt(root.childCount - 1) as SeekBar
 
-        // Distance spatiale X (horizontale)
-        spatialXLabel = addSlider(root, "Distance spatiale X (↔)", 5, 120, currentSpatialX.toInt(), "px")
+        // Distance spatiale X (horizontale) — même échelle que Y
+        spatialXLabel = addSlider(root, "Distance spatiale X (↔)", 5, 200, currentSpatialX.toInt(), "px")
         spatialXSeek = root.getChildAt(root.childCount - 1) as SeekBar
 
-        // Distance spatiale Y (verticale)
-        spatialYLabel = addSlider(root, "Distance spatiale Y (↕)", 10, 200, currentSpatialY.toInt(), "px")
+        // Distance spatiale Y (verticale) — même échelle que X
+        spatialYLabel = addSlider(root, "Distance spatiale Y (↕)", 5, 200, currentSpatialY.toInt(), "px")
         spatialYSeek = root.getChildAt(root.childCount - 1) as SeekBar
 
         // Distance temporelle
@@ -121,7 +121,7 @@ class CalibrationActivity : Activity() {
             setOnClickListener {
                 delaySeek.progress = DEFAULT_AUTO_INFER_DELAY.toInt() - 500
                 spatialXSeek.progress = DEFAULT_SPATIAL_DISTANCE_X.toInt() - 5
-                spatialYSeek.progress = DEFAULT_SPATIAL_DISTANCE_Y.toInt() - 10
+                spatialYSeek.progress = DEFAULT_SPATIAL_DISTANCE_Y.toInt() - 5
                 temporalSeek.progress = DEFAULT_TEMPORAL_DISTANCE.toInt() - 100
                 hoverSeek.progress = DEFAULT_LONG_HOVER_DELAY.toInt() - 300
                 save()
@@ -154,7 +154,10 @@ class CalibrationActivity : Activity() {
         delaySeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sk: SeekBar, v: Int, fromUser: Boolean) {
                 delayLabel.text = "Timeout inférence : ${v + 500} ms"
-                if (fromUser) updateTestView()
+                if (fromUser) {
+                    prefs(this@CalibrationActivity).edit().putLong(KEY_AUTO_INFER_DELAY, (v + 500).toLong()).apply()
+                    updateTestView()
+                }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
@@ -162,15 +165,21 @@ class CalibrationActivity : Activity() {
         spatialXSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sk: SeekBar, v: Int, fromUser: Boolean) {
                 spatialXLabel.text = "Distance spatiale X (↔) : ${v + 5} px"
-                if (fromUser) updateTestView()
+                if (fromUser) {
+                    prefs(this@CalibrationActivity).edit().putFloat(KEY_SPATIAL_DISTANCE_X, (v + 5).toFloat()).apply()
+                    updateTestView()
+                }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
         spatialYSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sk: SeekBar, v: Int, fromUser: Boolean) {
-                spatialYLabel.text = "Distance spatiale Y (↕) : ${v + 10} px"
-                if (fromUser) updateTestView()
+                spatialYLabel.text = "Distance spatiale Y (↕) : ${v + 5} px"
+                if (fromUser) {
+                    prefs(this@CalibrationActivity).edit().putFloat(KEY_SPATIAL_DISTANCE_Y, (v + 5).toFloat()).apply()
+                    updateTestView()
+                }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
