@@ -1436,7 +1436,7 @@ class CaptureView(context: Context) : View(context) {
                             gi == sourceGroupIdx -> g.filter { it != newIdx }
                             else -> g
                         }
-                    }
+                    }.filter { it.isNotEmpty() }  // ⚠️ absorber le dernier stroke d'un groupe → liste vide → crash
                     wordGroupsCache = merged
                     Log.i(TAG, "⚡ ABSORB OK: stroke #$newIdx → groupe #$reactivatedGroupIndex (retiré de #$sourceGroupIdx)")
                 } else {
@@ -1546,6 +1546,7 @@ class CaptureView(context: Context) : View(context) {
             // ═══ ARCHIVAGE : ne garder que le dernier groupe actif dans computeWordGroups ═══
             if (g.size >= 2 && reactivatedGroupIndex < 0) {
                 val lastGroup = g.last()
+                if (lastGroup.isEmpty()) return@Runnable  // sécurité : groupe vide après absorption
                 val newBase = lastGroup.first()
                 if (newBase > activeStrokeBase) {
                     Log.i(TAG, "Archive: avance base $activeStrokeBase → $newBase (${g.size} groupes, garde dernier)")
@@ -1674,19 +1675,21 @@ class CaptureView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
 
+        // ═══ ARRIÈRE-PLAN : guides + blob (derrière les strokes) ═══
         // Lignes guides (cahier)
         val spacing = height.toFloat() / (guideLines + 1)
         for (i in 1..guideLines) {
             canvas.drawLine(0f, spacing * i, width.toFloat(), spacing * i, guidePaint)
         }
 
-        // Blob visuel — rectangle pointillé autour du dernier groupe non-inféré
-        // ⚠️ Dessiné AVANT le stroke courant pour ne pas le cacher
+        // Blob visuel — derrière tout pour ne jamais cacher les strokes
         if (showVisualOverlays) drawActiveGroupBlob(canvas)
 
-        // Stroke en cours de dessin — AU-DESSUS du blob
+        // ═══ STROKES : bitmap (complétés) + tracé courant ═══
+        bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+
+        // Stroke en cours de dessin — au premier plan
         if (currentPath.size >= 2) {
             val path = Path()
             path.moveTo(currentPath[0].first, currentPath[0].second)
