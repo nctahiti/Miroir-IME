@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.parnasse.miroir"
+    package="com.parnasse.miroir.v4"
     android:versionCode="1"
-    android:versionName="0.0.1" >
+    android:versionName="0.4.0" >
 
     <uses-sdk
         android:minSdkVersion="29"
@@ -24,10 +24,10 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <permission
-        android:name="com.parnasse.miroir.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        android:name="com.parnasse.miroir.v4.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
         android:protectionLevel="signature" />
 
-    <uses-permission android:name="com.parnasse.miroir.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+    <uses-permission android:name="com.parnasse.miroir.v4.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
 
     <application
         android:name="com.parnasse.miroir.MiroirApp"
@@ -76,7 +76,7 @@
 
         <provider
             android:name="com.google.mlkit.common.internal.MlKitInitProvider"
-            android:authorities="com.parnasse.miroir.mlkitinitprovider"
+            android:authorities="com.parnasse.miroir.v4.mlkitinitprovider"
             android:exported="false"
             android:initOrder="99" />
 
@@ -91,7 +91,7 @@
 
         <provider
             android:name="androidx.startup.InitializationProvider"
-            android:authorities="com.parnasse.miroir.androidx-startup"
+            android:authorities="com.parnasse.miroir.v4.androidx-startup"
             android:exported="false" >
             <meta-data
                 android:name="androidx.emoji2.text.EmojiCompatInitializer"

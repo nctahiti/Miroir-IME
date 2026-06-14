@@ -11,6 +11,8 @@ import com.onyx.android.sdk.data.note.TouchPoint as OnyxTouchPoint
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
+import com.onyx.android.sdk.api.device.epd.EpdController
+import com.onyx.android.sdk.api.device.epd.UpdateMode
 import java.io.File
 import java.io.FileWriter
 import java.io.IOException
@@ -51,7 +53,7 @@ class CaptureView(context: Context) : View(context) {
     // =========================================================================
     companion object {
         /** Flag pour activer le debug des coordonnees brutes */
-        const val DEBUG_RAW = true
+        const val DEBUG_RAW = false  // désactivé — le flush() synchrone cause des ANR
         /** Repertoire de sortie (racine stockage interne) */
         private val DEBUG_DIR = "debug_raw"
         /** Repertoire des captures brutes (training data) */
@@ -216,7 +218,7 @@ class CaptureView(context: Context) : View(context) {
     private var wordGroupsCache: List<List<Int>>? = null
     /** Cache des groupes COMPLETS (tous les strokes, ignore activeStrokeBase).
      *  Utilisé par findWordGroup() pour la sélection même après archivage. */
-    private var fullGroupsCache: List<List<Int>>? = null
+    private var fullGroupsCache: MutableList<List<Int>>? = null
     private var hoverWordGroup: List<Int>? = null
     private var selectedWordGroup: List<Int>? = null
     private var dragWordGroup: List<Int>? = null
@@ -370,6 +372,16 @@ class CaptureView(context: Context) : View(context) {
             touchHelperAttempted = true
             touchHelperLastEvent = System.currentTimeMillis()
             Log.i(TAG, "TouchHelper actif (useTouchHelper=$useTouchHelper)")
+
+            // ═══ ONYX EPD — mode écriture optimisé ═══
+            try {
+                EpdController.setScreenHandWritingPenState(this, 1)
+                EpdController.enablePost(this, 0)
+                EpdController.setViewDefaultUpdateMode(this, UpdateMode.DU)
+                Log.i(TAG, "EPD handwriting mode ON (DU, enablePost=0)")
+            } catch (e: Exception) {
+                Log.w(TAG, "EPD handwriting mode échoué: ${e.message}")
+            }
         } catch (e: Exception) {
             useTouchHelper = false
             touchHelper = null
@@ -383,6 +395,15 @@ class CaptureView(context: Context) : View(context) {
             touchHelper?.closeRawDrawing()
             touchHelper?.setRawDrawingEnabled(false)
         } catch (_: Exception) {}
+        // ═══ ONYX EPD — désactiver le mode écriture ═══
+        try {
+            EpdController.setViewDefaultUpdateMode(this, UpdateMode.GU)  // retour au mode normal
+            EpdController.enablePost(this, 1)
+            EpdController.setScreenHandWritingPenState(this, 0)
+            Log.i(TAG, "EPD handwriting mode OFF")
+        } catch (e: Exception) {
+            Log.w(TAG, "EPD release échoué: ${e.message}")
+        }
         touchHelper = null
         useTouchHelper = false
         touchHelperAttempted = false
@@ -976,6 +997,14 @@ class CaptureView(context: Context) : View(context) {
                 registerCompletedStroke()
                 logProgress()
                 throttledInvalidate()
+                // ═══ Maintenir le mode DU après lever du stylet ═══
+                // Le driver Onyx bascule GU→500ms sur penUp. On le force à rester en DU.
+                try {
+                    EpdController.setScreenHandWritingPenState(this, 1)
+                    EpdController.enablePost(this, 0)
+                } catch (e: Exception) {
+                    Log.w(TAG, "EPD re-assert échoué: ${e.message}")
+                }
                 currentPath.clear()
             }
         }
@@ -1360,7 +1389,7 @@ class CaptureView(context: Context) : View(context) {
 
         // ═══ GROUPES CALCULÉS UNE SEULE FOIS — partagés absorption + inférence ═══
         invalidateWordGroups()
-        fullGroupsCache = null  // nouveau stroke → cache complet périmé
+        // fullGroupsCache est construit incrémentalement — NE PAS le vider ici
         val groups = computeWordGroups()
 
         // Absorption directe si groupe réactivé
@@ -1444,6 +1473,32 @@ class CaptureView(context: Context) : View(context) {
                 vstarWriter?.writeGroupSep()
             }
             inferredGroupCount = ordered.size - 1
+
+            // ═══ ARCHIVAGE IMMÉDIAT : figer les groupes confirmés ═══
+            // Avant : l'archivage n'avait lieu qu'après le timeout (1.5s).
+            // En écriture continue, le timeout ne part jamais → activeStrokeBase=0
+            // → computeWordGroups() traite O(n) strokes à chaque ACTION_UP.
+            // Maintenant : dès qu'un groupe est confirmé (suivi d'un autre),
+            // on le fige. computeWordGroups() ne traite que le dernier groupe.
+            if (ordered.size >= 2 && reactivatedGroupIndex < 0) {
+                val lastGroup = ordered.last()
+                val newBase = lastGroup.first()
+                if (newBase > activeStrokeBase) {
+                    Log.i(TAG, "Archive immédiate: base $activeStrokeBase → $newBase (${ordered.size} groupes, garde dernier)")
+                    activeStrokeBase = newBase
+                    inferredGroupCount = 1  // seul le dernier groupe reste actif
+                    // ═══ Construire fullGroupsCache incrémentalement ═══
+                    // Ajouter les groupes archivés (tous sauf le dernier) au cache complet.
+                    // Ainsi findWordGroup() n'aura jamais besoin de recalculer O(n).
+                    val archivedGroups = ordered.dropLast(1)  // tous sauf le dernier
+                    if (fullGroupsCache == null) {
+                        fullGroupsCache = archivedGroups.toMutableList()
+                    } else {
+                        fullGroupsCache!!.addAll(archivedGroups)
+                    }
+                    invalidateWordGroups()
+                }
+            }
         }
 
         // Timeout pour le dernier groupe ou le groupe réactivé
@@ -1480,6 +1535,13 @@ class CaptureView(context: Context) : View(context) {
                     Log.i(TAG, "Archive: avance base $activeStrokeBase → $newBase (${g.size} groupes, garde dernier)")
                     activeStrokeBase = newBase
                     inferredGroupCount = 1  // seul le dernier groupe reste, il est inféré
+                    // ═══ Construire fullGroupsCache incrémentalement ═══
+                    val archivedGroups = g.dropLast(1)
+                    if (fullGroupsCache == null) {
+                        fullGroupsCache = archivedGroups.toMutableList()
+                    } else {
+                        fullGroupsCache!!.addAll(archivedGroups)
+                    }
                     invalidateWordGroups()
                 }
             }
@@ -1565,7 +1627,7 @@ class CaptureView(context: Context) : View(context) {
 
     /**
      * Invalide la vue avec throttling (max ~33 Hz au lieu de 60 Hz).
-     * L'e-ink ne peut pas afficher plus de 35 images/seconde.
+     * Le mode DU est activé globalement via setViewDefaultUpdateMode → ~30ms par refresh.
      */
     private fun throttledInvalidate() {
         val now = System.currentTimeMillis()
@@ -1575,8 +1637,25 @@ class CaptureView(context: Context) : View(context) {
         }
     }
 
+    /**
+     * Rafraîchissement partiel — uniquement la zone du stroke en cours.
+     * Utilise handwritingRepaint (optimisé stylet Onyx) au lieu d'un refresh complet.
+     */
+    private fun repaintStrokeZone(left: Int, top: Int, right: Int, bottom: Int) {
+        val now = System.currentTimeMillis()
+        if (now - lastInvalidateTime >= minInvalidateIntervalMs) {
+            lastInvalidateTime = now
+            try {
+                // Marge de 20px autour du stroke pour le rendu anti-aliasé
+                EpdController.handwritingRepaint(this,
+                    left - 20, top - 20, right + 20, bottom + 20)
+            } catch (e: Exception) {
+                invalidate(left - 20, top - 20, right + 20, bottom + 20)
+            }
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
-        val t0 = System.currentTimeMillis()
         super.onDraw(canvas)
         bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
 
@@ -2009,24 +2088,18 @@ class CaptureView(context: Context) : View(context) {
         }
         // ═══ Mise à jour du cache complet (pour la sélection) ═══
         if (base == 0) {
-            fullGroupsCache = wordGroupsCache
+            fullGroupsCache = wordGroupsCache?.toMutableList()
         }
         return wordGroupsCache!!
     }
 
     /** Retourne le groupe de mots contenant l'index stroke, ou null.
-     *  Utilise fullGroupsCache pour voir tous les strokes même après archivage. */
+     *  Utilise fullGroupsCache construit incrémentalement — jamais de recalcul O(n). */
     private fun findWordGroup(strokeIndex: Int): List<Int>? {
-        // Forcer le calcul complet si le cache est vide
-        if (fullGroupsCache == null) {
-            val savedBase = activeStrokeBase
-            activeStrokeBase = 0
-            invalidateWordGroups()
-            fullGroupsCache = computeWordGroups()
-            activeStrokeBase = savedBase
-            invalidateWordGroups()
-        }
-        return fullGroupsCache?.find { strokeIndex in it }
+        // Le cache complet est construit incrémentalement lors des archivages.
+        // S'il est vide, c'est qu'aucun archivage n'a eu lieu → utiliser le cache actif.
+        val cache = fullGroupsCache ?: wordGroupsCache
+        return cache?.find { strokeIndex in it }
     }
 
     /**

@@ -1,8 +1,8 @@
 1<?xml version="1.0" encoding="utf-8"?>
 2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-3    package="com.parnasse.miroir"
+3    package="com.parnasse.miroir.v4"
 4    android:versionCode="1"
-5    android:versionName="0.0.1" >
+5    android:versionName="0.4.0" >
 6
 7    <uses-sdk
 8        android:minSdkVersion="29"
@@ -53,12 +53,12 @@
 25
 26    <permission
 26-->[androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:22:5-24:47
-27        android:name="com.parnasse.miroir.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+27        android:name="com.parnasse.miroir.v4.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
 27-->[androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:23:9-81
 28        android:protectionLevel="signature" />
 28-->[androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:24:9-44
 29
-30    <uses-permission android:name="com.parnasse.miroir.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+30    <uses-permission android:name="com.parnasse.miroir.v4.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
 30-->[androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:26:5-97
 30-->[androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:26:22-94
 31
@@ -150,7 +150,7 @@
 77-->[com.google.mlkit:common:18.6.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\aae9c6a7d90283afce8bbd43a5be3503\transformed\common-18.6.0\AndroidManifest.xml:9:9-13:38
 78            android:name="com.google.mlkit.common.internal.MlKitInitProvider"
 78-->[com.google.mlkit:common:18.6.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\aae9c6a7d90283afce8bbd43a5be3503\transformed\common-18.6.0\AndroidManifest.xml:10:13-78
-79            android:authorities="com.parnasse.miroir.mlkitinitprovider"
+79            android:authorities="com.parnasse.miroir.v4.mlkitinitprovider"
 79-->[com.google.mlkit:common:18.6.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\aae9c6a7d90283afce8bbd43a5be3503\transformed\common-18.6.0\AndroidManifest.xml:11:13-69
 80            android:exported="false"
 80-->[com.google.mlkit:common:18.6.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\aae9c6a7d90283afce8bbd43a5be3503\transformed\common-18.6.0\AndroidManifest.xml:12:13-37
@@ -177,7 +177,7 @@
 92-->[androidx.emoji2:emoji2:1.3.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\13084027de57c634cffee983a2741013\transformed\emoji2-1.3.0\AndroidManifest.xml:24:9-32:20
 93            android:name="androidx.startup.InitializationProvider"
 93-->[androidx.emoji2:emoji2:1.3.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\13084027de57c634cffee983a2741013\transformed\emoji2-1.3.0\AndroidManifest.xml:25:13-67
-94            android:authorities="com.parnasse.miroir.androidx-startup"
+94            android:authorities="com.parnasse.miroir.v4.androidx-startup"
 94-->[androidx.emoji2:emoji2:1.3.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\13084027de57c634cffee983a2741013\transformed\emoji2-1.3.0\AndroidManifest.xml:26:13-68
 95            android:exported="false" >
 95-->[androidx.emoji2:emoji2:1.3.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\13084027de57c634cffee983a2741013\transformed\emoji2-1.3.0\AndroidManifest.xml:27:13-37

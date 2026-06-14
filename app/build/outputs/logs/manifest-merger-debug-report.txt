@@ -685,7 +685,7 @@ ADDED from [androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\tran
 		ADDED from [androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:24:9-44
 	android:name
 		ADDED from [androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:23:9-81
-permission#com.parnasse.miroir.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+permission#com.parnasse.miroir.v4.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
 ADDED from [androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:22:5-24:47
 	android:protectionLevel
 		ADDED from [androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:24:9-44
@@ -695,7 +695,7 @@ uses-permission#${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
 ADDED from [androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:26:5-97
 	android:name
 		ADDED from [androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:26:22-94
-uses-permission#com.parnasse.miroir.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+uses-permission#com.parnasse.miroir.v4.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
 ADDED from [androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:26:5-97
 	android:name
 		ADDED from [androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:26:22-94

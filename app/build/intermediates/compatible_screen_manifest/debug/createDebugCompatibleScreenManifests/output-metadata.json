@@ -4,7 +4,7 @@
     "type": "COMPATIBLE_SCREEN_MANIFEST",
     "kind": "Directory"
   },
-  "applicationId": "com.parnasse.miroir",
+  "applicationId": "com.parnasse.miroir.v4",
   "variantName": "debug",
   "elements": []
 }
