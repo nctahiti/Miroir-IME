@@ -591,8 +591,8 @@ class CaptureActivity : Activity() {
         }
         val spannable = android.text.SpannableString(text)
 
-        // Déterminer quel mot encadrer : celui du groupe réactivé, ou le dernier
-        val activeWordIndex = captureView?.reactivatedGroupIndex
+        // Déterminer quel mot encadrer : le dernier (reactivatedGroupIndex supprimé — TODO: mapper GroupManager.SELECTED → transcription)
+        val activeWordIndex: Int? = null  // TODO: GroupManager → index transcription
         val words = wordTranscriptions
         val targetIdx = if (activeWordIndex != null && activeWordIndex >= 0 && activeWordIndex < words.size) {
             activeWordIndex

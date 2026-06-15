@@ -211,8 +211,6 @@ class CaptureView(context: Context) : View(context) {
 
     // -- Groupement de mots (EDIT mode) ---------------------------------------
     // wordGroupsCache + fullGroupsCache supprimés — GroupManager gère les groupes
-    /** Map groupIndex → orderIndex pour la ré-inférence (évite les doublons de transcription) */
-    private val groupOrderMap = mutableMapOf<Int, Int>()
     private var hoverWordGroup: List<Int>? = null
     private var selectedWordGroup: List<Int>? = null
     private var dragWordGroup: List<Int>? = null
@@ -256,7 +254,7 @@ class CaptureView(context: Context) : View(context) {
             spatialDistancePx = 1f,  // ⚠️ Absorption GroupManager désactivée — groupement spatial via computeWordGroups()
             minOverlapPercent = 100,  // Jamais d'overlap → jamais d'absorption
             temporalDistanceMs = 0L,  // Aucune absorption temporelle
-            transcriptionTimeoutMs = Long.MAX_VALUE,  // ⚠️ Désactivé : inférence pilotée par checkAutoInfer() spatial
+            transcriptionTimeoutMs = Long.MAX_VALUE,  // ⚠️ Désactivé : inférence immédiate + timer 500ms (registerCompletedStroke)
             groupLevel = GroupLevel.WORD,
             captureAnchor = CaptureAnchor.BOTTOM
         )
@@ -667,7 +665,6 @@ class CaptureView(context: Context) : View(context) {
         if (selected.isNotEmpty()) {
             // Désactiver l'absorption : revenir au mode "chaque stroke = un groupe"
             groupManager.params = groupManager.params.copy(spatialDistancePx = 1f)
-            reactivatedGroupIndex = -1
             postInvalidate()
         }
     }
@@ -726,6 +723,13 @@ class CaptureView(context: Context) : View(context) {
     private var dragWordYOffset = 0f
 
     private fun handleEditEvent(event: MotionEvent) {
+        val actionName = when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> "DOWN"
+            MotionEvent.ACTION_MOVE -> "MOVE"
+            MotionEvent.ACTION_UP -> "UP"
+            else -> "?${event.actionMasked}"
+        }
+        Log.d(TAG, "handleEditEvent $actionName @ (${event.x}, ${event.y}) dragWordGroup=${dragWordGroup?.size ?: 0}s wasDrag=$wasDrag longPress=$longPressTriggered")
         val x = event.x
         val y = event.y
         when (event.actionMasked) {
@@ -733,6 +737,18 @@ class CaptureView(context: Context) : View(context) {
                 editStartX = x; editStartY = y
                 wasDrag = false
                 val hitIdx = hitTest(x, y)
+
+                // Tap sur espace vide → retour en mode CAPTURE
+                if (hitIdx == null && !decomposeMode) {
+                    selectedWordGroup = null
+                    dragWordGroup = null
+                    flowState = null
+                    currentMode = CaptureMode.CAPTURE
+                    onModeChanged?.invoke(currentMode)
+                    Log.d(TAG, "ÉDITION → CAPTURE (tap espace vide)")
+                    invalidate()
+                    return
+                }
 
                 // 🪄 Mode décomposition : un tap décompose le groupe ciblé
                 if (decomposeMode && hitIdx != null) {
@@ -790,8 +806,14 @@ class CaptureView(context: Context) : View(context) {
                         editStartY += snapDy
                     }
 
-                    rebuildBitmap()
-                    invalidate()
+                    // Pendant un long-press drag, utiliser currentPath pour le rendu visible
+                    if (longPressTriggered) {
+                        updateDragCurrentPath()
+                        throttledInvalidate()
+                    } else {
+                        rebuildBitmap()
+                        postInvalidate()
+                    }
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -814,13 +836,40 @@ class CaptureView(context: Context) : View(context) {
                             }
                         }
                         rebuildBitmap()
-                        invalidate()
+                        postInvalidate()
                         Log.i(TAG, "Réordonnancement: ${newOrder.size} groupes")
                     }
+                    // Après un drag réussi, retour en CAPTURE
+                    // ═══ Réouvrir le groupe pour absorption (mot ouvert) ═══
+                    val movedGroup = dragWordGroup
+                    val firstIdx = movedGroup?.firstOrNull()
+                    if (firstIdx != null) {
+                        val inkId = registryIndexToInkStrokeId[firstIdx]
+                        if (inkId != null) {
+                            val gmGroup = groupManager.reactivateGroup(inkId)
+                            if (gmGroup != null) {
+                                groupManager.selectGroup(gmGroup.id)
+                                val wordSpatial = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
+                                groupManager.params = groupManager.params.copy(spatialDistancePx = wordSpatial)
+                                Log.d(TAG, "Groupe ${gmGroup.id} réouvert après drag (absorption ON, seuil=$wordSpatial)")
+                            }
+                        }
+                    }
+                    dragWordGroup = null
+                    flowState = null
+                    flowBackup = null
+                    selectedWordGroup = null
+                    currentMode = CaptureMode.CAPTURE
+                    onModeChanged?.invoke(currentMode)
+                    Log.d(TAG, "ÉDITION → CAPTURE (drag terminé)")
                 }
-                dragWordGroup = null
-                flowState = null
-                flowBackup = null
+                // Si pas de drag, garder la sélection active (re-grab possible)
+                // Mais si on vient d'un long-press, nettoyer currentPath et rebuild
+                if (longPressTriggered) {
+                    currentPath.clear()
+                    rebuildBitmap()
+                    postInvalidate()
+                }
             }
         }
     }
@@ -949,6 +998,14 @@ class CaptureView(context: Context) : View(context) {
     // =========================================================================
 
     private fun handleCaptureEvent(event: MotionEvent) {
+        // Si un long-press a basculé en mode ÉDITION, forwarder au handler EDIT
+        if (longPressTriggered && currentMode == CaptureMode.EDIT) {
+            if (event.actionMasked == MotionEvent.ACTION_UP) {
+                longPressTriggered = false
+            }
+            handleEditEvent(event)
+            return
+        }
         logRawOnTouchEvent(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -992,16 +1049,77 @@ class CaptureView(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_MOVE -> {
-                // Détection d'appui long (>500ms sans bouger) → réactivation
+                // Détection d'appui long (>500ms sans bouger) → basculer en mode ÉDITION
                 if (!longPressTriggered && isBlocnoteMode) {
                     val dt = System.currentTimeMillis() - longPressStartTime
                     val dx = Math.abs(event.x - longPressStartX)
                     val dy = Math.abs(event.y - longPressStartY)
                     if (dt > 500 && dx < 15f && dy < 15f) {
                         longPressTriggered = true
-                        // Toucher long — réactivation déléguée à GroupManager (hover long → selectGroup)
-                        Log.d(TAG, "Toucher long — GroupManager gère la réactivation")
+                        // ═══ LONG-PRESS → DRAG : annuler le stroke, préparer le drag ═══
+                        drawingStroke = null
+                        currentPath.clear()
+                        currentMode = CaptureMode.EDIT
+                        onModeChanged?.invoke(currentMode)
+                        // Trouver le mot sous le stylet
+                        val hitIdx = hitTest(longPressStartX, longPressStartY)
+                        if (hitIdx != null) {
+                            selectedWordGroup = findWordGroup(hitIdx)
+                            initReflow(hitIdx)
+                            if (selectedWordGroup != null) {
+                                dragWordYOffset = computeGroupCenterY(selectedWordGroup!!) - snapToLine(computeGroupCenterY(selectedWordGroup!!))
+                            }
+                            dragWordGroup = selectedWordGroup
+                            selectedStrokeIndex = hitIdx
+                            editStartX = longPressStartX
+                            editStartY = longPressStartY
+                            wasDrag = false
+                            // ═══ Dessiner le mot comme currentPath pour rendu visible ═══
+                            updateDragCurrentPath()
+                            rebuildBitmap()  // enlever le mot du bitmap immediatement
+                            Log.i(TAG, "Long-press → DRAG: mot ${selectedWordGroup?.size ?: 0}s (currentPath actif)")
+                        } else {
+                            Log.d(TAG, "Long-press → ÉDITION: aucun mot sous le stylet")
+                        }
+                        throttledInvalidate()
+                        return  // Ce MOVE ne produit pas de point de capture
                     }
+                }
+                // ═══ Long-press actif → drag direct via currentPath ═══
+                if (longPressTriggered) {
+                    val dx = event.x - editStartX
+                    val dy = event.y - editStartY
+                    if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+                        wasDrag = true
+                    }
+                    val group = dragWordGroup
+                    if (group != null && wasDrag) {
+                        // Déplacer dans strokeRegistry
+                        for (idx in group) {
+                            if (idx < strokeRegistry.size) {
+                                strokeRegistry[idx].translate(dx, dy)
+                            }
+                        }
+                        editStartX = event.x
+                        editStartY = event.y
+                        // Snap Y
+                        val cy = computeGroupCenterY(group)
+                        val snappedY = snapToLine(cy)
+                        val targetY = snappedY + dragWordYOffset
+                        val snapDy = targetY - cy
+                        if (Math.abs(snapDy) > 0.5f) {
+                            for (idx in group) {
+                                if (idx < strokeRegistry.size) {
+                                    strokeRegistry[idx].translate(0f, snapDy)
+                                }
+                            }
+                            editStartY += snapDy
+                        }
+                        // Mettre à jour currentPath pour le rendu visible
+                        updateDragCurrentPath()
+                        throttledInvalidate()
+                    }
+                    return
                 }
                 if (!hasPrevPoint) return
 
@@ -1049,6 +1167,58 @@ class CaptureView(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_UP -> {
+                // Si un long-press a eu lieu, finaliser le drag et revenir en CAPTURE
+                if (longPressTriggered) {
+                    longPressTriggered = false
+                    hasPrevPoint = false
+                    currentPath.clear()
+                    // Réordonnancement après drag
+                    if (wasDrag && dragWordGroup != null && flowState != null) {
+                        val newOrder = computeVisualOrder(flowState!!.words)
+                        if (newOrder != null) {
+                            val cy = computeGroupCenterY(dragWordGroup!!)
+                            val snappedY = snapToLine(cy)
+                            val targetY = snappedY + dragWordYOffset
+                            val snapDy = targetY - cy
+                            if (Math.abs(snapDy) > 0.5f) {
+                                for (idx in dragWordGroup!!) {
+                                    if (idx < strokeRegistry.size) {
+                                        strokeRegistry[idx].translate(0f, snapDy)
+                                    }
+                                }
+                            }
+                            rebuildBitmap()
+                            Log.i(TAG, "Long-press drag terminé: ${newOrder.size} groupes réordonnés")
+                        }
+                    }
+                    // Nettoyer et revenir en CAPTURE
+                    currentPath.clear()  // effacer le currentPath du drag
+                    dragWordGroup = null
+                    flowState = null
+                    flowBackup = null
+                    selectedWordGroup = null
+                    currentMode = CaptureMode.CAPTURE
+                    onModeChanged?.invoke(currentMode)
+                    // Reconstruire le bitmap avec le mot à sa position finale
+                    rebuildBitmap()
+                    // Réactiver le timer d'inférence pour le groupe ouvert restant
+                    inferFuture?.cancel(false)
+                    inferFuture = inferExecutor.schedule({
+                        val groups = computeWordGroups()
+                        for (gi in (lastInferredSpatialGroup + 1) until groups.size) {
+                            val group = groups[gi]
+                            if (group.isEmpty()) continue
+                            val snapshot = strokeRegistry.toList()
+                            val seq = groupSequenceCounter.getAndIncrement()
+                            Log.i(TAG, "⏱️ Post-édition: groupe $gi (${group.size}s) → seq=$seq")
+                            onWordGroupCompleted?.invoke(snapshot, group, seq)
+                            lastInferredSpatialGroup = gi
+                        }
+                    }, 500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    Log.d(TAG, "ÉDITION → CAPTURE (stylet levé après long-press)")
+                    invalidate()
+                    return
+                }
                 if (!hasPrevPoint) return
                 val x = event.x; val y = event.y; val t = event.eventTime; val p = event.getPressure()
 
@@ -1437,14 +1607,6 @@ class CaptureView(context: Context) : View(context) {
 
     // inferredGroupCount supprimé — GroupManager gère l'inférence
 
-    /** Index du groupe sélectionné (-1 = aucun). Calculé depuis GroupManager. */
-    var reactivatedGroupIndex: Int = -1
-        get() {
-            val sel = groupManager.groupsInState(GroupState.SELECTED).firstOrNull() ?: return -1
-            return groupManager.allGroups().indexOfFirst { it.id == sel.id }
-        }
-        private set
-
     // activeStrokeBase supprimé — GroupManager gère l'archivage
 
     // ── Timer d'inférence 500ms (thread séparé pour ne pas être bloqué par le hover) ──
@@ -1468,26 +1630,47 @@ class CaptureView(context: Context) : View(context) {
         groupManager.onStrokeSealed(inkStroke)
         Log.d(TAG, "GroupManager: stroke #$inkStrokeId → ${groupManager.allGroups().size} groupes actifs")
 
-        // ═══ Timer 500ms : seule source d'inférence ═══
+        // ═══ MOTS OUVERTS : inférence immédiate des groupes fermés ═══
+        // Dès qu'un nouveau groupe est créé, tous les groupes avant le dernier
+        // sont "fermés" (plus aucun stroke n'ira dedans) → inférés immédiatement.
+        // Seul le dernier groupe (ouvert) attend un timer de 500ms.
         throttledInvalidate()
 
-        // Redémarrer le timer 500ms sur thread séparé (insensible au jitter UI)
-        inferFuture?.cancel(false)
-        inferFuture = inferExecutor.schedule({
-            val groups = computeWordGroups()
-            val lastIdx = groups.size - 1
-            if (lastIdx >= 0 && lastIdx != lastInferredSpatialGroup) {
-                val group = groups[lastIdx]
-                if (group.isNotEmpty()) {
-                    val snapshot = strokeRegistry.toList()
-                    val seq = groupSequenceCounter.getAndIncrement()
-                    Log.i(TAG, "⏱️ Infer 500ms: groupe $lastIdx (${group.size} strokes) → seq=$seq")
-                    onWordGroupCompleted?.invoke(snapshot, group, seq)
-                    lastInferredSpatialGroup = lastIdx
+        val groups = computeWordGroups()
+        val openIdx = groups.size - 1
+
+        // ── Inférer les groupes fermés immédiatement ──
+        for (gi in (lastInferredSpatialGroup + 1) until openIdx.coerceAtLeast(0)) {
+            val group = groups[gi]
+            if (group.isEmpty()) continue
+            val snapshot = strokeRegistry.toList()
+            val seq = groupSequenceCounter.getAndIncrement()
+            Log.i(TAG, "⚡ Inférer immédiat: groupe $gi/${openIdx} (${group.size} strokes) → seq=$seq")
+            onWordGroupCompleted?.invoke(snapshot, group, seq)
+            lastInferredSpatialGroup = gi
+        }
+
+        // ── Timer pour le groupe ouvert (dernier) ──
+        if (openIdx >= 0 && openIdx > lastInferredSpatialGroup) {
+            inferFuture?.cancel(false)
+            inferFuture = inferExecutor.schedule({
+                val latestGroups = computeWordGroups()
+                val latestOpenIdx = latestGroups.size - 1
+                // Inférer le groupe ouvert s'il est resté stable 500ms
+                if (latestOpenIdx >= 0 && latestOpenIdx > lastInferredSpatialGroup) {
+                    for (gi in (lastInferredSpatialGroup + 1)..latestOpenIdx) {
+                        val group = latestGroups[gi]
+                        if (group.isEmpty()) continue
+                        val snapshot = strokeRegistry.toList()
+                        val seq = groupSequenceCounter.getAndIncrement()
+                        Log.i(TAG, "⏱️ Timeout 500ms: groupe $gi/${latestOpenIdx} (${group.size} strokes) → seq=$seq")
+                        onWordGroupCompleted?.invoke(snapshot, group, seq)
+                        lastInferredSpatialGroup = gi
+                    }
                 }
-            }
-        }, 500, java.util.concurrent.TimeUnit.MILLISECONDS)
-        Log.d(TAG, "Timer 500ms réarmé (thread séparé)")
+            }, 500, java.util.concurrent.TimeUnit.MILLISECONDS)
+            Log.d(TAG, "Timer 500ms réarmé pour groupe ouvert $openIdx (thread séparé)")
+        }
     }
 
     /**
@@ -1534,29 +1717,7 @@ class CaptureView(context: Context) : View(context) {
         syncGroupManagerParams()
     }
 
-    /** Stub — remplacé par GroupManager.handleTimeout */
-    private var lastSpatialGroupCount = 0
-
-    /** Inférence spatiale : détecte les groupes fermés via computeWordGroups(). */
-    private fun checkAutoInfer() {
-        val groups = computeWordGroups()
-        val totalGroups = groups.size
-        if (totalGroups > lastSpatialGroupCount && totalGroups >= 2) {
-            // Les groupes avant le dernier sont "fermés" → inférer
-            for (gi in lastSpatialGroupCount until totalGroups - 1) {
-                val group = groups[gi]
-                if (group.isNotEmpty()) {
-                    val snapshot = strokeRegistry.toList()
-                    val seq = groupSequenceCounter.getAndIncrement()
-                    Log.i(TAG, "Spatial infer: groupe $gi (${group.size} strokes) → seq=$seq")
-                    onWordGroupCompleted?.invoke(snapshot, group, seq)
-                }
-            }
-        }
-        lastSpatialGroupCount = (totalGroups - 1).coerceAtLeast(0)
-    }
-
-    /** Annule le timeout d'inference auto (appele quand un nouveau trait commence) */
+    /** Annule le timeout d'inférence auto (appelé quand un nouveau trait commence) */
 
 
     // -- Conversions de pression ---------------------------------------------
@@ -1675,11 +1836,22 @@ class CaptureView(context: Context) : View(context) {
         if (showVisualOverlays) drawActiveGroupBlob(canvas)
 
         // Stroke en cours de dessin — au premier plan
+        // Supporte les sentinelles NaN pour séparer les strokes (drag multi-stroke)
         if (currentPath.size >= 2) {
             val path = Path()
-            path.moveTo(currentPath[0].first, currentPath[0].second)
-            for (i in 1 until currentPath.size) {
-                path.lineTo(currentPath[i].first, currentPath[i].second)
+            var needsMove = true
+            for (i in currentPath.indices) {
+                val (px, py) = currentPath[i]
+                if (px.isNaN() || py.isNaN()) {
+                    needsMove = true  // sentinelle: prochain point fera moveTo
+                    continue
+                }
+                if (needsMove) {
+                    path.moveTo(px, py)
+                    needsMove = false
+                } else {
+                    path.lineTo(px, py)
+                }
             }
             canvas.drawPath(path, strokePaint)
         }
@@ -1809,17 +1981,47 @@ class CaptureView(context: Context) : View(context) {
     }
 
     /** Reconstruit le bitmap a partir du registre de strokes */
+    /** Met à jour currentPath avec les points du groupe en cours de drag.
+     *  Ainsi le pipeline de rendu normal (DU/handwriting) affiche le mot
+     *  comme un tracé en cours, visible pendant le déplacement.
+     *  Chaque stroke est séparé pour éviter les lignes inter-strokes. */
+    private fun updateDragCurrentPath() {
+        currentPath.clear()
+        val group = dragWordGroup ?: return
+        var firstStroke = true
+        for (idx in group) {
+            if (idx >= strokeRegistry.size) continue
+            val s = strokeRegistry[idx]
+            if (s.activePoints < 1) continue
+            if (!firstStroke) {
+                // Séparateur : point sentinelle avec Float.NaN pour indiquer un saut
+                currentPath.add(Pair(Float.NaN, Float.NaN))
+            }
+            firstStroke = false
+            for (i in 0 until s.activePoints) {
+                currentPath.add(s.points[i])
+            }
+        }
+    }
+
     private fun rebuildBitmap() {
         bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         val path = Path()
+        // Pendant un drag, exclure le groupe déplacé du bitmap (affiché via currentPath)
+        val dragIndices: Set<Int> = if (longPressTriggered && dragWordGroup != null) {
+            dragWordGroup!!.toSet()
+        } else emptySet()
+        var idx = 0
         for (stroke in strokeRegistry) {
-            if (stroke.activePoints < 2) continue
+            if (stroke.activePoints < 2) { idx++; continue }
+            if (idx in dragIndices) { idx++; continue }  // skip dragged word
             path.rewind()
             path.moveTo(stroke.points[0].first, stroke.points[0].second)
             for (i in 1 until stroke.activePoints) {
                 path.lineTo(stroke.points[i].first, stroke.points[i].second)
             }
             bitmapCanvas?.drawPath(path, strokePaint)
+            idx++
         }
     }
 
@@ -1874,10 +2076,6 @@ class CaptureView(context: Context) : View(context) {
     // =========================================================================
     // GROUPEMENT DE MOTS
     // =========================================================================
-
-    /** Stub — le cache est géré par GroupManager. */
-    private fun invalidateWordGroups() { }
-
     /** Force le rafraîchissement de l'affichage */
     fun recalculateWordGroups() {
         Log.i(TAG, "♻️ Recalcul groupes: ${groupManager.allGroups().size} groupes, ${strokeRegistry.size} strokes")
@@ -1953,14 +2151,18 @@ class CaptureView(context: Context) : View(context) {
         groups.add(current)
 
         // ═══ POST-FUSION : absorber les petits groupes (accents/corrections) dans les grands ═══
+        // ⚠️ MOTS OUVERTS : le dernier groupe (ouvert) n'absorbe que des strokes neufs,
+        // pas des groupes fermés. Il est exclu de la post-fusion (ni absorbeur, ni absorbé).
+        val openGroup = groups.lastOrNull()
         for (gi in groups.indices.reversed()) {
             val g = groups[gi]
+            if (g === openGroup) continue  // groupe ouvert protégé
             if (g.size > 2) continue  // ne pas absorber les grands groupes
             // Chercher un groupe cible qui chevauche horizontalement
             var bestTarget: Int? = null
             var bestOverlap = 0f
             for (ti in groups.indices) {
-                if (ti == gi || groups[ti].size <= 2) continue
+                if (ti == gi || groups[ti] === openGroup || groups[ti].size <= 2) continue
                 val tg = groups[ti]
                 var tMinX = Float.MAX_VALUE; var tMaxX = Float.MIN_VALUE
                 var gMinX = Float.MAX_VALUE; var gMaxX = Float.MIN_VALUE
