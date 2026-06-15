@@ -1479,7 +1479,7 @@ class CaptureView(context: Context) : View(context) {
                 if (group.isNotEmpty()) {
                     val snapshot = strokeRegistry.toList()
                     val seq = groupSequenceCounter.getAndIncrement()
-                    Log.i(TAG, "Infer 500ms: groupe $lastIdx (${group.size} strokes) → seq=$seq")
+                    Log.i(TAG, "⏱️ Infer 500ms: groupe $lastIdx (${group.size} strokes) → seq=$seq")
                     onWordGroupCompleted?.invoke(snapshot, group, seq)
                     lastInferredSpatialGroup = lastIdx
                 }
@@ -1487,6 +1487,7 @@ class CaptureView(context: Context) : View(context) {
         }
         inferRunnable = r
         inferTimer.postDelayed(r, 500)
+        Log.d(TAG, "Timer 500ms réarmé")
     }
 
     /**
