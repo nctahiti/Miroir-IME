@@ -1466,8 +1466,7 @@ class CaptureView(context: Context) : View(context) {
         groupManager.onStrokeSealed(inkStroke)
         Log.d(TAG, "GroupManager: stroke #$inkStrokeId → ${groupManager.allGroups().size} groupes actifs")
 
-        // ═══ Inférence spatiale + timer 500ms ═══
-        checkAutoInfer()
+        // ═══ Timer 500ms : seule source d'inférence ═══
         throttledInvalidate()
 
         // Redémarrer le timer 500ms : inférer le dernier groupe après une pause
