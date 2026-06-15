@@ -987,6 +987,8 @@ class CaptureView(context: Context) : View(context) {
                 writeRawPoint("DOWN", x, y, 0.5f, t)
                 // ═══ V4 CONDUIT : écriture delta V★ ═══
                 vstarWriter?.writePoint(x, y, t, 0.5f, isPenDown = true)
+                // Annuler le timer d'inférence — un nouveau stroke commence
+                inferFuture?.cancel(false)
             }
 
             MotionEvent.ACTION_MOVE -> {
@@ -1445,10 +1447,10 @@ class CaptureView(context: Context) : View(context) {
 
     // activeStrokeBase supprimé — GroupManager gère l'archivage
 
-    // ── Timer d'inférence 500ms (infère après pause, groupe reste ouvert) ──
-    private val inferTimer = android.os.Handler(android.os.Looper.getMainLooper())
-    private var inferRunnable: Runnable? = null
-    private var lastInferredSpatialGroup: Int = -1  // dernier groupe spatial déjà inféré
+    // ── Timer d'inférence 500ms (thread séparé pour ne pas être bloqué par le hover) ──
+    private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+    private var inferFuture: java.util.concurrent.ScheduledFuture<*>? = null
+    private var lastInferredSpatialGroup: Int = -1
 
     private fun registerCompletedStroke() {
         val ds = drawingStroke ?: return
@@ -1469,9 +1471,9 @@ class CaptureView(context: Context) : View(context) {
         // ═══ Timer 500ms : seule source d'inférence ═══
         throttledInvalidate()
 
-        // Redémarrer le timer 500ms : inférer le dernier groupe après une pause
-        inferRunnable?.let { inferTimer.removeCallbacks(it) }
-        val r = Runnable {
+        // Redémarrer le timer 500ms sur thread séparé (insensible au jitter UI)
+        inferFuture?.cancel(false)
+        inferFuture = inferExecutor.schedule({
             val groups = computeWordGroups()
             val lastIdx = groups.size - 1
             if (lastIdx >= 0 && lastIdx != lastInferredSpatialGroup) {
@@ -1484,10 +1486,8 @@ class CaptureView(context: Context) : View(context) {
                     lastInferredSpatialGroup = lastIdx
                 }
             }
-        }
-        inferRunnable = r
-        inferTimer.postDelayed(r, 500)
-        Log.d(TAG, "Timer 500ms réarmé")
+        }, 500, java.util.concurrent.TimeUnit.MILLISECONDS)
+        Log.d(TAG, "Timer 500ms réarmé (thread séparé)")
     }
 
     /**
