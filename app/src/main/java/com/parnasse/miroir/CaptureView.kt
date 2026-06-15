@@ -511,8 +511,8 @@ class CaptureView(context: Context) : View(context) {
                     hoverStrokeIndex = null
                     hoverWordGroup = null
                     cancelLongHover()
-                    // Désélectionner le groupe SELECTED → STORED
-                    deselectAllGroups()
+                    // ⚠️ Pas de deselectAllGroups ici — le hover e-ink est instable
+                    // La désélection se fait quand un autre groupe est survolé
                 }
             }
             return true
@@ -567,78 +567,94 @@ class CaptureView(context: Context) : View(context) {
         checkLongHoverReactivation()
     }
 
-    // ── Survol long (réactivation de groupe) ────────────────────────────
-    private val longHoverHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private var longHoverRunnable: Runnable? = null
-    private var longHoverGroup: List<Int>? = null
+    // ── Cache spatial (évite de recalculer computeWordGroups à chaque frame) ──
+    private var cachedSpatialGroups: List<List<Int>>? = null
+    private var cachedSpatialBounds: List<android.graphics.RectF>? = null
+    private var cachedStrokeRegistrySize: Int = -1
+
+    /** Retourne les groupes spatiaux avec cache (invalidé quand strokeRegistry change). */
+    private fun getSpatialGroups(): List<List<Int>> {
+        if (cachedStrokeRegistrySize != strokeRegistry.size) {
+            cachedSpatialGroups = computeWordGroups()
+            cachedSpatialBounds = cachedSpatialGroups!!.map { group ->
+                val r = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
+                for (idx in group) {
+                    if (idx >= strokeRegistry.size) continue
+                    for ((px, py) in strokeRegistry[idx].points) {
+                        if (px < r.left) r.left = px; if (px > r.right) r.right = px
+                        if (py < r.top) r.top = py; if (py > r.bottom) r.bottom = py
+                    }
+                }
+                r
+            }
+            cachedStrokeRegistrySize = strokeRegistry.size
+        }
+        return cachedSpatialGroups!!
+    }
+
+    /** Retourne les bounds précalculées des groupes spatiaux. */
+    private fun getSpatialBounds(): List<android.graphics.RectF> {
+        getSpatialGroups()  // assure le cache
+        return cachedSpatialBounds!!
+    }
 
     /**
-     * Si le stylet survole un groupe fermé, le réactive via GroupManager.
-     * Délai configurable via CalibrationActivity.getLongHoverDelay().
-     * L'inférence suivra le timeout normal après écriture.
+     * Survol long : timer basé sur System.currentTimeMillis() — résistant au jitter e-ink.
      */
-    /**
-     * Survol long : trouve le groupe sous le curseur et le sélectionne.
-     * Cherche directement dans les groupes (bounds) — pas via les strokes.
-     */
+    private var longHoverStartMs: Long = 0
+    private var longHoverFirstStroke: Int = -1
+
     private fun checkLongHoverReactivation() {
         if (!isBlocnoteMode) return
+        if (!isHovering) { longHoverStartMs = 0; longHoverFirstStroke = -1; return }
 
-        // Trouver le groupe sous le curseur (via bounds, pas via stroke)
         val hx = hoverX; val hy = hoverY
-        if (!isHovering) {
-            cancelLongHover()
+        val spatialGroups = getSpatialGroups()
+        val spatialBounds = getSpatialBounds()
+        val targetGroup = spatialGroups.withIndex().firstOrNull { (gi, group) ->
+            val r = spatialBounds[gi]
+            r.left < Float.MAX_VALUE && hx >= r.left && hx <= r.right && hy >= r.top - 20 && hy <= r.bottom + 20
+        }
+        val targetIndices = targetGroup?.value ?: run {
+            longHoverStartMs = 0; longHoverFirstStroke = -1; return
+        }
+
+        val firstStroke = targetIndices.firstOrNull() ?: run {
+            longHoverStartMs = 0; longHoverFirstStroke = -1; return
+        }
+
+        // Même groupe ? sinon reset timer
+        if (firstStroke != longHoverFirstStroke) {
+            longHoverFirstStroke = firstStroke
+            longHoverStartMs = System.currentTimeMillis()
+            Log.d(TAG, "Survol long — nouveau groupe, timer reset (stroke=$firstStroke)")
             return
         }
 
-        // Chercher un groupe STORED dont les bounds contiennent le point de hover
-        val targetGroup = groupManager.groupsInState(GroupState.STORED).firstOrNull { g ->
-            g.bounds.contains(hx, hy)
-        } ?: run {
-            // Pas de groupe STORED sous le curseur → annuler
-            if (longHoverGroupId != null) cancelLongHover()
-            return
-        }
-
-        // Déjà sur le même groupe ? ne pas réarmer
-        if (targetGroup.id == longHoverGroupId) return
-
-        // Nouveau groupe → désélectionner l'ancien, armer le timer
-        deselectAllGroups()
-        cancelLongHover()
-        longHoverGroupId = targetGroup.id
+        // Assez longtemps ?
         val delayMs = CalibrationActivity.getLongHoverDelay(context)
+        if (System.currentTimeMillis() - longHoverStartMs < delayMs) return
 
-        Log.d(TAG, "Survol long — timer armé pour groupe ${targetGroup.id} (délai ${delayMs}ms, état=${targetGroup.state})")
+        // Déclencher ! (one-shot)
+        longHoverStartMs = 0
+        Log.d(TAG, "Survol long — déclenché après ${delayMs}ms")
 
-        // Trouver un stroke du groupe pour le réactiver
-        val anyStrokeId = targetGroup.strokeIds.firstOrNull() ?: return
+        // Désélectionner l'ancien
+        deselectAllGroups()
 
-        val r = Runnable {
-            Log.d(TAG, "Survol long — timer déclenché pour ${targetGroup.id}")
-            val g = groupManager.getGroup(targetGroup.id) ?: return@Runnable
-            
-            if (g.state != GroupState.STORED && g.state != GroupState.LOADED) {
-                Log.d(TAG, "Survol long — état=${g.state}, pas STORED/LOADED → ignoré")
-                return@Runnable
-            }
-            
-            // Charger si nécessaire
-            if (g.state == GroupState.STORED) {
-                groupManager.reactivateGroup(anyStrokeId)
-                Log.d(TAG, "Survol long — groupe chargé (STORED → LOADED)")
-            }
-
-            // Sélectionner
-            if (groupManager.selectGroup(g.id)) {
-                val indices = g.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
-                Log.i(TAG, "Survol long — groupe ${g.id} SELECTED (phare allumé, ${g.strokeCount} strokes)")
-                invalidate()
-            }
-            longHoverGroupId = null
+        // Trouver le stroke dans GroupManager et sélectionner
+        val anyStrokeId = registryIndexToInkStrokeId[firstStroke] ?: return
+        val g = groupManager.reactivateGroup(anyStrokeId) ?: run {
+            Log.w(TAG, "Survol long — reactivateGroup échec pour stroke $firstStroke")
+            return
         }
-        longHoverRunnable = r
-        longHoverHandler.postDelayed(r, delayMs)
+        if (groupManager.selectGroup(g.id)) {
+            // Réactiver l'absorption : les strokes suivants iront dans ce groupe
+            val wordSpatial = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
+            groupManager.params = groupManager.params.copy(spatialDistancePx = wordSpatial)
+            Log.i(TAG, "Survol long — groupe ${g.id} SELECTED, absorption réactivée (seuil=$wordSpatial)")
+            invalidate()
+        }
     }
 
     /** Désélectionne tous les groupes SELECTED → STORED (appelé au HOVER_EXIT) */
@@ -649,20 +665,20 @@ class CaptureView(context: Context) : View(context) {
             Log.d(TAG, "Déselection — groupe ${g.id} SELECTED → STORED")
         }
         if (selected.isNotEmpty()) {
+            // Désactiver l'absorption : revenir au mode "chaque stroke = un groupe"
+            groupManager.params = groupManager.params.copy(spatialDistancePx = 1f)
             reactivatedGroupIndex = -1
             postInvalidate()
         }
     }
 
     /** ID du groupe en attente de survol long (pour éviter les réarmements) */
-    private var longHoverGroupId: String? = null
+    private var longHoverGroupId: String? = null  // unused, kept for compatibility
 
     /** Annule le timer de survol long */
     private fun cancelLongHover() {
-        longHoverRunnable?.let { longHoverHandler.removeCallbacks(it) }
-        longHoverRunnable = null
-        longHoverGroup = null
-        longHoverGroupId = null
+        longHoverStartMs = 0
+        longHoverFirstStroke = -1
     }
 
     // ── Double-tap (réactivation de groupe) ────────────────────────────
@@ -1429,6 +1445,11 @@ class CaptureView(context: Context) : View(context) {
 
     // activeStrokeBase supprimé — GroupManager gère l'archivage
 
+    // ── Timer d'inférence 500ms (infère après pause, groupe reste ouvert) ──
+    private val inferTimer = android.os.Handler(android.os.Looper.getMainLooper())
+    private var inferRunnable: Runnable? = null
+    private var lastInferredSpatialGroup: Int = -1  // dernier groupe spatial déjà inféré
+
     private fun registerCompletedStroke() {
         val ds = drawingStroke ?: return
         strokeRegistry.add(ds)
@@ -1445,9 +1466,28 @@ class CaptureView(context: Context) : View(context) {
         groupManager.onStrokeSealed(inkStroke)
         Log.d(TAG, "GroupManager: stroke #$inkStrokeId → ${groupManager.allGroups().size} groupes actifs")
 
-        // ═══ Inférence spatiale (remplace le timeout temporel) ═══
+        // ═══ Inférence spatiale + timer 500ms ═══
         checkAutoInfer()
         throttledInvalidate()
+
+        // Redémarrer le timer 500ms : inférer le dernier groupe après une pause
+        inferRunnable?.let { inferTimer.removeCallbacks(it) }
+        val r = Runnable {
+            val groups = computeWordGroups()
+            val lastIdx = groups.size - 1
+            if (lastIdx >= 0 && lastIdx != lastInferredSpatialGroup) {
+                val group = groups[lastIdx]
+                if (group.isNotEmpty()) {
+                    val snapshot = strokeRegistry.toList()
+                    val seq = groupSequenceCounter.getAndIncrement()
+                    Log.i(TAG, "Infer 500ms: groupe $lastIdx (${group.size} strokes) → seq=$seq")
+                    onWordGroupCompleted?.invoke(snapshot, group, seq)
+                    lastInferredSpatialGroup = lastIdx
+                }
+            }
+        }
+        inferRunnable = r
+        inferTimer.postDelayed(r, 500)
     }
 
     /**
@@ -1911,6 +1951,47 @@ class CaptureView(context: Context) : View(context) {
             }
         }
         groups.add(current)
+
+        // ═══ POST-FUSION : absorber les petits groupes (accents/corrections) dans les grands ═══
+        for (gi in groups.indices.reversed()) {
+            val g = groups[gi]
+            if (g.size > 2) continue  // ne pas absorber les grands groupes
+            // Chercher un groupe cible qui chevauche horizontalement
+            var bestTarget: Int? = null
+            var bestOverlap = 0f
+            for (ti in groups.indices) {
+                if (ti == gi || groups[ti].size <= 2) continue
+                val tg = groups[ti]
+                var tMinX = Float.MAX_VALUE; var tMaxX = Float.MIN_VALUE
+                var gMinX = Float.MAX_VALUE; var gMaxX = Float.MIN_VALUE
+                for (idx in tg) {
+                    val lx = leftX.getOrNull(idx) ?: continue; val rx = rightX.getOrNull(idx) ?: continue
+                    if (lx < tMinX) tMinX = lx; if (rx > tMaxX) tMaxX = rx
+                }
+                for (idx in g) {
+                    val lx = leftX.getOrNull(idx) ?: continue; val rx = rightX.getOrNull(idx) ?: continue
+                    if (lx < gMinX) gMinX = lx; if (rx > gMaxX) gMaxX = rx
+                }
+                val overlap = minOf(tMaxX, gMaxX) - maxOf(tMinX, gMinX)
+                // Vérifier aussi la proximité verticale
+                val gFirst = g.firstOrNull() ?: continue
+                val gLast = g.lastOrNull() ?: continue
+                val tFirst = tg.firstOrNull() ?: continue
+                val tLast = tg.lastOrNull() ?: continue
+                val gMidY = ((yMin.getOrNull(gFirst) ?: 0f) + (yMax.getOrNull(gLast) ?: 0f)) / 2f
+                val tMidY = ((yMin.getOrNull(tFirst) ?: 0f) + (yMax.getOrNull(tLast) ?: 0f)) / 2f
+                val yDist = kotlin.math.abs(gMidY - tMidY)
+                if (overlap > 0 && yDist < distY && overlap > bestOverlap) {
+                    bestOverlap = overlap; bestTarget = ti
+                }
+            }
+            if (bestTarget != null) {
+                groups[bestTarget] = (groups[bestTarget] + g).toMutableList()
+                groups.removeAt(gi)
+                Log.d(TAG, "computeWordGroups: post-fusion groupe $gi → $bestTarget")
+            }
+        }
+
         Log.d(TAG, "computeWordGroups: ${groups.size} groupes, distX=$distX, distY=$distY")
         return groups
     }
@@ -2384,21 +2465,23 @@ class CaptureView(context: Context) : View(context) {
         if (currentMode != CaptureMode.CAPTURE) return
         if (!isBlocnoteMode) return
 
-        // Blob pour les groupes SPATIAUX (computeWordGroups) + le groupe SELECTED (phare)
-        val groups = computeWordGroups()
+        // Blob uniquement sur le dernier groupe (actif) + le groupe SELECTED (phare)
+        val groups = getSpatialGroups()
         if (groups.isEmpty()) return
+        val lastGroup = groups.last()
+        val selectedIndices = groupManager.groupsInState(GroupState.SELECTED)
+            .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
+        // Ne dessiner que le dernier groupe + le groupe sélectionné
+        val groupsToDraw = if (lastGroup.any { it in selectedIndices }) listOf(lastGroup)
+                          else listOf(lastGroup) + groups.filter { it.any { idx -> idx in selectedIndices } }
 
         val blobDistX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
         val blobDistY = CalibrationActivity.getSpatialDistanceY(context)
         blobRadiusX = blobDistX * 0.7f
-        blobRadiusY = blobDistY * 0.35f  // Réduit pour éviter le chevauchement vertical
+        blobRadiusY = blobDistY * 0.35f
         val sampleStep = ((blobRadiusX + blobRadiusY) / 12f).toInt().coerceIn(1, 6)
 
-        // Groupe SELECTED pour le surbrillance
-        val selectedIndices = groupManager.groupsInState(GroupState.SELECTED)
-            .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
-
-        for (groupIndices in groups) {
+        for (groupIndices in groupsToDraw) {
             val isSelected = groupIndices.any { it in selectedIndices }
             for (idx in groupIndices) {
                 if (idx >= strokeRegistry.size) continue
@@ -2519,26 +2602,24 @@ class CaptureView(context: Context) : View(context) {
      * DEBUG : affiche l'état des groupes via GroupManager.
      */
     private fun drawGroupDebugInfo(canvas: Canvas) {
-        val all = groupManager.allGroups()
-        for (g in all) {
-            val indices = g.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
-            if (indices.isEmpty()) continue
-            val firstIdx = indices.minOrNull() ?: continue
+        val groups = getSpatialGroups()
+        for ((gi, groupIndices) in groups.withIndex()) {
+            if (groupIndices.isEmpty()) continue
+            val firstIdx = groupIndices.first()
             if (firstIdx >= strokeRegistry.size) continue
             val s = strokeRegistry[firstIdx]
             if (s.activePoints < 1) continue
             val x = s.points[0].first
             val y = s.points[0].second - 20f
 
-            val state = when (g.state) {
-                GroupState.STORED -> "S"
-                GroupState.LOADED -> "L"
-                GroupState.SELECTED -> "★"
-                else -> "?"
-            }
-            canvas.drawText("${g.id.take(4)}:$state", x, y, debugTextPaint)
+            // État SELECTED ?
+            val selectedIndices = groupManager.groupsInState(GroupState.SELECTED)
+                .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
+            val isSelected = groupIndices.any { it in selectedIndices }
+            val state = if (isSelected) "★" else "$gi"
+            canvas.drawText("$state:${groupIndices.size}s", x, y, debugTextPaint)
         }
-        canvas.drawText("${all.size} groupes", 20f, height - 20f, debugTextPaint)
+        canvas.drawText("${groups.size} groupes", 20f, height - 20f, debugTextPaint)
     }
 
     fun clear() {

@@ -118,21 +118,14 @@ class GroupManager(
      * L'ancien groupe ACTIVE est automatiquement fermé (→ CLOSED).
      */
     fun getOrCreateActiveGroup(): InkGroup {
+        // ⚠️ Toujours créer un nouveau groupe — le groupement spatial
+        // est géré par computeWordGroups(), pas par le GroupManager.
         val currentActiveId = machine.activeGroupId
-
-        if (currentActiveId != null) {
-            val existing = groups[currentActiveId]
-            if (existing != null && existing.state == GroupState.LOADED) {
-                return existing
-            }
-        }
+        val oldGroup = currentActiveId?.let { groups[it] }
 
         // Créer un nouveau groupe
         val newGroup = InkGroup.create()
         groups[newGroup.id] = newGroup
-
-        // Clôturer l'ancien groupe actif
-        val oldGroup = currentActiveId?.let { groups[it] }
         machine.makeActive(newGroup.id, oldGroup)
 
         Log.i(TAG, "Nouveau groupe LOADED : ${newGroup.id} (ancien: ${oldGroup?.id ?: "aucun"})")
@@ -177,7 +170,7 @@ class GroupManager(
         val groupId = strokeToGroup[strokeId] ?: return null
         val group = groups[groupId] ?: return null
 
-        if (group.state != GroupState.STORED && group.state != GroupState.STORED) {
+        if (group.state != GroupState.STORED && group.state != GroupState.LOADED) {
             return null
         }
 
