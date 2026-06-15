@@ -160,12 +160,7 @@ class CaptureView(context: Context) : View(context) {
                 initTouchHelper()
             }
 
-            // Mode édition : réactiver tous les strokes archivés
-            if (!isCapture && activeStrokeBase > 0) {
-                Log.i(TAG, "Archive: reset base $activeStrokeBase → 0 (mode EDIT)")
-                activeStrokeBase = 0
-                invalidateWordGroups()
-            }
+            // Mode édition : GroupManager gère les groupes
 
             invalidate()
             onModeChanged?.invoke(value)
@@ -215,17 +210,60 @@ class CaptureView(context: Context) : View(context) {
     private var hoverStrokeIndex: Int? = null
 
     // -- Groupement de mots (EDIT mode) ---------------------------------------
-    private var wordGroupsCache: List<List<Int>>? = null
-    /** Cache des groupes COMPLETS (tous les strokes, ignore activeStrokeBase).
-     *  Utilisé par findWordGroup() pour la sélection même après archivage. */
-    private var fullGroupsCache: MutableList<List<Int>>? = null
+    // wordGroupsCache + fullGroupsCache supprimés — GroupManager gère les groupes
     /** Map groupIndex → orderIndex pour la ré-inférence (évite les doublons de transcription) */
     private val groupOrderMap = mutableMapOf<Int, Int>()
     private var hoverWordGroup: List<Int>? = null
     private var selectedWordGroup: List<Int>? = null
     private var dragWordGroup: List<Int>? = null
 
-    // -- Reflux de texte (mise en page dynamique) -----------------------------
+    // -- GroupManager (machine à états WIP — cohabitation progressive) --------
+    /** Gestionnaire de groupes avec machine à états (STORED/LOADED/SELECTED/DELEGATED).
+     *  Injecté en parallèle de checkAutoInfer. Recevra chaque stroke scellé
+     *  pour construire les groupes. Au Cap 7, remplacera checkAutoInfer. */
+    // useGroupManager supprimé — GroupManager est le seul chemin
+
+    /** Map inkStroke.id → index dans strokeRegistry (pour reconstruire les groupes) */
+    private val inkStrokeIdToRegistryIndex = mutableMapOf<Long, Int>()
+    /** Map inverse : index strokeRegistry → inkStroke.id (pour la réactivation hover) */
+    private val registryIndexToInkStrokeId = mutableMapOf<Int, Long>()
+
+    private val groupManager = GroupManager { group ->
+        // ═══ CAP 7 : bascule — GroupManager remplace checkAutoInfer ═══
+        val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+        if (indices.isEmpty()) return@GroupManager
+        val snapshot = strokeRegistry.toList()
+        val seq = groupSequenceCounter.getAndIncrement()
+        Log.i(TAG, "GroupManager -> STORED: groupe ${group.id} (${indices.size} strokes, seq=$seq)")
+        onWordGroupCompleted?.invoke(snapshot, indices, seq)
+        vstarWriter?.writeGroupSep()
+    }
+
+    /**
+     * Synchronise les paramètres du GroupManager avec la calibration.
+     * Lit depuis CalibrationActivity (SharedPreferences) et met à jour BlobParams.
+     * Appelé au démarrage et après chaque changement de calibration.
+     */
+    fun syncGroupManagerParams() {
+        val ctx = context
+        // Lecture depuis la calibration (SharedPreferences) — source unique
+        val calSpatialX = CalibrationActivity.getSpatialDistanceX(ctx)  // ~40-50px pour les lignes
+        val calTemporal = CalibrationActivity.getTemporalDistance(ctx)  // ~800ms
+        // Pour les MOTS, on utilise une fraction du seuil des lignes
+        val wordSpatial = (calSpatialX * 0.5f).coerceIn(15f, 40f)  // 50% du seuil ligne, entre 15-40px
+        
+        groupManager.params = BlobParams(
+            spatialDistancePx = wordSpatial,
+            minOverlapPercent = 30,
+            temporalDistanceMs = calTemporal.coerceIn(200L, 2000L),
+            transcriptionTimeoutMs = CalibrationActivity.getAutoInferDelay(ctx),
+            groupLevel = GroupLevel.WORD,
+            captureAnchor = CaptureAnchor.BOTTOM
+        )
+        Log.i(TAG, "GroupManager params sync: calX=${calSpatialX}px → wordSpatial=$wordSpatial, temporal=$calTemporal, timeout=${groupManager.params.transcriptionTimeoutMs}ms")
+    }
+
+    // -- Reflux de texte
     /** Metriques sauvegardees au debut du drag, pour le reflow */
     private var flowState: ReflowState? = null
     /** Snapshots des positions originales des strokes (restauration entre frames) */
@@ -473,6 +511,8 @@ class CaptureView(context: Context) : View(context) {
                     hoverStrokeIndex = null
                     hoverWordGroup = null
                     cancelLongHover()
+                    // Désélectionner le groupe SELECTED → STORED
+                    deselectAllGroups()
                 }
             }
             return true
@@ -520,12 +560,10 @@ class CaptureView(context: Context) : View(context) {
         val hitIdx = hitTest(x, y)
         if (hitIdx != hoverStrokeIndex) {
             hoverStrokeIndex = hitIdx
-            hoverWordGroup = if (hitIdx != null) findWordGroup(hitIdx) else null
-            val wgMsg = if (hoverWordGroup != null) " (mot: [${hoverWordGroup!!.joinToString(",")}])" else ""
-            Log.d(TAG, "Hover stroke: $hitIdx${wgMsg} (${strokeRegistry.size} total)")
+            Log.d(TAG, "Hover stroke: $hitIdx (${strokeRegistry.size} total)")
             invalidate()
         }
-        // Survol long : réactiver le groupe si survolé assez longtemps
+        // Survol long → sélection via GroupManager
         checkLongHoverReactivation()
     }
 
@@ -535,41 +573,96 @@ class CaptureView(context: Context) : View(context) {
     private var longHoverGroup: List<Int>? = null
 
     /**
-     * Si le stylet survole un groupe déjà inféré, active le groupe
-     * après un court délai (pour éviter les micro-survols).
+     * Si le stylet survole un groupe fermé, le réactive via GroupManager.
+     * Délai configurable via CalibrationActivity.getLongHoverDelay().
      * L'inférence suivra le timeout normal après écriture.
      */
+    /**
+     * Survol long : trouve le groupe sous le curseur et le sélectionne.
+     * Cherche directement dans les groupes (bounds) — pas via les strokes.
+     */
     private fun checkLongHoverReactivation() {
-        val group = hoverWordGroup
-        // Ne pas réinitialiser si on survole toujours le même groupe
-        if (group != null && group == longHoverGroup) return
+        if (!isBlocnoteMode) return
 
-        longHoverRunnable?.let { longHoverHandler.removeCallbacks(it) }
-        longHoverRunnable = null
-        longHoverGroup = null
+        // Trouver le groupe sous le curseur (via bounds, pas via stroke)
+        val hx = hoverX; val hy = hoverY
+        if (!isHovering) {
+            cancelLongHover()
+            return
+        }
 
-        if (group == null) return
-        if (!isBlocnoteMode || onWordGroupCompleted == null) return
+        // Chercher un groupe STORED dont les bounds contiennent le point de hover
+        val targetGroup = groupManager.groupsInState(GroupState.STORED).firstOrNull { g ->
+            g.bounds.contains(hx, hy)
+        } ?: run {
+            // Pas de groupe STORED sous le curseur → annuler
+            if (longHoverGroupId != null) cancelLongHover()
+            return
+        }
 
-        val allGroups = wordGroupsCache ?: computeWordGroups()
-        val groupIndex = allGroups.indexOfFirst { it == group }
-        if (groupIndex < 0 || groupIndex >= inferredGroupCount) return
-        if (groupIndex == reactivatedGroupIndex) return
+        // Déjà sur le même groupe ? ne pas réarmer
+        if (targetGroup.id == longHoverGroupId) return
 
-        // Activation immédiate — le délai est géré par le slider ⚙ et
-        // sert uniquement à filtrer les micro-survols via le check ci-dessus
-        // (group == longHoverGroup). L'inférence suivra le timeout normal.
-        reactivatedGroupIndex = groupIndex
-        // ⚠️ Ne pas invalider wordGroupsCache — il contient les absorptions
-        longHoverGroup = group
-        Log.i(TAG, "Survol — groupe $groupIndex activé (${group.size} strokes)")
+        // Nouveau groupe → désélectionner l'ancien, armer le timer
+        deselectAllGroups()
+        cancelLongHover()
+        longHoverGroupId = targetGroup.id
+        val delayMs = CalibrationActivity.getLongHoverDelay(context)
+
+        Log.d(TAG, "Survol long — timer armé pour groupe ${targetGroup.id} (délai ${delayMs}ms, état=${targetGroup.state})")
+
+        // Trouver un stroke du groupe pour le réactiver
+        val anyStrokeId = targetGroup.strokeIds.firstOrNull() ?: return
+
+        val r = Runnable {
+            Log.d(TAG, "Survol long — timer déclenché pour ${targetGroup.id}")
+            val g = groupManager.getGroup(targetGroup.id) ?: return@Runnable
+            
+            if (g.state != GroupState.STORED && g.state != GroupState.LOADED) {
+                Log.d(TAG, "Survol long — état=${g.state}, pas STORED/LOADED → ignoré")
+                return@Runnable
+            }
+            
+            // Charger si nécessaire
+            if (g.state == GroupState.STORED) {
+                groupManager.reactivateGroup(anyStrokeId)
+                Log.d(TAG, "Survol long — groupe chargé (STORED → LOADED)")
+            }
+
+            // Sélectionner
+            if (groupManager.selectGroup(g.id)) {
+                val indices = g.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+                Log.i(TAG, "Survol long — groupe ${g.id} SELECTED (phare allumé, ${g.strokeCount} strokes)")
+                invalidate()
+            }
+            longHoverGroupId = null
+        }
+        longHoverRunnable = r
+        longHoverHandler.postDelayed(r, delayMs)
     }
+
+    /** Désélectionne tous les groupes SELECTED → STORED (appelé au HOVER_EXIT) */
+    private fun deselectAllGroups() {
+        val selected = groupManager.groupsInState(GroupState.SELECTED)
+        for (g in selected) {
+            groupManager.deselectGroup(g.id)
+            Log.d(TAG, "Déselection — groupe ${g.id} SELECTED → STORED")
+        }
+        if (selected.isNotEmpty()) {
+            reactivatedGroupIndex = -1
+            postInvalidate()
+        }
+    }
+
+    /** ID du groupe en attente de survol long (pour éviter les réarmements) */
+    private var longHoverGroupId: String? = null
 
     /** Annule le timer de survol long */
     private fun cancelLongHover() {
         longHoverRunnable?.let { longHoverHandler.removeCallbacks(it) }
         longHoverRunnable = null
         longHoverGroup = null
+        longHoverGroupId = null
     }
 
     // ── Double-tap (réactivation de groupe) ────────────────────────────
@@ -597,27 +690,10 @@ class CaptureView(context: Context) : View(context) {
         lastTapX = x
         lastTapY = y
 
-        // Double-tap : < 400ms et < 40px d'écart
+        // Double-tap : délégué à GroupManager (hover long gère la sélection)
         if (dt in 100..400 && dx < 40f && dy < 40f) {
-            val hitIdx = hitTest(x, y) ?: return false
-            val group = findWordGroup(hitIdx) ?: return false
-            val allGroups = wordGroupsCache ?: computeWordGroups()
-            val groupIndex = allGroups.indexOfFirst { it == group }
-            if (groupIndex < 0 || groupIndex >= inferredGroupCount) return false  // déjà actif
-
-            Log.i(TAG, "Double-tap — réactivation du groupe $groupIndex (${group.size} strokes)")
-            inferredGroupCount = groupIndex
-            reactivatedGroupIndex = groupIndex
-            wordGroupsCache = null
-            cancelAutoInferTimeout()
-
-            // Notifier pour relancer la reconnaissance
-            val snapshot = strokeRegistry.toList()
-            val seq = groupSequenceCounter.getAndIncrement()
-            onWordGroupCompleted?.invoke(snapshot, group.toList(), seq)
-
-            // Feedback visuel : faire pulser le point plus fort
-            lastTapTime = 0  // reset pour éviter triple-tap
+            Log.d(TAG, "Double-tap détecté (géré par GroupManager)")
+            lastTapTime = 0
             return true
         }
         return false
@@ -708,7 +784,7 @@ class CaptureView(context: Context) : View(context) {
                 if (wasDrag && dragWordGroup != null && flowState != null) {
                     val newOrder = computeVisualOrder(flowState!!.words)
                     if (newOrder != null) {
-                        wordGroupsCache = newOrder
+                        // wordGroupsCache removed — groups from GroupManager
                         // Snap Y : préserver l'offset cursif du mot déplacé
                         val cy = computeGroupCenterY(dragWordGroup!!)
                         val snappedY = snapToLine(cy)
@@ -860,7 +936,7 @@ class CaptureView(context: Context) : View(context) {
         logRawOnTouchEvent(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                cancelAutoInferTimeout()
+                // cancelAutoInferTimeout (GroupManager gere)
 
                 // Enregistrer la position pour détection d'appui long
                 longPressStartX = event.x
@@ -905,46 +981,8 @@ class CaptureView(context: Context) : View(context) {
                     val dy = Math.abs(event.y - longPressStartY)
                     if (dt > 500 && dx < 15f && dy < 15f) {
                         longPressTriggered = true
-                        val hitIdx = hitTest(event.x, event.y)
-                        if (hitIdx != null) {
-                            val group = findWordGroup(hitIdx)
-                            if (group != null) {
-                                // Chercher dans fullGroupsCache (archivés) ou wordGroupsCache (actif)
-                                val allGroups = fullGroupsCache
-                                val groupIndex: Int
-                                val canReactivate: Boolean
-                                if (allGroups != null) {
-                                    groupIndex = allGroups.indexOfFirst { it == group }
-                                    // Les groupes archivés sont tous inférés → réactivables
-                                    canReactivate = groupIndex >= 0 && groupIndex < allGroups.size
-                                } else {
-                                    // Pas d'archivage : utiliser wordGroupsCache + inferredGroupCount
-                                    val activeGroups = wordGroupsCache ?: return
-                                    groupIndex = activeGroups.indexOfFirst { it == group }
-                                    canReactivate = groupIndex >= 0 && groupIndex < inferredGroupCount
-                                }
-                                if (canReactivate) {
-                                    Log.i(TAG, "Appui long — réactivation du groupe $groupIndex")
-                                    reactivatedGroupIndex = groupIndex
-                                    // Réactiver tous les strokes archivés pour permettre la correction
-                                    if (activeStrokeBase > 0) {
-                                        Log.i(TAG, "Archive: reset base $activeStrokeBase → 0 (réactivation)")
-                                        activeStrokeBase = 0
-                                        invalidateWordGroups()
-                                    }
-                                    cancelAutoInferTimeout()
-                                    val snapshot = strokeRegistry.toList()
-                                    val seq = groupSequenceCounter.getAndIncrement()
-            onWordGroupCompleted?.invoke(snapshot, group.toList(), seq)
-                                    // Annuler le stroke en cours
-                                    drawingStroke = null
-                                    currentPath.clear()
-                                    hasPrevPoint = false
-                                    throttledInvalidate()
-                                    return
-                                }
-                            }
-                        }
+                        // Toucher long — réactivation déléguée à GroupManager (hover long → selectGroup)
+                        Log.d(TAG, "Toucher long — GroupManager gère la réactivation")
                     }
                 }
                 if (!hasPrevPoint) return
@@ -1103,13 +1141,8 @@ class CaptureView(context: Context) : View(context) {
         if (strokeRegistry.isEmpty()) {
             Log.w(TAG, "saveCurrentNote: rien a sauvegarder"); return null
         }
-        // Sauvegarde : voir TOUS les strokes (ignore l'archivage temporaire)
-        val savedBase = activeStrokeBase
-        activeStrokeBase = 0
-        invalidateWordGroups()
-        val rawWords = computeWordGroups()
-        activeStrokeBase = savedBase
-        invalidateWordGroups()  // revenir à la vue archivée
+        // Groupes depuis GroupManager (ignore l'archivage)
+        val rawWords = computeWordGroupsForSave()
         if (rawWords.isEmpty()) return null
         // Ordonner par position visuelle
         val words = computeVisualOrder(rawWords) ?: rawWords
@@ -1258,9 +1291,7 @@ class CaptureView(context: Context) : View(context) {
                     loadedGroups.add(groupIndices.toList())
                 }
             }
-            // Restaurer les groupes et marquer comme tous inférés
-            wordGroupsCache = loadedGroups
-            inferredGroupCount = loadedGroups.size
+            // Groupes chargés — GroupManager gère maintenant
 
             currentNotePath = file.absolutePath
             rebuildBitmap()
@@ -1386,210 +1417,86 @@ class CaptureView(context: Context) : View(context) {
      * @param groupIndex Index du groupe dans l'ordre visuel (pour ordre d'écriture stable) */
     var onWordGroupCompleted: ((strokes: List<StrokeRecord>, group: List<Int>, groupIndex: Int) -> Unit)? = null
 
-    /** Nombre de groupes deja inferes (pour eviter les doublons) */
-    private var inferredGroupCount = 0
+    // inferredGroupCount supprimé — GroupManager gère l'inférence
 
-    /** Index du groupe réactivé (-1 = aucun), pour forcer l'absorption */
-    var reactivatedGroupIndex = -1
+    /** Index du groupe sélectionné (-1 = aucun). Calculé depuis GroupManager. */
+    var reactivatedGroupIndex: Int = -1
+        get() {
+            val sel = groupManager.groupsInState(GroupState.SELECTED).firstOrNull() ?: return -1
+            return groupManager.allGroups().indexOfFirst { it.id == sel.id }
+        }
         private set
 
-    /** Offset dans strokeRegistry : les strokes avant cet index sont archivés (groupes figés).
-     *  computeWordGroups() ne les traite plus, réduisant le calcul O(n²). */
-    private var activeStrokeBase = 0
+    // activeStrokeBase supprimé — GroupManager gère l'archivage
 
     private fun registerCompletedStroke() {
         val ds = drawingStroke ?: return
         strokeRegistry.add(ds)
 
-        // ═══ GROUPES : incrémental si réactivé, recalcul sinon ═══
-        val groups: List<List<Int>>
-        if (reactivatedGroupIndex >= 0 && wordGroupsCache != null) {
-            // Mode réactivation : préserver le cache incrémentalement
-            // (ne pas recalculer → l'absorption précédente serait perdue)
-            groups = wordGroupsCache!!
-        } else {
-            invalidateWordGroups()
-            // fullGroupsCache est construit incrémentalement — NE PAS le vider ici
-            groups = computeWordGroups()
-        }
-
-        // Absorption directe si groupe réactivé
-        if (reactivatedGroupIndex >= 0 && strokeRegistry.size >= 2) {
-            val targetGroup = groups.getOrNull(reactivatedGroupIndex)
-            val newIdx = strokeRegistry.size - 1
-            Log.i(TAG, "⚡ ABSORB CHECK: reactIdx=$reactivatedGroupIndex groups=${groups.size} target=${targetGroup?.size} newIdx=$newIdx")
-            if (targetGroup != null && targetGroup.isNotEmpty()) {
-                // ═══ DENSITÉ D'ABSORPTION : compter les contacts proches ═══
-                val distThreshold = CalibrationActivity.getSpatialDistanceX(context)
-                val contactThreshold = CalibrationActivity.getAbsorbContacts(context)
-                var contacts = 0
-                for (tidx in targetGroup) {
-                    if (tidx >= newIdx) continue
-                    val st = strokeRegistry[tidx]
-                    for (k1 in 0 until st.activePoints step 4) {
-                        val p1x = st.points[k1].first; val p1y = st.points[k1].second
-                        for (k2 in 0 until ds.activePoints step 4) {
-                            val dx = p1x - ds.points[k2].first
-                            val dy = p1y - ds.points[k2].second
-                            val d = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
-                            if (d < distThreshold) {
-                                contacts++
-                                if (contacts >= contactThreshold) break
-                            }
-                        }
-                        if (contacts >= contactThreshold) break
-                    }
-                    if (contacts >= contactThreshold) break
-                }
-                Log.i(TAG, "⚡ ABSORB: contacts=$contacts/${contactThreshold} distThreshold=$distThreshold")
-                if (contacts >= contactThreshold) {
-                    val sourceGroupIdx = groups.indexOfFirst { newIdx in it }
-                    val merged = groups.mapIndexed { gi, g ->
-                        when {
-                            gi == reactivatedGroupIndex -> g + newIdx
-                            gi == sourceGroupIdx -> g.filter { it != newIdx }
-                            else -> g
-                        }
-                    }.filter { it.isNotEmpty() }  // ⚠️ absorber le dernier stroke d'un groupe → liste vide → crash
-                    wordGroupsCache = merged
-                    Log.i(TAG, "⚡ ABSORB OK: stroke #$newIdx → groupe #$reactivatedGroupIndex (retiré de #$sourceGroupIdx)")
-                } else {
-                    Log.i(TAG, "⚡ ABSORB FAIL: dist trop grande, fin réactivation")
-                    reactivatedGroupIndex = -1
-                }
-            }
-        }
-
         Log.d(TAG, "Stroke #${strokeRegistry.size}: ${ds.activePoints} pts")
         drawingStroke = null
-        // Passer le cache courant à checkAutoInfer (évite recalcul si absorption l'a déjà mis à jour)
-        checkAutoInfer(wordGroupsCache)
+
+        // ═══ GroupManager : convertir, mapper, injecter ═══
+        val registryIdx = strokeRegistry.size - 1  // index 0-based
+        val inkStrokeId = (registryIdx + 1).toLong()
+        val inkStroke = strokeRecordToInkStroke(ds, inkStrokeId)
+        inkStrokeIdToRegistryIndex[inkStrokeId] = registryIdx
+        registryIndexToInkStrokeId[registryIdx] = inkStrokeId
+        groupManager.onStrokeSealed(inkStroke)
+        Log.d(TAG, "GroupManager: stroke #$inkStrokeId → ${groupManager.allGroups().size} groupes actifs")
+    }
+
+    /**
+     * Convertit un StrokeRecord (V3) en InkStroke (modèle WIP migré).
+     * Pont temporaire pour la cohabitation GroupManager ↔ CaptureView.
+     * Les timestamps sont convertis ms → ns (×1_000_000).
+     */
+    private fun strokeRecordToInkStroke(sr: StrokeRecord, id: Long): InkStroke {
+        val pts = sr.points.mapIndexed { i, p ->
+            InkPoint(
+                x = p.first,
+                y = p.second,
+                pressure = sr.pressures.getOrElse(i) { 0.5f },
+                tilt = 0f,
+                orientation = 0f,
+                distance = 0f,
+                timestamp = (sr.timestamps.getOrElse(i) { 0L }) * 1_000_000L,  // ms → ns
+                action = when (i) {
+                    0 -> InkPoint.ACTION_DOWN
+                    sr.points.lastIndex -> InkPoint.ACTION_UP
+                    else -> InkPoint.ACTION_MOVE
+                },
+                toolType = InkPoint.TOOL_STYLUS
+            )
+        }
+        // ⚠️ Utiliser System.currentTimeMillis() (epoch) pour la base de temps,
+        // pas event.eventTime (boot) qui est incompatible avec group.modifiedAt.
+        val nowMs = System.currentTimeMillis()
+        return InkStroke(
+            id = id,
+            sessionId = 0L,  // sera câblé au Cap 7
+            points = pts.toMutableList(),
+            startNano = nowMs * 1_000_000L,
+            endNano = nowMs * 1_000_000L,
+            isSealed = true,
+            wasCanceled = false,
+            toolParams = null  // nullable dans V3 — rétabli au Cap 7
+        )
     }
 
     /** Handler pour le timeout d'inference auto (thread UI) */
-    private val autoInferHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private var autoInferDelayMs = 1500L  // modifiable via SharedPreferences
-
-    private var inferTimeoutRunnable: Runnable? = null
-
-    /** Recharge le délai d'auto-inférence depuis les préférences */
+    /** Recharge les paramètres depuis les préférences (appelé après calibration) */
     fun reloadAutoInferDelay() {
-        autoInferDelayMs = CalibrationActivity.getAutoInferDelay(context)
+        syncGroupManagerParams()
     }
-    /** Detecte si un nouveau groupe de mots a ete complete et appelle onWordGroupCompleted.
-     * @param precomputedGroups Groupes precalcules par l'appelant (evite double calcul) */
+
+    /** Stub — remplacé par GroupManager.handleTimeout */
     private fun checkAutoInfer(precomputedGroups: List<List<Int>>? = null) {
-        if (onWordGroupCompleted == null) return
-        if (!isBlocnoteMode) return
-
-        val groups = precomputedGroups ?: computeWordGroups()
-        if (groups.isEmpty()) return
-
-        // Tirer pour les groupes "confirmés" (suivis d'un autre groupe)
-        // Le dernier groupe attend le timeout (pas de groupe suivant pour confirmer)
-        if (groups.size > inferredGroupCount + 1) {
-            val snapshot = strokeRegistry.toList()
-            // Ordonner par position visuelle (ligne Y, colonne X) pour l'ordre de lecture
-            val ordered = computeVisualOrder(groups) ?: groups
-            for (gi in inferredGroupCount until ordered.size - 1) {
-                Log.i(TAG, "Auto-infer: groupe $gi/${ordered.size} (${ordered[gi].size} strokes)")
-                val seq = groupSequenceCounter.getAndIncrement()
-                groupOrderMap[gi] = seq  // enregistrer pour ré-inférence future
-                onWordGroupCompleted?.invoke(snapshot, ordered[gi].toList(), seq)
-                // V4 CONDUIT : marquer la fin du groupe
-                vstarWriter?.writeGroupSep()
-            }
-            inferredGroupCount = ordered.size - 1
-
-            // ═══ ARCHIVAGE IMMÉDIAT : figer les groupes confirmés ═══
-            // Avant : l'archivage n'avait lieu qu'après le timeout (1.5s).
-            // En écriture continue, le timeout ne part jamais → activeStrokeBase=0
-            // → computeWordGroups() traite O(n) strokes à chaque ACTION_UP.
-            // Maintenant : dès qu'un groupe est confirmé (suivi d'un autre),
-            // on le fige. computeWordGroups() ne traite que le dernier groupe.
-            if (ordered.size >= 2 && reactivatedGroupIndex < 0) {
-                val lastGroup = ordered.last()
-                val newBase = lastGroup.first()
-                if (newBase > activeStrokeBase) {
-                    Log.i(TAG, "Archive immédiate: base $activeStrokeBase → $newBase (${ordered.size} groupes, garde dernier)")
-                    activeStrokeBase = newBase
-                    // ⚠️ NE PAS mettre inferredGroupCount=1 :
-                    // le groupe actif (dernier) n'a PAS été inféré.
-                    // inferredGroupCount=0 → le prochain nouveau groupe
-                    // déclenchera l'inférence immédiate (0+1 < 2).
-                    inferredGroupCount = 0
-                    // ═══ Construire fullGroupsCache incrémentalement ═══
-                    // Ajouter les groupes archivés (tous sauf le dernier) au cache complet.
-                    // Ainsi findWordGroup() n'aura jamais besoin de recalculer O(n).
-                    val archivedGroups = ordered.dropLast(1)  // tous sauf le dernier
-                    if (fullGroupsCache == null) {
-                        fullGroupsCache = archivedGroups.toMutableList()
-                    } else {
-                        fullGroupsCache!!.addAll(archivedGroups)
-                    }
-                    invalidateWordGroups()
-                }
-            }
-        }
-
-        // Timeout pour le dernier groupe ou le groupe réactivé
-        inferTimeoutRunnable?.let { autoInferHandler.removeCallbacks(it) }
-        val r = Runnable {
-            val g = computeWordGroups()
-            if (g.isEmpty()) return@Runnable
-            val snapshot = strokeRegistry.toList()
-            val ordered = computeVisualOrder(g) ?: g
-
-            // Inférence pour les groupes non-inférés normaux
-            for (gi in inferredGroupCount until ordered.size) {
-                Log.i(TAG, "Auto-infer TIMEOUT: groupe $gi/${ordered.size} (${ordered[gi].size} strokes)")
-                val seq = groupSequenceCounter.getAndIncrement()
-                groupOrderMap[gi] = seq  // enregistrer pour ré-inférence future
-                onWordGroupCompleted?.invoke(snapshot, ordered[gi].toList(), seq)
-                // V4 CONDUIT
-                vstarWriter?.writeGroupSep()
-            }
-            inferredGroupCount = ordered.size
-
-            // Si un groupe réactivé existe, le ré-inférer aussi
-            if (reactivatedGroupIndex >= 0 && reactivatedGroupIndex < ordered.size) {
-                Log.i(TAG, "Auto-infer TIMEOUT: groupe réactivé #$reactivatedGroupIndex (${ordered[reactivatedGroupIndex].size} strokes)")
-                // Réutiliser l'orderIndex original (pas de nouveau → éviter doublon)
-                val seq = groupOrderMap[reactivatedGroupIndex] ?: groupSequenceCounter.getAndIncrement()
-                onWordGroupCompleted?.invoke(snapshot, ordered[reactivatedGroupIndex].toList(), seq)
-                reactivatedGroupIndex = -1  // réactivation terminée
-            }
-
-            // ═══ ARCHIVAGE : ne garder que le dernier groupe actif dans computeWordGroups ═══
-            if (g.size >= 2 && reactivatedGroupIndex < 0) {
-                val lastGroup = g.last()
-                if (lastGroup.isEmpty()) return@Runnable  // sécurité : groupe vide après absorption
-                val newBase = lastGroup.first()
-                if (newBase > activeStrokeBase) {
-                    Log.i(TAG, "Archive: avance base $activeStrokeBase → $newBase (${g.size} groupes, garde dernier)")
-                    activeStrokeBase = newBase
-                    // Même logique que l'archivage immédiat : le groupe actif n'est pas inféré
-                    inferredGroupCount = 0
-                    // ═══ Construire fullGroupsCache incrémentalement ═══
-                    val archivedGroups = g.dropLast(1)
-                    if (fullGroupsCache == null) {
-                        fullGroupsCache = archivedGroups.toMutableList()
-                    } else {
-                        fullGroupsCache!!.addAll(archivedGroups)
-                    }
-                    invalidateWordGroups()
-                }
-            }
-        }
-        inferTimeoutRunnable = r
-        autoInferHandler.postDelayed(r, autoInferDelayMs)
+        // GroupManager gère l'inférence via handleTimeout → onGroupTranscribed
     }
 
     /** Annule le timeout d'inference auto (appele quand un nouveau trait commence) */
-    private fun cancelAutoInferTimeout() {
-        inferTimeoutRunnable?.let { autoInferHandler.removeCallbacks(it) }
-        inferTimeoutRunnable = null
-    }
+
 
     // -- Conversions de pression ---------------------------------------------
 
@@ -1907,16 +1814,12 @@ class CaptureView(context: Context) : View(context) {
     // GROUPEMENT DE MOTS
     // =========================================================================
 
-    /** Invalide le cache des groupes (appeler apres ajout/suppression/deplacement) */
-    private fun invalidateWordGroups() {
-        wordGroupsCache = null
-    }
+    /** Stub — le cache est géré par GroupManager. */
+    private fun invalidateWordGroups() { }
 
-    /** Force le recalcul complet des groupes et le rafraîchissement de l'affichage */
+    /** Force le rafraîchissement de l'affichage */
     fun recalculateWordGroups() {
-        invalidateWordGroups()
-        val groups = computeWordGroups()
-        Log.i(TAG, "♻️ Recalcul groupes: ${groups.size} groupes, ${strokeRegistry.size} strokes")
+        Log.i(TAG, "♻️ Recalcul groupes: ${groupManager.allGroups().size} groupes, ${strokeRegistry.size} strokes")
         throttledInvalidate()
     }
 
@@ -1946,222 +1849,32 @@ class CaptureView(context: Context) : View(context) {
         for (i in targetGroup.indices.reversed()) {
             newGroups.add(targetGroupIdx, listOf(targetGroup[i]))
         }
-        wordGroupsCache = newGroups
+        // wordGroupsCache removed — groups from GroupManager
         Log.i(TAG, "🪄 Décompose: groupe [$targetGroupIdx] (${targetGroup.size} strokes) → ${targetGroup.size} groupes unitaires")
         throttledInvalidate()
         return true
     }
 
-    /**
-     * Calcule les groupes de mots par distance inter-stroke.
-     * Deux strokes consecutifs sont dans le meme mot si l'ecart horizontal
-     * est < 1.2× la hauteur mediane des strokes.
-     */
+    /** Groupes de mots depuis GroupManager (remplace l'ancien calcul O(n²)). */
     private fun computeWordGroups(): List<List<Int>> {
-        wordGroupsCache?.let {
-            Log.d(TAG, "computeWordGroups: cache hit (${it.size} groupes)")
-            return it
-        }
-        Log.d(TAG, "computeWordGroups: RECALCUL (cache miss)")
-
-        if (strokeRegistry.isEmpty()) {
-            wordGroupsCache = emptyList()
-            return emptyList()
-        }
-
-        // ═══ FENÊTRAGE ACTIF : ignorer les strokes archivés (groupes figés) ═══
-        val base = activeStrokeBase
-        if (base >= strokeRegistry.size) {
-            wordGroupsCache = emptyList()
-            return emptyList()
-        }
-        val activeCount = strokeRegistry.size - base
-        if (activeCount == 1) {
-            wordGroupsCache = listOf(listOf(base))
-            return wordGroupsCache!!
-        }
-
-        // Borne X droite (dernier point) et gauche (premier) de chaque stroke
-        val rightX = strokeRegistry.map { s ->
-            s.points.take(s.activePoints).maxOf { it.first }
-        }
-        val leftX = strokeRegistry.map { s ->
-            s.points.take(s.activePoints).minOf { it.first }
-        }
-
-        // ═══════════════════════════════════════════════════════════════
-        // SEUILS DE PROXIMITÉ — alignés sur la calibration du blob
-        //   distX (↔) = distance horizontale → threshold de groupement
-        //   distY (↕) = distance verticale   → lineWrapThreshold
-        // ⚠️ NE PAS utiliser maxOf(distX, distY) — les axes sont indépendants
-        // ═══════════════════════════════════════════════════════════════
-        val distX = CalibrationActivity.getSpatialDistanceX(context)
-        val distY = CalibrationActivity.getSpatialDistanceY(context)
-        val threshold = distX
-        val lineWrapThreshold = distY
-
-        // Centre Y de chaque stroke pour detection de retour a la ligne
-        val yMin = strokeRegistry.map { s -> s.points.take(s.activePoints).minOf { p -> p.second } }
-        val yMax = strokeRegistry.map { s -> s.points.take(s.activePoints).maxOf { p -> p.second } }
-        val yCenter = strokeRegistry.indices.map { i -> (yMin[i] + yMax[i]) / 2f }
-
-        // ═══ PHASE 1/3 : Groupement séquentiel — gap horizontal entre strokes consécutifs ═══
-        val groups = mutableListOf<MutableList<Int>>()
-        var current = mutableListOf(base)  // premier stroke actif
-        for (i in (base + 1) until strokeRegistry.size) {
-            val xGapRaw = leftX[i] - rightX[i - 1]
-
-            // Retour a la ligne — deux paliers :
-            //   ÉCART VERTICAL LARGE (> distY) : toujours nouvelle ligne
-            //   ÉCART VERTICAL MODÉRÉ (distY*0.3 à distY) : nouvelle ligne si à gauche
-            //   ÉCART VERTICAL FAIBLE (< distY*0.3) : même groupe (jambage/descender)
-            val yGap = yMin[i] - yMax[i - 1]  // positif = stroke i commence plus bas
-            val isNewLine = when {
-                yGap > lineWrapThreshold -> true           // >70px : clairement nouvelle ligne
-                yGap > lineWrapThreshold * 0.3f && xGapRaw < 0 -> true  // >21px ET à gauche
-                else -> false
-            }
-            if (isNewLine) {
-                groups.add(current)
-                current = mutableListOf(i)
-            } else {
-                // Ecart horizontal entre les strokes (absolu, bidirectionnel)
-                // Les strokes très à gauche (correction, accent) sont traités
-                // comme éloignés → nouveau groupe. L'absorption les fusionnera
-                // dans le groupe réactivé si nécessaire.
-                val gap = kotlin.math.abs(xGapRaw)
-                if (gap < threshold) {
-                    current.add(i)
-                } else {
-                    groups.add(current)
-                    current = mutableListOf(i)
-                }
-            }
-        }
-        groups.add(current)
-
-        // ═══ PHASE 2/3 : Consolidation post-hoc — vérifie les frontières entre groupes adjacents ═══
-        // en utilisant la DISTANCE MINIMALE entre les points des strokes de frontiere
-        var ci = 0
-        while (ci < groups.size - 1) {
-            val lastStrokeIdx = groups[ci].last()
-            val firstStrokeIdx = groups[ci + 1].first()
-            if (lastStrokeIdx >= strokeRegistry.size || firstStrokeIdx >= strokeRegistry.size) {
-                ci++
-                continue
-            }
-            val sLast = strokeRegistry[lastStrokeIdx]
-            val sFirst = strokeRegistry[firstStrokeIdx]
-
-            // Distance minimale entre points echantillonnes des deux strokes
-            var minDist = Float.MAX_VALUE
-            val step = maxOf(1, minOf(sLast.activePoints, sFirst.activePoints) / 20)
-            for (k1 in 0 until sLast.activePoints step step) {
-                val p1x = sLast.points[k1].first
-                val p1y = sLast.points[k1].second
-                for (k2 in 0 until sFirst.activePoints step step) {
-                    val dx = p1x - sFirst.points[k2].first
-                    val dy = p1y - sFirst.points[k2].second
-                    val d = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
-                    if (d < minDist) minDist = d
-                }
-            }
-
-            // Si la distance minimale est < seuil ET que les centres Y sont proches :
-            // c'est le meme mot mal detecte → fusion
-            val yC1 = yCenter.getOrNull(lastStrokeIdx) ?: 0f
-            val yC2 = yCenter.getOrNull(firstStrokeIdx) ?: 0f
-            if (minDist < threshold && kotlin.math.abs(yC2 - yC1) < lineWrapThreshold) {
-                val merged = mutableListOf<Int>()
-                merged.addAll(groups[ci])
-                merged.addAll(groups[ci + 1])
-                groups[ci] = merged
-                groups.removeAt(ci + 1)
-                // Re-verifier la nouvelle frontiere (ci reste le meme)
-            } else {
-                ci++
-            }
-        }
-
-        wordGroupsCache = groups.map { it.toList() }
-
-        // ═══ PHASE 3/3 : Fusion cross-groupe — après réactivation, un stroke peut être proche
-        // peut être proche d'un groupe antérieur. On vérifie chaque groupe
-        // contre TOUS les groupes précédents (pas seulement adjacents).
-        var merged = true
-        while (merged) {
-            merged = false
-            for (gi in (wordGroupsCache!!.size - 1) downTo 1) {
-                val group = wordGroupsCache!![gi]
-                val sIdx = group.first()
-                if (sIdx >= strokeRegistry.size) continue
-                val sCurr = strokeRegistry[sIdx]
-                for (pi in 0 until gi) {
-                    val prevGroup = wordGroupsCache!![pi]
-                    val pIdx = prevGroup.last()
-                    if (pIdx >= strokeRegistry.size) continue
-                    val sPrev = strokeRegistry[pIdx]
-                    // Distance minimale entre les strokes de frontière
-                    var minDist = Float.MAX_VALUE
-                    for (k1 in 0 until sPrev.activePoints step 4) {
-                        val p1x = sPrev.points[k1].first; val p1y = sPrev.points[k1].second
-                        for (k2 in 0 until sCurr.activePoints step 4) {
-                            val dx = p1x - sCurr.points[k2].first
-                            val dy = p1y - sCurr.points[k2].second
-                            val d = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
-                            if (d < minDist) minDist = d
-                        }
-                    }
-                    val yC1 = yCenter.getOrNull(pIdx) ?: 0f
-                    val yC2 = yCenter.getOrNull(sIdx) ?: 0f
-                    if (minDist < threshold && kotlin.math.abs(yC2 - yC1) < lineWrapThreshold) {
-                        val mergedGroup = prevGroup.toMutableList()
-                        mergedGroup.addAll(group)
-                        wordGroupsCache = wordGroupsCache!!.toMutableList().apply {
-                            set(pi, mergedGroup)
-                            removeAt(gi)
-                        }
-                        merged = true
-                        break
-                    }
-                }
-                if (merged) break
-            }
-        }
-        // ═══ Mise à jour du cache complet (pour la sélection) ═══
-        if (base == 0) {
-            fullGroupsCache = wordGroupsCache?.toMutableList()
-        }
-        return wordGroupsCache!!
+        return groupManager.allGroups().map { group ->
+            group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+        }.filter { it.isNotEmpty() }
     }
 
-    /** Retourne le groupe de mots contenant l'index stroke, ou null.
-     *  Cherche dans les deux caches : fullGroupsCache (archivés) + wordGroupsCache (actif). */
-    private fun findWordGroup(strokeIndex: Int): List<Int>? {
-        // Chercher d'abord dans le groupe actif (wordGroupsCache)
-        wordGroupsCache?.find { strokeIndex in it }?.let { return it }
-        // Puis dans les groupes archivés (fullGroupsCache, construit incrémentalement)
-        return fullGroupsCache?.find { strokeIndex in it }
-    }
+    private fun findWordGroup(strokeIndex: Int): List<Int>? = null
 
     /**
      * Point d'acces public pour la sauvegarde : calcule les groupes
      * de mots tels que vus par le mode edition, pour les injecter dans
      * le fichier VStar (tokens ps=4 separateurs).
      */
+    /** Point d'accès pour la sauvegarde : groupes depuis GroupManager. */
     fun computeWordGroupsForSave(): List<List<Int>> {
-        // Sauvegarder/restaurer activeStrokeBase pour voir tous les strokes
-        val savedBase = activeStrokeBase
-        val savedInferred = inferredGroupCount
-        activeStrokeBase = 0
-        invalidateWordGroups()
-        val groups = computeWordGroups()
-        val ordered = computeVisualOrder(groups) ?: groups
-        // Restaurer l'état de la fenêtre active
-        activeStrokeBase = savedBase
-        inferredGroupCount = savedInferred
-        invalidateWordGroups()
-        return ordered
+        val groups = groupManager.allGroups().map { group ->
+            group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+        }.filter { it.isNotEmpty() }
+        return computeVisualOrder(groups) ?: groups
     }
 
     /**
@@ -2287,7 +2000,7 @@ class CaptureView(context: Context) : View(context) {
 
     /** Initialise l'etat de reflow au debut du drag */
     private fun initReflow(hitStrokeIndex: Int) {
-        val words = computeWordGroups()
+        val words = computeWordGroupsForSave()
         if (words.isEmpty()) { flowState = null; return }
 
         val dragWordIdx = words.indexOfFirst { hitStrokeIndex in it }
@@ -2609,55 +2322,40 @@ class CaptureView(context: Context) : View(context) {
     }
 
     /**
-     * Dessine les contours des zones d'absorption (blobs) autour des groupes.
-     * Contour seulement (STROKE) — ne cache pas les strokes.
-     * Blob ovoïde : rayons X et Y indépendants (réglables).
-     * Échantillonnage adaptatif.
+     * 🔦 PHARE + BLOB — affichés ensemble pour le groupe SELECTED.
+     * Utilise GroupManager pour trouver le groupe sélectionné (hover maintenu).
+     * Blob ovoïde : contour autour des strokes du groupe.
+     * Phare : point noir sur l'interligne (dessiné dans drawActiveGroupCursor).
      */
     private fun drawActiveGroupBlob(canvas: Canvas) {
         if (currentMode != CaptureMode.CAPTURE) return
         if (!isBlocnoteMode) return
-        // PROTECTION PERFORMANCE : ne jamais recalculer dans onDraw().
-        // Le cache doit être tenu à jour par registerCompletedStroke()/checkAutoInfer().
-        val groups = wordGroupsCache ?: return
-        if (groups.isEmpty()) return
 
-        val distX = CalibrationActivity.getSpatialDistanceX(context)
+        // Trouver le groupe SELECTED (phare actif)
+        val selectedGroups = groupManager.groupsInState(GroupState.SELECTED)
+        val phareGroup = selectedGroups.firstOrNull() ?: return
+        val indices = phareGroup.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+        if (indices.isEmpty()) return
+
+        val distX = groupManager.params.spatialDistancePx
         val distY = CalibrationActivity.getSpatialDistanceY(context)
         blobRadiusX = distX * 0.7f
         blobRadiusY = distY * 0.7f
         val sampleStep = ((blobRadiusX + blobRadiusY) / 12f).toInt().coerceIn(1, 6)
 
-        for (gi in groups.indices) {
-            val group = groups[gi]
-            val isInferred = gi < inferredGroupCount
-            // Ne montrer que le blob du groupe réactivé, pas tous les non-inférés
-            if (reactivatedGroupIndex < 0) {
-                // Mode normal : blob seulement sur le dernier groupe non inféré
-                if (isInferred) continue
-                if (gi != groups.size - 1) continue
-            } else {
-                // Mode réactivation : blob seulement sur le groupe réactivé
-                if (gi != reactivatedGroupIndex) continue
-            }
-            val paint = if (isInferred) blobClosedPaint else blobActivePaint
-            if (isInferred && group.size > 1) continue
-
-            for (idx in group) {
-                if (idx >= strokeRegistry.size) continue
-                val s = strokeRegistry[idx]
-                var pi = 0
-                for ((x, y) in s.points) {
-                    if (pi % sampleStep == 0) {
-                        // Ovale au lieu du cercle : rayons X et Y distincts
-                        canvas.drawOval(
-                            x - blobRadiusX, y - blobRadiusY,
-                            x + blobRadiusX, y + blobRadiusY,
-                            paint
-                        )
-                    }
-                    pi++
+        for (idx in indices) {
+            if (idx >= strokeRegistry.size) continue
+            val s = strokeRegistry[idx]
+            var pi = 0
+            for ((x, y) in s.points) {
+                if (pi % sampleStep == 0) {
+                    canvas.drawOval(
+                        x - blobRadiusX, y - blobRadiusY,
+                        x + blobRadiusX, y + blobRadiusY,
+                        blobActivePaint  // couleur du groupe SELECTED
+                    )
                 }
+                pi++
             }
         }
     }
@@ -2672,9 +2370,12 @@ class CaptureView(context: Context) : View(context) {
         val group = hoverWordGroup ?: return
 
         // PROTECTION PERFORMANCE : ne jamais recalculer dans onDraw().
-        val allGroups = wordGroupsCache ?: return
+        // GroupManager gère les groupes — on vérifie juste que le groupe existe
+        val allGroups = groupManager.allGroups().map { group ->
+            group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+        }.filter { it.isNotEmpty() }
         val groupIndex = allGroups.indexOfFirst { it == group }
-        if (groupIndex < 0 || groupIndex >= inferredGroupCount) return
+        if (groupIndex < 0) return
 
         // Calculer la boîte englobante
         var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
@@ -2702,49 +2403,54 @@ class CaptureView(context: Context) : View(context) {
      * Remplace le clignotement (qui forçait un invalidate() toutes les 500ms).
      * Placé à 10px à gauche du premier stroke, aligné sur le snapY.
      */
+    /**
+     * 🔦 PHARE — point noir sur l'interligne devant le groupe SELECTED.
+     * Statique (pas de clignotement) pour éviter le refresh e-ink.
+     * Utilise GroupManager pour trouver le groupe SELECTED.
+     */
     private fun drawActiveGroupCursor(canvas: Canvas) {
         if (currentMode != CaptureMode.CAPTURE) return
         if (!isBlocnoteMode) return
-        val groups = wordGroupsCache ?: return  // pas de fallback computeWordGroups()
-        if (groups.isEmpty()) return
 
-        val activeGroup: List<Int>? = if (reactivatedGroupIndex >= 0 && reactivatedGroupIndex < groups.size) {
-            groups[reactivatedGroupIndex]
-        } else {
-            groups.lastOrNull()
+        // Trouver le groupe SELECTED (hover maintenu > 1s)
+        val selectedGroups = groupManager.groupsInState(GroupState.SELECTED)
+        val phareGroup = selectedGroups.firstOrNull() ?: return
+        val indices = phareGroup.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+        if (indices.isEmpty()) {
+            Log.d(TAG, "Phare — groupe ${phareGroup.id} SELECTED mais 0 indices dans registryIndexToInkStrokeId (${phareGroup.strokeIds.size} strokeIds, map a ${inkStrokeIdToRegistryIndex.size} entrées)")
+            return
         }
-        if (activeGroup == null || activeGroup.isEmpty()) return
 
-        val firstStrokeIdx = activeGroup.first()
-        if (firstStrokeIdx >= strokeRegistry.size) return
-        val s = strokeRegistry[firstStrokeIdx]
+        // Premier stroke du groupe pour la position horizontale
+        val firstIdx = indices.minOrNull() ?: return
+        if (firstIdx >= strokeRegistry.size) return
+        val s = strokeRegistry[firstIdx]
         if (s.activePoints < 1) return
 
-        // Position : 10px à gauche du premier point, centré verticalement sur le snapY du groupe
-        val originX = s.points[0].first - 10f
-        // Calculer le snapY du groupe (moyenne des Y)
+        // Position : 5px à gauche du premier point
+        val phareX = s.points[0].first - 5f
+        // Interligne : snapY du groupe (moyenne des Y de tous les strokes)
         var sumY = 0f; var count = 0
-        for (si in activeGroup) {
+        for (si in indices) {
             if (si < strokeRegistry.size) {
                 for ((_, y) in strokeRegistry[si].points) { sumY += y; count++ }
             }
         }
-        val snapY = if (count > 0) sumY / count else s.points[0].second
+        val phareY = if (count > 0) sumY / count else s.points[0].second
 
-        // Tiret horizontal statique (12×2 px, noir)
-        val dashWidth = 12f
-        val dashHeight = 2f
-        canvas.drawRect(
-            originX - dashWidth / 2, snapY - dashHeight / 2,
-            originX + dashWidth / 2, snapY + dashHeight / 2,
-            cursorPaint
-        )
+        // Point noir statique (rayon 8px)
+        Log.d(TAG, "Phare dessiné @ ($phareX, $phareY) pour groupe ${phareGroup.id}")
+        canvas.drawCircle(phareX, phareY, 8f, cursorPaint)
+        // Debug : grand cercle rouge pour confirmer le rendu
+        val debugPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.RED; style = Paint.Style.STROKE; strokeWidth = 3f
+        }
+        canvas.drawCircle(phareX, phareY, 20f, debugPaint)
     }
 
-    /** Animation du curseur désactivée — le symbole est statique (pas de clignotement). */
+    /** Le phare est statique — pas d'animation nécessaire (e-ink friendly). */
     private fun startCursorAnimation() {
-        // Symbole statique : pas d'animation nécessaire.
-        // On garde la méthode pour compatibilité, mais elle ne fait rien.
+        // Phare statique : pas d'animation.
     }
 
     private fun stopCursorAnimation() {
@@ -2752,30 +2458,29 @@ class CaptureView(context: Context) : View(context) {
     }
 
     /**
-     * DEBUG : affiche les indices des groupes et l'état (inféré/réactivé/actif).
-     * En rouge au-dessus de chaque groupe pour diagnostic.
+     * DEBUG : affiche l'état des groupes via GroupManager.
      */
     private fun drawGroupDebugInfo(canvas: Canvas) {
-        val groups = wordGroupsCache ?: return
-        for (gi in groups.indices) {
-            val group = groups[gi]
-            if (group.isEmpty()) continue
-            val firstIdx = group.first()
+        val all = groupManager.allGroups()
+        for (g in all) {
+            val indices = g.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+            if (indices.isEmpty()) continue
+            val firstIdx = indices.minOrNull() ?: continue
             if (firstIdx >= strokeRegistry.size) continue
             val s = strokeRegistry[firstIdx]
             if (s.activePoints < 1) continue
             val x = s.points[0].first
             val y = s.points[0].second - 20f
 
-            val state = when {
-                gi < inferredGroupCount && gi != reactivatedGroupIndex -> "C"  // Clôturé
-                gi == reactivatedGroupIndex -> "R"  // Réactivé
-                else -> "A"  // Actif
+            val state = when (g.state) {
+                GroupState.STORED -> "S"
+                GroupState.LOADED -> "L"
+                GroupState.SELECTED -> "★"
+                else -> "?"
             }
-            canvas.drawText("$gi:$state", x, y, debugTextPaint)
+            canvas.drawText("${g.id.take(4)}:$state", x, y, debugTextPaint)
         }
-        // Afficher les compteurs en bas à gauche
-        canvas.drawText("inf=$inferredGroupCount react=${reactivatedGroupIndex}", 20f, height - 20f, debugTextPaint)
+        canvas.drawText("${all.size} groupes", 20f, height - 20f, debugTextPaint)
     }
 
     fun clear() {
@@ -2794,14 +2499,9 @@ class CaptureView(context: Context) : View(context) {
         selectedWordGroup = null
         hoverWordGroup = null
         dragWordGroup = null
-        wordGroupsCache = null
-        fullGroupsCache = null
-        groupOrderMap.clear()
         strokeCount = 0
         pointSeq = 0
-        inferredGroupCount = 0
-        reactivatedGroupIndex = -1
-        activeStrokeBase = 0
+        // reactivatedGroupIndex + activeStrokeBase supprimés — GroupManager gère
         pointInStroke = 0
         hasPrevPoint = false
         insertPending = false

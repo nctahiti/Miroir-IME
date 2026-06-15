@@ -1,9 +1,9 @@
 -- Merging decision tree log ---
 manifest
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:1:1-45:12
-INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:1:1-45:12
-INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:1:1-45:12
-INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:1:1-45:12
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:1:1-45:12
+INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:1:1-45:12
+INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:1:1-45:12
+INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:1:1-45:12
 MERGED from [androidx.appcompat:appcompat-resources:1.7.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\504d2f184e3c2aeb4a9ecad354447385\transformed\appcompat-resources-1.7.0\AndroidManifest.xml:2:1-7:12
 MERGED from [androidx.appcompat:appcompat:1.7.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\6abbf29e47fce4f8485384125d100f88\transformed\appcompat-1.7.0\AndroidManifest.xml:2:1-7:12
 MERGED from [com.google.mlkit:digital-ink-recognition:18.1.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\8a71305465e509fcb954a680c977fd19\transformed\digital-ink-recognition-18.1.0\AndroidManifest.xml:2:1-21:12
@@ -65,41 +65,41 @@ MERGED from [com.onyx.android.sdk:onyxsdk-commons-io:2.5] C:\Users\nicol\.gradle
 MERGED from [com.tencent:mmkv:1.0.19] C:\Users\nicol\.gradle\caches\8.11.1\transforms\25d5fae8bf04ef3b7417722b33854562\transformed\mmkv-1.0.19\AndroidManifest.xml:2:1-9:12
 MERGED from [com.jakewharton.hugo.fix:hugo-annotations:1.2.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\71cdb697647f15ed647c66c68e37e7e5\transformed\hugo-annotations-1.2.3\AndroidManifest.xml:2:1-11:12
 	package
-		INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml
+		INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml
 	android:versionName
-		INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml
+		INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml
 	xmlns:tools
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:2:5-51
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:2:5-51
 	android:versionCode
-		INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml
+		INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml
 	xmlns:android
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:1:11-69
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:1:11-69
 uses-permission#android.permission.FOREGROUND_SERVICE
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:4:5-77
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:4:5-77
 MERGED from [com.onyx.android.sdk:onyxsdk-base:1.8.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\49e546bd85b4388f01ced70b67afa751\transformed\onyxsdk-base-1.8.3\AndroidManifest.xml:18:5-77
 MERGED from [com.onyx.android.sdk:onyxsdk-base:1.8.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\49e546bd85b4388f01ced70b67afa751\transformed\onyxsdk-base-1.8.3\AndroidManifest.xml:18:5-77
 MERGED from [androidx.work:work-runtime:2.7.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\7d1e19cbf09e44313d460078b4e30cb0\transformed\work-runtime-2.7.0\AndroidManifest.xml:28:5-77
 MERGED from [androidx.work:work-runtime:2.7.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\7d1e19cbf09e44313d460078b4e30cb0\transformed\work-runtime-2.7.0\AndroidManifest.xml:28:5-77
 	android:name
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:4:22-74
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:4:22-74
 uses-permission#android.permission.FOREGROUND_SERVICE_DATA_SYNC
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:5:5-87
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:5:5-87
 	android:name
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:5:22-84
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:5:22-84
 uses-permission#android.permission.POST_NOTIFICATIONS
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:6:5-77
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:6:5-77
 	android:name
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:6:22-74
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:6:22-74
 uses-permission#android.permission.INTERNET
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:7:5-67
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:7:5-67
 MERGED from [com.google.mlkit:digital-ink-recognition:18.1.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\8a71305465e509fcb954a680c977fd19\transformed\digital-ink-recognition-18.1.0\AndroidManifest.xml:9:5-67
 MERGED from [com.google.mlkit:digital-ink-recognition:18.1.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\8a71305465e509fcb954a680c977fd19\transformed\digital-ink-recognition-18.1.0\AndroidManifest.xml:9:5-67
 MERGED from [com.google.android.datatransport:transport-backend-cct:2.3.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\487a35883c53193362bf618d8894d017\transformed\transport-backend-cct-2.3.3\AndroidManifest.xml:26:5-67
 MERGED from [com.google.android.datatransport:transport-backend-cct:2.3.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\487a35883c53193362bf618d8894d017\transformed\transport-backend-cct-2.3.3\AndroidManifest.xml:26:5-67
 	android:name
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:7:22-64
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:7:22-64
 uses-permission#android.permission.ACCESS_NETWORK_STATE
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:8:5-79
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:8:5-79
 MERGED from [com.google.mlkit:digital-ink-recognition:18.1.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\8a71305465e509fcb954a680c977fd19\transformed\digital-ink-recognition-18.1.0\AndroidManifest.xml:8:5-79
 MERGED from [com.google.mlkit:digital-ink-recognition:18.1.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\8a71305465e509fcb954a680c977fd19\transformed\digital-ink-recognition-18.1.0\AndroidManifest.xml:8:5-79
 MERGED from [com.onyx.android.sdk:onyxsdk-base:1.8.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\49e546bd85b4388f01ced70b67afa751\transformed\onyxsdk-base-1.8.3\AndroidManifest.xml:12:5-79
@@ -111,10 +111,10 @@ MERGED from [com.google.android.datatransport:transport-backend-cct:2.3.3] C:\Us
 MERGED from [com.google.android.datatransport:transport-runtime:2.2.6] C:\Users\nicol\.gradle\caches\8.11.1\transforms\44ec02d8eb6668358ae441dc41d32930\transformed\transport-runtime-2.2.6\AndroidManifest.xml:22:5-79
 MERGED from [com.google.android.datatransport:transport-runtime:2.2.6] C:\Users\nicol\.gradle\caches\8.11.1\transforms\44ec02d8eb6668358ae441dc41d32930\transformed\transport-runtime-2.2.6\AndroidManifest.xml:22:5-79
 	android:name
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:8:22-76
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:8:22-76
 application
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:10:5-43:19
-INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:10:5-43:19
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:10:5-43:19
+INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:10:5-43:19
 MERGED from [com.google.mlkit:digital-ink-recognition:18.1.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\8a71305465e509fcb954a680c977fd19\transformed\digital-ink-recognition-18.1.0\AndroidManifest.xml:11:5-19:19
 MERGED from [com.google.mlkit:digital-ink-recognition:18.1.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\8a71305465e509fcb954a680c977fd19\transformed\digital-ink-recognition-18.1.0\AndroidManifest.xml:11:5-19:19
 MERGED from [com.google.mlkit:common:18.6.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\aae9c6a7d90283afce8bbd43a5be3503\transformed\common-18.6.0\AndroidManifest.xml:8:5-24:19
@@ -156,75 +156,75 @@ MERGED from [pub.devrel:easypermissions:0.2.1] C:\Users\nicol\.gradle\caches\8.1
 MERGED from [com.jakewharton.hugo.fix:hugo-annotations:1.2.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\71cdb697647f15ed647c66c68e37e7e5\transformed\hugo-annotations-1.2.3\AndroidManifest.xml:9:5-20
 MERGED from [com.jakewharton.hugo.fix:hugo-annotations:1.2.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\71cdb697647f15ed647c66c68e37e7e5\transformed\hugo-annotations-1.2.3\AndroidManifest.xml:9:5-20
 	android:extractNativeLibs
-		INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml
+		INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml
 	android:appComponentFactory
 		ADDED from [androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:28:18-86
 	android:supportsRtl
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:16:9-35
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:16:9-35
 	android:label
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:15:9-31
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:15:9-31
 		REJECTED from [com.onyx.android.sdk:onyxsdk-pen:1.5.1] C:\Users\nicol\.gradle\caches\8.11.1\transforms\2c9b9f22d997a8b89d663102e075dfdc\transformed\onyxsdk-pen-1.5.1\AndroidManifest.xml:13:9-41
 		REJECTED from [com.onyx.android.sdk:onyxsdk-base:1.8.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\49e546bd85b4388f01ced70b67afa751\transformed\onyxsdk-base-1.8.3\AndroidManifest.xml:25:9-41
 		REJECTED from [com.onyx.android.sdk:onyxsdk-device:1.3.2] C:\Users\nicol\.gradle\caches\8.11.1\transforms\a27761bb0dd33367431131a2249f7b26\transformed\onyxsdk-device-1.3.2\AndroidManifest.xml:18:9-41
 	android:hardwareAccelerated
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:13:9-43
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:13:9-43
 	android:allowBackup
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:12:9-36
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:12:9-36
 		REJECTED from [com.onyx.android.sdk:onyxsdk-pen:1.5.1] C:\Users\nicol\.gradle\caches\8.11.1\transforms\2c9b9f22d997a8b89d663102e075dfdc\transformed\onyxsdk-pen-1.5.1\AndroidManifest.xml:12:9-35
 		REJECTED from [com.onyx.android.sdk:onyxsdk-base:1.8.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\49e546bd85b4388f01ced70b67afa751\transformed\onyxsdk-base-1.8.3\AndroidManifest.xml:24:9-35
 		REJECTED from [com.onyx.android.sdk:onyxsdk-device:1.3.2] C:\Users\nicol\.gradle\caches\8.11.1\transforms\a27761bb0dd33367431131a2249f7b26\transformed\onyxsdk-device-1.3.2\AndroidManifest.xml:17:9-35
 	android:theme
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:17:9-68
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:17:9-68
 	tools:replace
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:18:9-58
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:18:9-58
 	android:usesCleartextTraffic
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:14:9-44
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:14:9-44
 	android:name
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:11:9-34
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:11:9-34
 activity#com.parnasse.miroir.CaptureActivity
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:20:9-31:20
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:20:9-31:20
 	android:excludeFromRecents
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:25:13-47
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:25:13-47
 	android:launchMode
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:23:13-48
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:23:13-48
 	android:noHistory
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:26:13-38
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:26:13-38
 	android:exported
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:22:13-36
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:22:13-36
 	android:theme
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:24:13-72
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:24:13-72
 	android:name
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:21:13-44
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:21:13-44
 intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:27:13-30:29
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:27:13-30:29
 action#android.intent.action.MAIN
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:28:17-69
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:28:17-69
 	android:name
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:28:25-66
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:28:25-66
 category#android.intent.category.LAUNCHER
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:29:17-77
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:29:17-77
 	android:name
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:29:27-74
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:29:27-74
 activity#com.parnasse.miroir.CalibrationActivity
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:33:9-36:43
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:33:9-36:43
 	android:label
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:36:13-40
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:36:13-40
 	android:exported
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:35:13-37
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:35:13-37
 	android:name
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:34:13-48
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:34:13-48
 service#com.parnasse.miroir.MiroirService
-ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:38:9-41:56
+ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:38:9-41:56
 	android:exported
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:40:13-37
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:40:13-37
 	android:foregroundServiceType
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:41:13-53
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:41:13-53
 	android:name
-		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:39:13-42
+		ADDED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:39:13-42
 uses-sdk
-INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml reason: use-sdk injection requested
-INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml
-INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml
+INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml
+INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml
 MERGED from [androidx.appcompat:appcompat-resources:1.7.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\504d2f184e3c2aeb4a9ecad354447385\transformed\appcompat-resources-1.7.0\AndroidManifest.xml:5:5-44
 MERGED from [androidx.appcompat:appcompat-resources:1.7.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\504d2f184e3c2aeb4a9ecad354447385\transformed\appcompat-resources-1.7.0\AndroidManifest.xml:5:5-44
 MERGED from [androidx.appcompat:appcompat:1.7.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\6abbf29e47fce4f8485384125d100f88\transformed\appcompat-1.7.0\AndroidManifest.xml:5:5-44
@@ -348,9 +348,9 @@ MERGED from [com.jakewharton.hugo.fix:hugo-annotations:1.2.3] C:\Users\nicol\.gr
 	tools:overrideLibrary
 		ADDED from [com.onyx.android.sdk:onyxsdk-base:1.8.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\49e546bd85b4388f01ced70b67afa751\transformed\onyxsdk-base-1.8.3\AndroidManifest.xml:10:9-49
 	android:targetSdkVersion
-		INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml
+		INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml
 	android:minSdkVersion
-		INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml
+		INJECTED from C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml
 service#com.google.mlkit.common.internal.MlKitComponentDiscoveryService
 ADDED from [com.google.mlkit:digital-ink-recognition:18.1.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\8a71305465e509fcb954a680c977fd19\transformed\digital-ink-recognition-18.1.0\AndroidManifest.xml:12:9-18:19
 MERGED from [com.google.mlkit:common:18.6.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\aae9c6a7d90283afce8bbd43a5be3503\transformed\common-18.6.0\AndroidManifest.xml:15:9-23:19

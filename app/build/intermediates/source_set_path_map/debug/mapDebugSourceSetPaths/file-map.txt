@@ -31,10 +31,10 @@ com.parnasse.miroir.app-lifecycle-livedata-2.6.2-29 C:\Users\nicol\.gradle\cache
 com.parnasse.miroir.app-activity-1.7.0-30 C:\Users\nicol\.gradle\caches\8.11.1\transforms\fbbd967725a6adc4e16be02b0234d682\transformed\activity-1.7.0\res
 com.parnasse.miroir.app-onyxsdk-geometry-1.1.0.4-31 C:\Users\nicol\.gradle\caches\8.11.1\transforms\fe39cfb774703fb45cdb16bd1235901b\transformed\onyxsdk-geometry-1.1.0.4\res
 com.parnasse.miroir.app-easypermissions-0.2.1-32 C:\Users\nicol\.gradle\caches\8.11.1\transforms\feb963c2860d252bec1a48783ffae5bb\transformed\easypermissions-0.2.1\res
-com.parnasse.miroir.app-pngs-33 C:\Users\nicol\.openclaw\workspace\miroir-v3\app\build\generated\res\pngs\debug
-com.parnasse.miroir.app-resValues-34 C:\Users\nicol\.openclaw\workspace\miroir-v3\app\build\generated\res\resValues\debug
-com.parnasse.miroir.app-packageDebugResources-35 C:\Users\nicol\.openclaw\workspace\miroir-v3\app\build\intermediates\incremental\debug\packageDebugResources\merged.dir
-com.parnasse.miroir.app-packageDebugResources-36 C:\Users\nicol\.openclaw\workspace\miroir-v3\app\build\intermediates\incremental\debug\packageDebugResources\stripped.dir
-com.parnasse.miroir.app-debug-37 C:\Users\nicol\.openclaw\workspace\miroir-v3\app\build\intermediates\merged_res\debug\mergeDebugResources
-com.parnasse.miroir.app-debug-38 C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\debug\res
-com.parnasse.miroir.app-main-39 C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\res
+com.parnasse.miroir.app-pngs-33 C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\build\generated\res\pngs\debug
+com.parnasse.miroir.app-resValues-34 C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\build\generated\res\resValues\debug
+com.parnasse.miroir.app-packageDebugResources-35 C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\build\intermediates\incremental\debug\packageDebugResources\merged.dir
+com.parnasse.miroir.app-packageDebugResources-36 C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\build\intermediates\incremental\debug\packageDebugResources\stripped.dir
+com.parnasse.miroir.app-debug-37 C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\build\intermediates\merged_res\debug\mergeDebugResources
+com.parnasse.miroir.app-debug-38 C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\debug\res
+com.parnasse.miroir.app-main-39 C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\res

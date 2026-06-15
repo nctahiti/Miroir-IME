@@ -9,20 +9,20 @@
 9        android:targetSdkVersion="29" />
 10
 11    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-11-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:4:5-77
-11-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:4:22-74
+11-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:4:5-77
+11-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:4:22-74
 12    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-12-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:5:5-87
-12-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:5:22-84
+12-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:5:5-87
+12-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:5:22-84
 13    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-13-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:6:5-77
-13-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:6:22-74
+13-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:6:5-77
+13-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:6:22-74
 14    <uses-permission android:name="android.permission.INTERNET" />
-14-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:7:5-67
-14-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:7:22-64
+14-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:7:5-67
+14-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:7:22-64
 15    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-15-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:8:5-79
-15-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:8:22-76
+15-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:8:5-79
+15-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:8:22-76
 16    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 16-->[com.onyx.android.sdk:onyxsdk-base:1.8.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\49e546bd85b4388f01ced70b67afa751\transformed\onyxsdk-base-1.8.3\AndroidManifest.xml:13:5-76
 16-->[com.onyx.android.sdk:onyxsdk-base:1.8.3] C:\Users\nicol\.gradle\caches\8.11.1\transforms\49e546bd85b4388f01ced70b67afa751\transformed\onyxsdk-base-1.8.3\AndroidManifest.xml:13:22-73
@@ -63,67 +63,67 @@
 30-->[androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:26:22-94
 31
 32    <application
-32-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:10:5-43:19
+32-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:10:5-43:19
 33        android:name="com.parnasse.miroir.MiroirApp"
-33-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:11:9-34
+33-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:11:9-34
 34        android:allowBackup="false"
-34-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:12:9-36
+34-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:12:9-36
 35        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
 35-->[androidx.core:core:1.15.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\661a12518fb476d60cae287c01efaf06\transformed\core-1.15.0\AndroidManifest.xml:28:18-86
 36        android:debuggable="true"
 37        android:extractNativeLibs="false"
 38        android:hardwareAccelerated="true"
-38-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:13:9-43
+38-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:13:9-43
 39        android:label="Miroir"
-39-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:15:9-31
+39-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:15:9-31
 40        android:supportsRtl="true"
-40-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:16:9-35
+40-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:16:9-35
 41        android:theme="@android:style/Theme.Translucent.NoTitleBar"
-41-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:17:9-68
+41-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:17:9-68
 42        android:usesCleartextTraffic="true" >
-42-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:14:9-44
+42-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:14:9-44
 43        <activity
-43-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:20:9-31:20
+43-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:20:9-31:20
 44            android:name="com.parnasse.miroir.CaptureActivity"
-44-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:21:13-44
+44-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:21:13-44
 45            android:excludeFromRecents="false"
-45-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:25:13-47
+45-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:25:13-47
 46            android:exported="true"
-46-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:22:13-36
+46-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:22:13-36
 47            android:launchMode="singleInstance"
-47-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:23:13-48
+47-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:23:13-48
 48            android:noHistory="false"
-48-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:26:13-38
+48-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:26:13-38
 49            android:theme="@android:style/Theme.Translucent.NoTitleBar" >
-49-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:24:13-72
+49-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:24:13-72
 50            <intent-filter>
-50-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:27:13-30:29
+50-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:27:13-30:29
 51                <action android:name="android.intent.action.MAIN" />
-51-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:28:17-69
-51-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:28:25-66
+51-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:28:17-69
+51-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:28:25-66
 52
 53                <category android:name="android.intent.category.LAUNCHER" />
-53-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:29:17-77
-53-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:29:27-74
+53-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:29:17-77
+53-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:29:27-74
 54            </intent-filter>
 55        </activity>
 56        <activity
-56-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:33:9-36:43
+56-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:33:9-36:43
 57            android:name="com.parnasse.miroir.CalibrationActivity"
-57-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:34:13-48
+57-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:34:13-48
 58            android:exported="false"
-58-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:35:13-37
+58-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:35:13-37
 59            android:label="Calibration" />
-59-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:36:13-40
+59-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:36:13-40
 60
 61        <service
-61-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:38:9-41:56
+61-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:38:9-41:56
 62            android:name="com.parnasse.miroir.MiroirService"
-62-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:39:13-42
+62-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:39:13-42
 63            android:exported="false"
-63-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:40:13-37
+63-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:40:13-37
 64            android:foregroundServiceType="dataSync" />
-64-->C:\Users\nicol\.openclaw\workspace\miroir-v3\app\src\main\AndroidManifest.xml:41:13-53
+64-->C:\Users\nicol\.openclaw\workspace\miroir-fusion\app\src\main\AndroidManifest.xml:41:13-53
 65        <service
 65-->[com.google.mlkit:digital-ink-recognition:18.1.0] C:\Users\nicol\.gradle\caches\8.11.1\transforms\8a71305465e509fcb954a680c977fd19\transformed\digital-ink-recognition-18.1.0\AndroidManifest.xml:12:9-18:19
 66            android:name="com.google.mlkit.common.internal.MlKitComponentDiscoveryService"
