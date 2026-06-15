@@ -253,10 +253,10 @@ class CaptureView(context: Context) : View(context) {
         val wordSpatial = (calSpatialX * 0.5f).coerceIn(15f, 40f)  // 50% du seuil ligne, entre 15-40px
         
         groupManager.params = BlobParams(
-            spatialDistancePx = wordSpatial,
-            minOverlapPercent = 30,
-            temporalDistanceMs = calTemporal.coerceIn(200L, 2000L),
-            transcriptionTimeoutMs = CalibrationActivity.getAutoInferDelay(ctx),
+            spatialDistancePx = 1f,  // ⚠️ Absorption GroupManager désactivée — groupement spatial via computeWordGroups()
+            minOverlapPercent = 100,  // Jamais d'overlap → jamais d'absorption
+            temporalDistanceMs = 0L,  // Aucune absorption temporelle
+            transcriptionTimeoutMs = Long.MAX_VALUE,  // ⚠️ Désactivé : inférence pilotée par checkAutoInfer() spatial
             groupLevel = GroupLevel.WORD,
             captureAnchor = CaptureAnchor.BOTTOM
         )
@@ -307,7 +307,7 @@ class CaptureView(context: Context) : View(context) {
 
     // -- Blob visuel du groupe actif (avant inférence) ------------------------
     private val blobActivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(90, 68, 136, 255)    // bleu contour léger
+        color = Color.argb(40, 68, 136, 255)    // bleu très discret (e-ink friendly)
         strokeWidth = 2f
         style = Paint.Style.STROKE
     }
@@ -1444,6 +1444,10 @@ class CaptureView(context: Context) : View(context) {
         registryIndexToInkStrokeId[registryIdx] = inkStrokeId
         groupManager.onStrokeSealed(inkStroke)
         Log.d(TAG, "GroupManager: stroke #$inkStrokeId → ${groupManager.allGroups().size} groupes actifs")
+
+        // ═══ Inférence spatiale (remplace le timeout temporel) ═══
+        checkAutoInfer()
+        throttledInvalidate()
     }
 
     /**
@@ -1491,8 +1495,25 @@ class CaptureView(context: Context) : View(context) {
     }
 
     /** Stub — remplacé par GroupManager.handleTimeout */
-    private fun checkAutoInfer(precomputedGroups: List<List<Int>>? = null) {
-        // GroupManager gère l'inférence via handleTimeout → onGroupTranscribed
+    private var lastSpatialGroupCount = 0
+
+    /** Inférence spatiale : détecte les groupes fermés via computeWordGroups(). */
+    private fun checkAutoInfer() {
+        val groups = computeWordGroups()
+        val totalGroups = groups.size
+        if (totalGroups > lastSpatialGroupCount && totalGroups >= 2) {
+            // Les groupes avant le dernier sont "fermés" → inférer
+            for (gi in lastSpatialGroupCount until totalGroups - 1) {
+                val group = groups[gi]
+                if (group.isNotEmpty()) {
+                    val snapshot = strokeRegistry.toList()
+                    val seq = groupSequenceCounter.getAndIncrement()
+                    Log.i(TAG, "Spatial infer: groupe $gi (${group.size} strokes) → seq=$seq")
+                    onWordGroupCompleted?.invoke(snapshot, group, seq)
+                }
+            }
+        }
+        lastSpatialGroupCount = (totalGroups - 1).coerceAtLeast(0)
     }
 
     /** Annule le timeout d'inference auto (appele quand un nouveau trait commence) */
@@ -1607,11 +1628,11 @@ class CaptureView(context: Context) : View(context) {
             canvas.drawLine(0f, spacing * i, width.toFloat(), spacing * i, guidePaint)
         }
 
-        // Blob visuel — derrière tout pour ne jamais cacher les strokes
-        if (showVisualOverlays) drawActiveGroupBlob(canvas)
-
         // ═══ STROKES : bitmap (complétés) + tracé courant ═══
         bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+
+        // Blob visuel — sur le bitmap, derrière le stroke courant
+        if (showVisualOverlays) drawActiveGroupBlob(canvas)
 
         // Stroke en cours de dessin — au premier plan
         if (currentPath.size >= 2) {
@@ -1855,14 +1876,48 @@ class CaptureView(context: Context) : View(context) {
         return true
     }
 
-    /** Groupes de mots depuis GroupManager (remplace l'ancien calcul O(n²)). */
+    /** Groupement spatial des strokes (distance horizontale + retour à la ligne). */
     private fun computeWordGroups(): List<List<Int>> {
-        return groupManager.allGroups().map { group ->
-            group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
-        }.filter { it.isNotEmpty() }
-    }
+        if (strokeRegistry.isEmpty()) return emptyList()
+        if (strokeRegistry.size == 1) return listOf(listOf(0))
 
-    private fun findWordGroup(strokeIndex: Int): List<Int>? = null
+        val distX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)  // seuil mots
+        val distY = CalibrationActivity.getSpatialDistanceY(context)
+
+        // Bornes X droite/gauche et Y min/max de chaque stroke
+        val rightX = strokeRegistry.map { s -> s.points.take(s.activePoints).maxOf { it.first } }
+        val leftX  = strokeRegistry.map { s -> s.points.take(s.activePoints).minOf { it.first } }
+        val yMin   = strokeRegistry.map { s -> s.points.take(s.activePoints).minOf { it.second } }
+        val yMax   = strokeRegistry.map { s -> s.points.take(s.activePoints).maxOf { it.second } }
+
+        val groups = mutableListOf<MutableList<Int>>()
+        var current = mutableListOf(0)
+        for (i in 1 until strokeRegistry.size) {
+            val xGap = leftX[i] - rightX[i - 1]
+            val yGap = yMin[i] - yMax[i - 1]  // positif = plus bas
+
+            // Retour à la ligne : > distY toujours, ou > distY*0.3 si à gauche
+            val newLine = yGap > distY || (yGap > distY * 0.3f && xGap < 0)
+            if (newLine) {
+                Log.d(TAG, "computeWordGroups: NEW LINE — yGap=${yGap.toInt()}px > distY=${distY.toInt()} | stroke $i")
+                groups.add(current)
+                current = mutableListOf(i)
+            } else if (kotlin.math.abs(xGap) < distX) {
+                current.add(i)  // même mot
+            } else {
+                Log.d(TAG, "computeWordGroups: NEW GROUP — xGap=${xGap.toInt()}px >= distX=${distX.toInt()} | stroke $i")
+                groups.add(current)
+                current = mutableListOf(i)  // nouveau mot
+            }
+        }
+        groups.add(current)
+        Log.d(TAG, "computeWordGroups: ${groups.size} groupes, distX=$distX, distY=$distY")
+        return groups
+    }
+    /** Trouve le groupe spatial contenant le stroke. */
+    private fun findWordGroup(strokeIndex: Int): List<Int>? {
+        return computeWordGroups().find { strokeIndex in it }
+    }
 
     /**
      * Point d'acces public pour la sauvegarde : calcule les groupes
@@ -1871,9 +1926,7 @@ class CaptureView(context: Context) : View(context) {
      */
     /** Point d'accès pour la sauvegarde : groupes depuis GroupManager. */
     fun computeWordGroupsForSave(): List<List<Int>> {
-        val groups = groupManager.allGroups().map { group ->
-            group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
-        }.filter { it.isNotEmpty() }
+        val groups = computeWordGroups()
         return computeVisualOrder(groups) ?: groups
     }
 
@@ -2331,31 +2384,36 @@ class CaptureView(context: Context) : View(context) {
         if (currentMode != CaptureMode.CAPTURE) return
         if (!isBlocnoteMode) return
 
-        // Trouver le groupe SELECTED (phare actif)
-        val selectedGroups = groupManager.groupsInState(GroupState.SELECTED)
-        val phareGroup = selectedGroups.firstOrNull() ?: return
-        val indices = phareGroup.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
-        if (indices.isEmpty()) return
+        // Blob pour les groupes SPATIAUX (computeWordGroups) + le groupe SELECTED (phare)
+        val groups = computeWordGroups()
+        if (groups.isEmpty()) return
 
-        val distX = groupManager.params.spatialDistancePx
-        val distY = CalibrationActivity.getSpatialDistanceY(context)
-        blobRadiusX = distX * 0.7f
-        blobRadiusY = distY * 0.7f
+        val blobDistX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
+        val blobDistY = CalibrationActivity.getSpatialDistanceY(context)
+        blobRadiusX = blobDistX * 0.7f
+        blobRadiusY = blobDistY * 0.35f  // Réduit pour éviter le chevauchement vertical
         val sampleStep = ((blobRadiusX + blobRadiusY) / 12f).toInt().coerceIn(1, 6)
 
-        for (idx in indices) {
-            if (idx >= strokeRegistry.size) continue
-            val s = strokeRegistry[idx]
-            var pi = 0
-            for ((x, y) in s.points) {
-                if (pi % sampleStep == 0) {
-                    canvas.drawOval(
-                        x - blobRadiusX, y - blobRadiusY,
-                        x + blobRadiusX, y + blobRadiusY,
-                        blobActivePaint  // couleur du groupe SELECTED
-                    )
+        // Groupe SELECTED pour le surbrillance
+        val selectedIndices = groupManager.groupsInState(GroupState.SELECTED)
+            .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
+
+        for (groupIndices in groups) {
+            val isSelected = groupIndices.any { it in selectedIndices }
+            for (idx in groupIndices) {
+                if (idx >= strokeRegistry.size) continue
+                val s = strokeRegistry[idx]
+                var pi = 0
+                for ((x, y) in s.points) {
+                    if (pi % sampleStep == 0) {
+                        canvas.drawOval(
+                            x - blobRadiusX, y - blobRadiusY,
+                            x + blobRadiusX, y + blobRadiusY,
+                            blobActivePaint
+                        )
+                    }
+                    pi++
                 }
-                pi++
             }
         }
     }
