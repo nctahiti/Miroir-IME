@@ -762,8 +762,8 @@ class CaptureView(context: Context) : View(context) {
                 wasDrag = false
                 val hitIdx = hitTest(x, y)
 
-                // Tap sur espace vide → retour en mode CAPTURE
-                if (hitIdx == null && !decomposeMode) {
+                // Tap sur espace vide → retour en mode CAPTURE (ou annuler merge)
+                if (hitIdx == null && !decomposeMode && !mergeMode) {
                     selectedWordGroup = null
                     dragWordGroup = null
                     flowState = null
@@ -773,12 +773,49 @@ class CaptureView(context: Context) : View(context) {
                     invalidate()
                     return
                 }
+                // Tap espace vide en mode merge → annuler
+                if (hitIdx == null && mergeMode) {
+                    mergeSourceGroup = null
+                    mergeMode = false
+                    currentMode = CaptureMode.CAPTURE
+                    onModeChanged?.invoke(currentMode)
+                    Log.d(TAG, "🔗 Merge annulé (tap espace vide)")
+                    invalidate()
+                    return
+                }
 
                 // 🪄 Mode décomposition : un tap décompose le groupe ciblé
                 if (decomposeMode && hitIdx != null) {
                     decomposeGroupAt(hitIdx)
                     invalidate()
                     return
+                }
+
+                // 🔗 Mode fusion : premier tap stocke, deuxième tap fusionne
+                if (mergeMode && hitIdx != null) {
+                    val tappedGroup = findWordGroup(hitIdx) ?: return
+                    val source = mergeSourceGroup
+                    if (source == null) {
+                        // Premier tap : stocker le groupe source
+                        mergeSourceGroup = tappedGroup
+                        Log.i(TAG, "🔗 Merge mode — groupe source: [${tappedGroup.joinToString(",")}]")
+                        invalidate()
+                        return
+                    } else if (source.any { it in tappedGroup } || tappedGroup.any { it in source }) {
+                        // Même groupe → annuler
+                        mergeSourceGroup = null
+                        Log.i(TAG, "🔗 Merge annulé (même groupe)")
+                        invalidate()
+                        return
+                    } else {
+                        // Deuxième tap sur un groupe différent → fusionner
+                        mergeGroups(source, tappedGroup)
+                        mergeSourceGroup = null
+                        mergeMode = false
+                        Log.i(TAG, "🔗 Fusion: [${source.joinToString(",")}] + [${tappedGroup.joinToString(",")}]")
+                        invalidate()
+                        return
+                    }
                 }
 
                 if (hitIdx != null) {
@@ -2129,6 +2166,15 @@ class CaptureView(context: Context) : View(context) {
     /** Flag activé par le bouton 🪄 : un tap sur un groupe le décompose */
     var decomposeMode = false
 
+    // =========================================================================
+    // 🔗 FUSION SÉQUENTIELLE — mode merge
+    // =========================================================================
+
+    /** Flag activé par le bouton 🔗 : tap groupe A puis tap groupe B → fusion */
+    var mergeMode = false
+    /** Groupe source en attente de fusion (premier tap en mode merge) */
+    var mergeSourceGroup: List<Int>? = null
+
     /** Décompose le groupe contenant le stroke ciblé en strokes individuels */
     fun decomposeGroupAt(strokeIndex: Int): Boolean {
         val groups = getSpatialGroups()  // cache réconcilié
@@ -2152,6 +2198,53 @@ class CaptureView(context: Context) : View(context) {
         Log.i(TAG, "🪄 Décompose: groupe [$targetGroupIdx] (${targetGroup.size} strokes) → ${targetGroup.size} groupes unitaires")
         throttledInvalidate()
         return true
+    }
+
+    /**
+     * 🔗 Fusionne deux groupes en un seul.
+     * Appelé en mode merge après deux taps sur des groupes différents.
+     * Déclenche la ré-inférence du groupe fusionné.
+     */
+    private fun mergeGroups(groupA: List<Int>, groupB: List<Int>) {
+        val currentGroups = getSpatialGroups().map { it.toMutableList() }.toMutableList()
+        val idxA = currentGroups.indexOfFirst { it.any { s -> s in groupA } }
+        val idxB = currentGroups.indexOfFirst { it.any { s -> s in groupB } }
+        if (idxA < 0 || idxB < 0 || idxA == idxB) {
+            Log.w(TAG, "🔗 MergeGroups: groupes introuvables ou identiques (A=$idxA, B=$idxB)")
+            return
+        }
+
+        // Fusionner les deux groupes
+        val merged = (currentGroups[idxA] + currentGroups[idxB]).distinct().toMutableList()
+        // Retirer les deux anciens groupes (index le plus haut d'abord pour éviter le décalage)
+        val highIdx = maxOf(idxA, idxB)
+        val lowIdx = minOf(idxA, idxB)
+        currentGroups.removeAt(highIdx)
+        currentGroups.removeAt(lowIdx)
+        // Insérer le groupe fusionné à la position du plus bas
+        currentGroups.add(lowIdx, merged)
+
+        // Mettre à jour le cache spatial et les bounds
+        cachedSpatialGroups = currentGroups
+        cachedSpatialBounds = currentGroups.map { group ->
+            val r = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
+            for (idx in group) {
+                if (idx >= strokeRegistry.size) continue
+                for ((px, py) in strokeRegistry[idx].points) {
+                    if (px < r.left) r.left = px; if (px > r.right) r.right = px
+                    if (py < r.top) r.top = py; if (py > r.bottom) r.bottom = py
+                }
+            }
+            r
+        }
+
+        // Ré-inférence du groupe fusionné
+        val seq = groupSequenceCounter.getAndIncrement()
+        val snapshot = strokeRegistry.toList()
+        Log.i(TAG, "🔗 MergeGroups: [${groupA.joinToString(",")}] + [${groupB.joinToString(",")}] → [${merged.joinToString(",")}] (seq=$seq)")
+        onWordGroupCompleted?.invoke(snapshot, merged, seq)
+
+        rebuildBitmap()
     }
 
     /**

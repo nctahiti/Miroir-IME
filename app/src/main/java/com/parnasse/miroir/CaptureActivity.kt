@@ -267,6 +267,25 @@ class CaptureActivity : Activity() {
             }
         }
         topBar.addView(decomposeBtn)
+        // 🔗 Bouton fusion séquentielle
+        val mergeBtn = makeToolbarButton("🔗", android.graphics.Color.argb(180, 80, 80, 80)).apply {
+            setOnClickListener {
+                val newState = !(captureView?.mergeMode ?: false)
+                captureView?.mergeMode = newState
+                captureView?.mergeSourceGroup = null  // reset source
+                this.text = if (newState) "🔗✓" else "🔗"
+                this.setBackgroundColor(if (newState)
+                    android.graphics.Color.argb(200, 100, 180, 255)
+                else
+                    android.graphics.Color.argb(180, 80, 80, 80))
+                if (newState) {
+                    captureView?.currentMode = CaptureMode.EDIT
+                    captureMode = CaptureMode.EDIT
+                    Toast.makeText(this@CaptureActivity, "🔗 Tapez deux groupes pour les fusionner", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        topBar.addView(mergeBtn)
         topBar.addView(View(this).apply {
             setBackgroundColor(android.graphics.Color.argb(60, 255, 160, 0))
             layoutParams = LinearLayout.LayoutParams(3, 32).apply {
