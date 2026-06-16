@@ -2822,7 +2822,7 @@ class CaptureView(context: Context) : View(context) {
         val groupsToDraw = if (lastGroup.any { it in selectedIndices }) listOf(lastGroup)
                           else listOf(lastGroup) + groups.filter { it.any { idx -> idx in selectedIndices } }
 
-        val blobDistX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
+        val blobDistX = (CalibrationActivity.getSpatialDistanceX(context) * 0.75f).coerceIn(15f, 300f)
         val blobDistY = CalibrationActivity.getSpatialDistanceY(context)
         blobRadiusX = blobDistX * 0.7f
         blobRadiusY = blobDistY * 0.35f
