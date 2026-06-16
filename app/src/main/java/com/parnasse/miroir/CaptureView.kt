@@ -226,7 +226,7 @@ class CaptureView(context: Context) : View(context) {
     /** Map inverse : index strokeRegistry → inkStroke.id (pour la réactivation hover) */
     private val registryIndexToInkStrokeId = mutableMapOf<Int, Long>()
 
-    private val groupManager = GroupManager { group ->
+    private val groupManager = GroupManager({ group ->
         // ═══ CAP 7 : bascule — GroupManager remplace checkAutoInfer ═══
         val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
         if (indices.isEmpty()) return@GroupManager
@@ -235,6 +235,16 @@ class CaptureView(context: Context) : View(context) {
         Log.i(TAG, "GroupManager -> STORED: groupe ${group.id} (${indices.size} strokes, seq=$seq)")
         onWordGroupCompleted?.invoke(snapshot, indices, seq)
         vstarWriter?.writeGroupSep()
+    }).also {
+        // ═══ Quand un groupe SELECTED est auto-désélectionné, réinitialiser les params ═══
+        it.onGroupAutoDeselected = {
+            it.params = it.params.copy(
+                spatialDistancePx = 1f,
+                temporalDistanceMs = 0L,
+                minOverlapPercent = 100
+            )
+            Log.d(TAG, "Params absorption réinitialisés (auto-désélection)")
+        }
     }
 
     /**
@@ -650,13 +660,17 @@ class CaptureView(context: Context) : View(context) {
         }
         if (groupManager.selectGroup(g.id)) {
             // Réactiver l'absorption : les strokes suivants iront dans ce groupe
-            val wordSpatial = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
+            // ═══ Seuil de correction : 75% du seuil ligne (entre mot et correction) ═══
+            // Plus large que le seuil stroke↔stroke (50%) mais pas autant que le seuil
+            // entre deux mots (100%) pour éviter d'absorber le mot suivant.
+            val calX = CalibrationActivity.getSpatialDistanceX(context)
+            val correctionSpatial = (calX * 0.75f).coerceIn(20f, 60f)
             groupManager.params = groupManager.params.copy(
-                spatialDistancePx = wordSpatial,
-                temporalDistanceMs = Long.MAX_VALUE,  // neutralisé — seuls les nouveaux strokes passent
-                minOverlapPercent = 0                  // aucun chevauchement requis (WORD)
+                spatialDistancePx = correctionSpatial,
+                temporalDistanceMs = Long.MAX_VALUE,  // neutralisé
+                minOverlapPercent = 0                  // aucun chevauchement requis
             )
-            Log.i(TAG, "Survol long — groupe ${g.id} SELECTED, absorption réactivée (seuil=$wordSpatial)")
+            Log.i(TAG, "Survol long — groupe ${g.id} SELECTED, absorption réactivée (seuil correction=$correctionSpatial, calX=$calX)")
             invalidate()
         }
     }
@@ -2767,48 +2781,53 @@ class CaptureView(context: Context) : View(context) {
      * Placé à 10px à gauche du premier stroke, aligné sur le snapY.
      */
     /**
-     * 🔦 PHARE — point noir sur l'interligne devant le groupe SELECTED.
+     * 🔦 PHARE — point noir sur l'interligne 10px devant le groupe ouvert.
+     * Priorité : groupe SELECTED (survol long), puis groupe LOADED (actif).
+     * Le phare suit la création : quand un nouveau groupe est créé,
+     * l'ancien est désélectionné et le phare passe au nouveau groupe LOADED.
      * Statique (pas de clignotement) pour éviter le refresh e-ink.
-     * Utilise GroupManager pour trouver le groupe SELECTED.
      */
     private fun drawActiveGroupCursor(canvas: Canvas) {
         if (currentMode != CaptureMode.CAPTURE) return
         if (!isBlocnoteMode) return
 
-        // Trouver le groupe SELECTED (hover maintenu > 1s)
-        val selectedGroups = groupManager.groupsInState(GroupState.SELECTED)
-        val phareGroup = selectedGroups.firstOrNull() ?: return
+        // ═══ Priorité 1 : groupe SELECTED (survol long) ═══
+        var phareGroup = groupManager.groupsInState(GroupState.SELECTED).firstOrNull()
+        // ═══ Priorité 2 : groupe LOADED (actif, reçoit les strokes) ═══
+        if (phareGroup == null) {
+            phareGroup = groupManager.groupsInState(GroupState.LOADED).firstOrNull()
+        }
+        if (phareGroup == null) return
+
         val indices = phareGroup.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
         if (indices.isEmpty()) {
-            Log.d(TAG, "Phare — groupe ${phareGroup.id} SELECTED mais 0 indices dans registryIndexToInkStrokeId (${phareGroup.strokeIds.size} strokeIds, map a ${inkStrokeIdToRegistryIndex.size} entrées)")
+            Log.d(TAG, "Phare — groupe ${phareGroup.id} (${phareGroup.state}) a ${phareGroup.strokeIds.size} strokeIds mais 0 indices (map=${inkStrokeIdToRegistryIndex.size})")
             return
         }
 
-        // Premier stroke du groupe pour la position horizontale
-        val firstIdx = indices.minOrNull() ?: return
-        if (firstIdx >= strokeRegistry.size) return
-        val s = strokeRegistry[firstIdx]
-        if (s.activePoints < 1) return
-
-        // Position : 5px à gauche du premier point
-        val phareX = s.points[0].first - 5f
-        // Interligne : snapY du groupe (moyenne des Y de tous les strokes)
+        // ═══ Trouver le X le plus à gauche du groupe ENTIER ═══
+        var minX = Float.MAX_VALUE
         var sumY = 0f; var count = 0
         for (si in indices) {
-            if (si < strokeRegistry.size) {
-                for ((_, y) in strokeRegistry[si].points) { sumY += y; count++ }
+            if (si >= strokeRegistry.size) continue
+            val stroke = strokeRegistry[si]
+            for ((x, y) in stroke.points) {
+                if (x < minX) minX = x
+                sumY += y; count++
             }
         }
-        val phareY = if (count > 0) sumY / count else s.points[0].second
+        if (count == 0) return
 
-        // Point noir statique (rayon 8px)
-        Log.d(TAG, "Phare dessiné @ ($phareX, $phareY) pour groupe ${phareGroup.id}")
-        canvas.drawCircle(phareX, phareY, 8f, cursorPaint)
-        // Debug : grand cercle rouge pour confirmer le rendu
-        val debugPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.RED; style = Paint.Style.STROKE; strokeWidth = 3f
-        }
-        canvas.drawCircle(phareX, phareY, 20f, debugPaint)
+        // Position : 10px à gauche du bord gauche du groupe
+        val phareX = minX - 10f
+        // Snap à l'interligne (baseline)
+        val avgY = sumY / count
+        val phareY = snapToLine(avgY)
+
+        Log.d(TAG, "Phare @ (${phareX.toInt()}, ${phareY.toInt()}) — groupe ${phareGroup.id} ${phareGroup.state} | ${indices.size} strokes, minX=${minX.toInt()}, indices=[${indices.sorted().joinToString(",")}]")
+
+        // Point noir statique (rayon 6px, discret sur e-ink)
+        canvas.drawCircle(phareX, phareY, 6f, cursorPaint)
     }
 
     /** Le phare est statique — pas d'animation nécessaire (e-ink friendly). */

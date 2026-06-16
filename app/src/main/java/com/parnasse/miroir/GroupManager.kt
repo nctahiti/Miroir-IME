@@ -32,7 +32,9 @@ import java.util.concurrent.TimeUnit
  *                            avec transcription → écrire dans le fichier
  */
 class GroupManager(
-    private val onGroupTranscribed: (InkGroup) -> Unit = {}
+    private val onGroupTranscribed: (InkGroup) -> Unit = {},
+    /** Appelé quand un groupe SELECTED est automatiquement désélectionné (nouveau groupe créé ailleurs) */
+    var onGroupAutoDeselected: (() -> Unit)? = null
 ) {
     companion object {
         private const val TAG = "GroupManager"
@@ -129,11 +131,21 @@ class GroupManager(
 
     /**
      * Retourne le groupe LOADED courant, ou en crée un nouveau.
-     * L'ancien groupe ACTIVE est automatiquement fermé (→ CLOSED).
+     * Tout groupe SELECTED est automatiquement désélectionné (→ STORED)
+     * car un seul groupe peut être ouvert à la fois.
      */
     fun getOrCreateActiveGroup(): InkGroup {
-        // ⚠️ Toujours créer un nouveau groupe — le groupement spatial
-        // est géré par computeWordGroups(), pas par le GroupManager.
+        // ═══ Désélectionner tout groupe SELECTED — un seul groupe ouvert à la fois ═══
+        val selectedId = machine.pendingGroupId
+        if (selectedId != null) {
+            val selectedGroup = groups[selectedId]
+            if (selectedGroup != null && selectedGroup.state == GroupState.SELECTED) {
+                machine.transition(selectedGroup, GroupState.STORED)
+                Log.i(TAG, "Groupe ${selectedGroup.id} désélectionné (SELECTED→STORED) — nouveau groupe créé ailleurs")
+                onGroupAutoDeselected?.invoke()
+            }
+        }
+
         val currentActiveId = machine.activeGroupId
         val oldGroup = currentActiveId?.let { groups[it] }
 
@@ -142,7 +154,7 @@ class GroupManager(
         groups[newGroup.id] = newGroup
         machine.makeActive(newGroup.id, oldGroup)
 
-        Log.i(TAG, "Nouveau groupe LOADED : ${newGroup.id} (ancien: ${oldGroup?.id ?: "aucun"})")
+        Log.i(TAG, "Nouveau groupe LOADED : ${newGroup.id} | ancien: ${oldGroup?.id ?: "aucun"}(${oldGroup?.state}) | pendingGroupId=${machine.pendingGroupId} | activeGroupId=${machine.activeGroupId}")
 
         return newGroup
     }
