@@ -103,11 +103,11 @@ class CalibrationActivity : Activity() {
         delaySeek = root.getChildAt(root.childCount - 1) as SeekBar
 
         // Distance spatiale X (horizontale) — même échelle que Y
-        spatialXLabel = addSlider(root, "Distance spatiale X (↔)", 5, 200, currentSpatialX.toInt(), "px")
+        spatialXLabel = addSlider(root, "Distance spatiale X (↔)", 5, 500, currentSpatialX.toInt(), "px")
         spatialXSeek = root.getChildAt(root.childCount - 1) as SeekBar
 
         // Distance spatiale Y (verticale) — même échelle que X
-        spatialYLabel = addSlider(root, "Distance spatiale Y (↕)", 5, 200, currentSpatialY.toInt(), "px")
+        spatialYLabel = addSlider(root, "Distance spatiale Y (↕)", 5, 500, currentSpatialY.toInt(), "px")
         spatialYSeek = root.getChildAt(root.childCount - 1) as SeekBar
 
         // Distance temporelle
@@ -115,11 +115,11 @@ class CalibrationActivity : Activity() {
         temporalSeek = root.getChildAt(root.childCount - 1) as SeekBar
 
         // Survol long (réactivation)
-        hoverLabel = addSlider(root, "Survol long (réactivation)", 300, 3000, currentHover.toInt(), "ms")
+        hoverLabel = addSlider(root, "Survol long (réactivation)", 50, 3000, currentHover.toInt(), "ms")
         hoverSeek = root.getChildAt(root.childCount - 1) as SeekBar
 
         // Densité d'absorption (contacts requis)
-        absorbLabel = addSlider(root, "Densité absorption (contacts)", 1, 50, currentAbsorb, "contacts")
+        absorbLabel = addSlider(root, "Densité absorption (contacts)", 1, 500, currentAbsorb, "contacts")
         absorbSeek = root.getChildAt(root.childCount - 1) as SeekBar
 
         // ── Boutons ────────────────────────────────────────────────────
@@ -135,7 +135,7 @@ class CalibrationActivity : Activity() {
                 spatialXSeek.progress = DEFAULT_SPATIAL_DISTANCE_X.toInt() - 5
                 spatialYSeek.progress = DEFAULT_SPATIAL_DISTANCE_Y.toInt() - 5
                 temporalSeek.progress = DEFAULT_TEMPORAL_DISTANCE.toInt() - 100
-                hoverSeek.progress = DEFAULT_LONG_HOVER_DELAY.toInt() - 300
+                hoverSeek.progress = DEFAULT_LONG_HOVER_DELAY.toInt() - 50
                 absorbSeek.progress = DEFAULT_ABSORB_CONTACTS - 1
                 save()
             }
@@ -148,6 +148,59 @@ class CalibrationActivity : Activity() {
             }
         })
         root.addView(btnRow)
+
+        // ── Barre d'outils playground (merge + decompose) ──────────
+        val playgroundBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(8))
+        }
+        // Bouton 🔗 fusion
+        val mergeBtn = TextView(this).apply {
+            text = "🔗"
+            textSize = 28f
+            setTextColor(Color.WHITE)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setBackgroundColor(Color.argb(180, 80, 80, 80))
+            gravity = Gravity.CENTER
+            setOnClickListener {
+                val newState = !(testView?.mergeMode ?: false)
+                testView?.mergeMode = newState
+                testView?.mergeSourceGroup = null
+                this.text = if (newState) "🔗✓" else "🔗"
+                this.setBackgroundColor(if (newState)
+                    Color.argb(200, 100, 180, 255)
+                else Color.argb(180, 80, 80, 80))
+                if (newState) {
+                    testView?.currentMode = CaptureMode.EDIT
+                    Toast.makeText(this@CalibrationActivity, "🔗 Tapez deux groupes pour les fusionner", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        playgroundBar.addView(mergeBtn)
+        // Bouton 🪄 décomposition
+        val decompBtn = TextView(this).apply {
+            text = "🪄"
+            textSize = 28f
+            setTextColor(Color.WHITE)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setBackgroundColor(Color.argb(180, 80, 80, 80))
+            gravity = Gravity.CENTER
+            setOnClickListener {
+                val newState = !(testView?.decomposeMode ?: false)
+                testView?.decomposeMode = newState
+                this.text = if (newState) "🪄✓" else "🪄"
+                this.setBackgroundColor(if (newState)
+                    Color.argb(200, 255, 160, 0)
+                else Color.argb(180, 80, 80, 80))
+                if (newState) {
+                    testView?.currentMode = CaptureMode.EDIT
+                    Toast.makeText(this@CalibrationActivity, "🪄 Tapez un groupe pour le décomposer", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        playgroundBar.addView(decompBtn)
+        root.addView(playgroundBar)
 
         // ── Zone d'essai (CaptureView réelle avec TouchHelper) ──────────
         val cv = CaptureView(this).apply {
@@ -208,6 +261,28 @@ class CalibrationActivity : Activity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
+        temporalSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sk: SeekBar, v: Int, fromUser: Boolean) {
+                temporalLabel.text = "Distance temporelle groupe : ${v + 100} ms"
+                if (fromUser) {
+                    prefs(this@CalibrationActivity).edit().putLong(KEY_TEMPORAL_DISTANCE, (v + 100).toLong()).apply()
+                    updateTestView()
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+        hoverSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sk: SeekBar, v: Int, fromUser: Boolean) {
+                hoverLabel.text = "Survol long (réactivation) : ${v + 50} ms"
+                if (fromUser) {
+                    prefs(this@CalibrationActivity).edit().putLong(KEY_LONG_HOVER_DELAY, (v + 50).toLong()).apply()
+                    updateTestView()
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
 
         setContentView(root)
     }
@@ -252,9 +327,9 @@ class CalibrationActivity : Activity() {
         prefs(this).edit()
             .putLong(KEY_AUTO_INFER_DELAY, (delaySeek.progress + 500).toLong())
             .putFloat(KEY_SPATIAL_DISTANCE_X, (spatialXSeek.progress + 5).toFloat())
-            .putFloat(KEY_SPATIAL_DISTANCE_Y, (spatialYSeek.progress + 10).toFloat())
+            .putFloat(KEY_SPATIAL_DISTANCE_Y, (spatialYSeek.progress + 5).toFloat())
             .putLong(KEY_TEMPORAL_DISTANCE, (temporalSeek.progress + 100).toLong())
-            .putLong(KEY_LONG_HOVER_DELAY, (hoverSeek.progress + 300).toLong())
+            .putLong(KEY_LONG_HOVER_DELAY, (hoverSeek.progress + 50).toLong())
             .apply()
         Toast.makeText(this, "Paramètres sauvegardés", Toast.LENGTH_SHORT).show()
     }

@@ -199,6 +199,9 @@ class CaptureView(context: Context) : View(context) {
 
     var onSelectionChanged: ((Int?) -> Unit)? = null
 
+    /** Notifié quand le groupe actif change (sélection, désélection, création) */
+    var onActiveGroupChanged: (() -> Unit)? = null
+
     /** Index du stroke en cours de drag */
     private var dragStrokeIndex: Int? = null
     private var dragOffsetX = 0f
@@ -226,12 +229,28 @@ class CaptureView(context: Context) : View(context) {
     /** Map inverse : index strokeRegistry → inkStroke.id (pour la réactivation hover) */
     private val registryIndexToInkStrokeId = mutableMapOf<Int, Long>()
 
-    private val groupManager = GroupManager({ group ->
+    /** Retourne le seq (orderIndex) du groupe actif (SELECTED > LOADED), ou null */
+    fun getActiveGroupSeq(): Int? {
+        val activeGroup = groupManager.groupsInState(GroupState.SELECTED).firstOrNull()
+            ?: groupManager.groupsInState(GroupState.LOADED).firstOrNull()
+        return activeGroup?.orderIndex
+    }
+
+    /** Stocke le seq dans l'InkGroup correspondant au groupe spatial */
+    private fun mapSpatialGroupToSeq(spatialIndices: List<Int>, seq: Int) {
+        val firstIdx = spatialIndices.firstOrNull() ?: return
+        val inkStrokeId = registryIndexToInkStrokeId[firstIdx] ?: return
+        val inkGroup = groupManager.findGroupByStroke(inkStrokeId) ?: return
+        inkGroup.orderIndex = seq
+    }
+
+    val groupManager = GroupManager({ group ->
         // ═══ CAP 7 : bascule — GroupManager remplace checkAutoInfer ═══
         val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
         if (indices.isEmpty()) return@GroupManager
         val snapshot = strokeRegistry.toList()
         val seq = groupSequenceCounter.getAndIncrement()
+        group.orderIndex = seq  // stocker dans l'InkGroup pour liaison transcription
         Log.i(TAG, "GroupManager -> STORED: groupe ${group.id} (${indices.size} strokes, seq=$seq)")
         onWordGroupCompleted?.invoke(snapshot, indices, seq)
         vstarWriter?.writeGroupSep()
@@ -244,6 +263,7 @@ class CaptureView(context: Context) : View(context) {
                 minOverlapPercent = 100
             )
             Log.d(TAG, "Params absorption réinitialisés (auto-désélection)")
+            onActiveGroupChanged?.invoke()
         }
     }
 
@@ -664,13 +684,14 @@ class CaptureView(context: Context) : View(context) {
             // Plus large que le seuil stroke↔stroke (50%) mais pas autant que le seuil
             // entre deux mots (100%) pour éviter d'absorber le mot suivant.
             val calX = CalibrationActivity.getSpatialDistanceX(context)
-            val correctionSpatial = (calX * 0.75f).coerceIn(20f, 60f)
+            val correctionSpatial = (calX * 0.75f).coerceIn(15f, 200f)
             groupManager.params = groupManager.params.copy(
                 spatialDistancePx = correctionSpatial,
                 temporalDistanceMs = Long.MAX_VALUE,  // neutralisé
                 minOverlapPercent = 0                  // aucun chevauchement requis
             )
             Log.i(TAG, "Survol long — groupe ${g.id} SELECTED, absorption réactivée (seuil correction=$correctionSpatial, calX=$calX)")
+            onActiveGroupChanged?.invoke()
             invalidate()
         }
     }
@@ -689,6 +710,7 @@ class CaptureView(context: Context) : View(context) {
                 temporalDistanceMs = 0L,
                 minOverlapPercent = 100
             )
+            onActiveGroupChanged?.invoke()
             postInvalidate()
         }
     }
@@ -1273,6 +1295,7 @@ class CaptureView(context: Context) : View(context) {
                             val snapshot = strokeRegistry.toList()
                             val seq = groupSequenceCounter.getAndIncrement()
                             Log.i(TAG, "⏱️ Post-édition: groupe $gi (${group.size}s) → seq=$seq")
+                            mapSpatialGroupToSeq(group, seq)
                             onWordGroupCompleted?.invoke(snapshot, group, seq)
                             lastInferredSpatialGroup = gi
                         }
@@ -1722,6 +1745,7 @@ class CaptureView(context: Context) : View(context) {
             val snapshot = strokeRegistry.toList()
             val seq = groupSequenceCounter.getAndIncrement()
             Log.i(TAG, "⚡ Inférer immédiat: groupe $gi/${openIdx} (${group.size} strokes) → seq=$seq")
+            mapSpatialGroupToSeq(group, seq)
             onWordGroupCompleted?.invoke(snapshot, group, seq)
             lastInferredSpatialGroup = gi
         }
@@ -1741,6 +1765,7 @@ class CaptureView(context: Context) : View(context) {
                         val snapshot = strokeRegistry.toList()
                         val seq = groupSequenceCounter.getAndIncrement()
                         Log.i(TAG, "⏱️ Timeout 500ms: groupe $gi/${latestOpenIdx} (${group.size} strokes) → seq=$seq")
+                        mapSpatialGroupToSeq(group, seq)
                         onWordGroupCompleted?.invoke(snapshot, group, seq)
                         lastInferredSpatialGroup = gi
                     }
@@ -2151,14 +2176,6 @@ class CaptureView(context: Context) : View(context) {
     }
 
     // =========================================================================
-    // GROUPEMENT DE MOTS
-    // =========================================================================
-    /** Force le rafraîchissement de l'affichage */
-    fun recalculateWordGroups() {
-        Log.i(TAG, "♻️ Recalcul groupes: ${groupManager.allGroups().size} groupes, ${strokeRegistry.size} strokes")
-        throttledInvalidate()
-    }
-
     // =========================================================================
     // DEBUG — Décomposition de groupe
     // =========================================================================
@@ -2241,6 +2258,7 @@ class CaptureView(context: Context) : View(context) {
         // Ré-inférence du groupe fusionné
         val seq = groupSequenceCounter.getAndIncrement()
         val snapshot = strokeRegistry.toList()
+        mapSpatialGroupToSeq(merged, seq)
         Log.i(TAG, "🔗 MergeGroups: [${groupA.joinToString(",")}] + [${groupB.joinToString(",")}] → [${merged.joinToString(",")}] (seq=$seq)")
         onWordGroupCompleted?.invoke(snapshot, merged, seq)
 

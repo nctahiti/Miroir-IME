@@ -133,6 +133,10 @@ class CaptureActivity : Activity() {
             }
             // ═══ Synchroniser GroupManager avec la calibration ═══
             cv.syncGroupManagerParams()
+            // ═══ Mettre à jour la transcription quand le groupe actif change ═══
+            cv.onActiveGroupChanged = {
+                runOnUiThread { updatePoemText() }
+            }
         }
 
         // ── Layout ─────────────────────────────────────────────────────
@@ -246,10 +250,6 @@ class CaptureActivity : Activity() {
                 setMargins(8, 0, 4, 0)
             }
         })
-        topBar.addView(makeToolbarButton("♻️", android.graphics.Color.argb(180, 80, 80, 80)) {
-            captureView?.recalculateWordGroups()
-            Toast.makeText(this, "♻️ Groupes recalculés", Toast.LENGTH_SHORT).show()
-        })
         val decomposeBtn = makeToolbarButton("🪄", android.graphics.Color.argb(180, 80, 80, 80)).apply {
             setOnClickListener {
                 val newState = !(captureView?.decomposeMode ?: false)
@@ -303,19 +303,17 @@ class CaptureActivity : Activity() {
 
         overlay.addView(topBar)
 
-        // ── Texte affiché — vue glissante qui suit l'écriture ──────────
+        // ── Texte affiché — ligne unique défilante avec \\n pour sauts de ligne ──
         poemText = TextView(this).apply {
             text = "📝 Bloc-notes"
-            textSize = 36f
-            setTextColor(android.graphics.Color.rgb(60, 60, 60))
-            gravity = Gravity.CENTER
-            setLineSpacing(8f, 1.0f)
-            setPadding(40, 12, 40, 12)
-            setBackgroundColor(android.graphics.Color.rgb(255, 255, 220))
-            maxLines = 4
+            textSize = 28f
+            setTextColor(android.graphics.Color.rgb(40, 40, 40))
+            setPadding(40, 14, 40, 14)
+            setBackgroundColor(android.graphics.Color.rgb(255, 255, 235))
+            maxLines = 1
+            setHorizontallyScrolling(true)
         }
-        // Hauteur fixe pour la fenêtre glissante
-        val textHeight = (36f * 1.5f * 4 + 24).toInt()  // ~4 lignes visibles
+        val textHeight = (28f * 2.8f + 32).toInt()  // hauteur confortable pour 1 ligne
         overlay.addView(poemText, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             textHeight
@@ -600,7 +598,9 @@ class CaptureActivity : Activity() {
 
     // ── UI helpers ─────────────────────────────────────────────────────
 
-    /** Affiche le texte accumulé avec le mot du groupe actif encadré (liséré noir) */
+    /** Affiche le texte accumulé avec le mot du groupe actif encadré.
+     *  Les sauts de ligne sont marqués par \\n visible.
+     *  Le défilement horizontal est centré sur le mot actif. */
     private fun updatePoemText() {
         val text = accumulatedText
         if (text.isBlank()) {
@@ -608,52 +608,54 @@ class CaptureActivity : Activity() {
             poemText?.textSize = 28f
             return
         }
-        val spannable = android.text.SpannableString(text)
+        // Remplacer les vrais \n par " \n " visible dans la ligne unique
+        val displayText = text.replace("\n", " \\n ")
 
-        // Déterminer quel mot encadrer : le dernier (reactivatedGroupIndex supprimé — TODO: mapper GroupManager.SELECTED → transcription)
-        val activeWordIndex: Int? = null  // TODO: GroupManager → index transcription
-        val words = wordTranscriptions
-        val targetIdx = if (activeWordIndex != null && activeWordIndex >= 0 && activeWordIndex < words.size) {
-            activeWordIndex
-        } else {
-            words.size - 1  // dernier mot
-        }
+        // Trouver le mot actif via GroupManager (SELECTED > LOADED)
+        val cv = captureView ?: return
+        val gm = cv.groupManager
+        val activeGroup = gm.groupsInState(GroupState.SELECTED).firstOrNull()
+            ?: gm.groupsInState(GroupState.LOADED).firstOrNull()
 
-        // Calculer la position dans accumulatedText
-        var charStart = 0
-        for (i in 0 until targetIdx.coerceAtMost(words.size)) {
-            charStart += words[i].length + 1  // +1 pour l'espace
-        }
-        val charEnd = (charStart + words.getOrElse(targetIdx) { "" }.length).coerceAtMost(text.length)
-        charStart = charStart.coerceAtMost(text.length)
-
-        if (charEnd > charStart) {
-            spannable.setSpan(
-                android.text.style.BackgroundColorSpan(android.graphics.Color.argb(60, 0, 0, 0)),
-                charStart, charEnd,
-                android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
-        }
-        poemText?.text = spannable
-        poemText?.textSize = 28f
-
-        // ═══ Vue glissante : centrer le mot actif dans la fenêtre ═══
-        poemText?.post {
-            try {
-                val layout = poemText?.layout ?: return@post
-                if (layout.lineCount == 0 || text.isEmpty()) return@post
-                val safeOffset = charStart.coerceIn(0, text.length - 1)
-                val activeLine = layout.getLineForOffset(safeOffset)
-                val viewHeight = poemText?.height ?: return@post
-                if (viewHeight <= 0) return@post
-                val lineTop = layout.getLineTop(activeLine)
-                val lineHeight = layout.getLineBottom(activeLine) - lineTop
-                val scrollY = (lineTop - viewHeight / 2 + lineHeight / 2).coerceAtLeast(0)
-                poemText?.scrollTo(0, scrollY)
-            } catch (e: Exception) {
-                // Layout pas encore prêt — ignoré
+        var activeWord: String? = null
+        if (activeGroup != null) {
+            val tw = transcriptionWriter
+            val targetSeq = cv.getActiveGroupSeq()
+            if (tw != null && tw.exists() && targetSeq != null) {
+                val entries = tw.readAll()  // (snapY, orderIndex, text)
+                activeWord = entries.find { it.second == targetSeq }?.third
             }
         }
+
+        if (activeWord != null && activeWord.isNotBlank()) {
+            val spannable = android.text.SpannableString(displayText)
+            val wordIdx = displayText.indexOf(activeWord, ignoreCase = true)
+            if (wordIdx >= 0) {
+                spannable.setSpan(
+                    android.text.style.BackgroundColorSpan(android.graphics.Color.argb(80, 0, 0, 0)),
+                    wordIdx, wordIdx + activeWord.length,
+                    android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                // Centrer horizontalement sur le mot surligné
+                val targetIdx = wordIdx
+                poemText?.text = spannable
+                poemText?.post {
+                    try {
+                        val layout = poemText?.layout ?: return@post
+                        val viewWidth = poemText?.width ?: return@post
+                        if (viewWidth <= 0 || layout.lineCount == 0) return@post
+                        val horiz = layout.getPrimaryHorizontal(targetIdx)
+                        val scrollX = (horiz - viewWidth / 2f).toInt().coerceAtLeast(0)
+                            .coerceAtMost(layout.width - viewWidth)
+                        poemText?.scrollTo(scrollX.coerceAtLeast(0), 0)
+                    } catch (_: Exception) {}
+                }
+            }
+            poemText?.text = spannable
+        } else {
+            poemText?.text = displayText
+        }
+        poemText?.textSize = 28f
     }
 
     private fun makeToolbarButton(

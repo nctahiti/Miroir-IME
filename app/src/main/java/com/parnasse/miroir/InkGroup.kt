@@ -38,7 +38,9 @@ data class InkGroup(
     val bounds: RectF = RectF(),
     val createdAt: Long = System.currentTimeMillis(),
     var modifiedAt: Long = System.currentTimeMillis(),
-    val groupLevel: GroupLevel = GroupLevel.WORD
+    val groupLevel: GroupLevel = GroupLevel.WORD,
+    /** orderIndex dans la transcription (seq de groupSequenceCounter), null si pas encore inféré */
+    var orderIndex: Int? = null
 ) {
     /** Nombre de strokes dans le groupe */
     val strokeCount: Int get() = strokeIds.size
