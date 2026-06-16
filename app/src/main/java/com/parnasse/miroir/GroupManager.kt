@@ -87,15 +87,29 @@ class GroupManager(
         val strokeTime = stroke.startNano / 1_000_000L  // ns → ms
 
         // Décider : absorption ou nouveau groupe ?
+        // ═══ Priorité 1 : groupe LOADED (actif) ═══
         val currentActive = machine.activeGroupId?.let { groups[it] }
-        val group = if (currentActive != null &&
-                        currentActive.state == GroupState.LOADED &&
-                        absorber.shouldAbsorb(currentActive, strokeBounds, strokeTime)) {
-            // Absorber dans le groupe existant
-            currentActive
-        } else {
-            // Clôturer l'ancien et créer un nouveau
-            getOrCreateActiveGroup()
+        // ═══ Priorité 2 : groupe SELECTED (survol long, ouvert aux nouveaux strokes) ═══
+        val currentSelected = machine.pendingGroupId?.let { groups[it] }
+
+        val group = when {
+            // Priorité 1 : absorber dans le groupe LOADED actif
+            currentActive != null &&
+                currentActive.state == GroupState.LOADED &&
+                absorber.shouldAbsorb(currentActive, strokeBounds, strokeTime) ->
+                currentActive
+
+            // Priorité 2 : absorber dans le groupe SELECTED → transition SELECTED→LOADED
+            currentSelected != null &&
+                currentSelected.state == GroupState.SELECTED &&
+                absorber.shouldAbsorb(currentSelected, strokeBounds, strokeTime) -> {
+                Log.i(TAG, "Absorption dans groupe SELECTED ${currentSelected.id} → LOADED")
+                machine.transition(currentSelected, GroupState.LOADED)
+                currentSelected
+            }
+
+            // Sinon : nouveau groupe
+            else -> getOrCreateActiveGroup()
         }
 
         // Associer le stroke au groupe
