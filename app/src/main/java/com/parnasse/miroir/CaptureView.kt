@@ -2287,6 +2287,9 @@ class CaptureView(context: Context) : View(context) {
     }
 
     /** Fusionne les groupes spatiaux proches du groupe SELECTED (correction/absorption). */
+    /** Fusionne les groupes spatiaux contenant des strokes du SELECTED (coherence visuelle).
+     *  Ne fusionne PAS les groupes voisins — seule l.appartenance au SELECTED compte.
+     *  La fusion entre groupes existants reste manuelle (bouton 🔗). */
     private fun absorbSelectedGroup(spatialGroups: List<MutableList<Int>>): List<List<Int>> {
         val selectedGroups = groupManager.groupsInState(GroupState.SELECTED)
         if (selectedGroups.isEmpty()) return spatialGroups
@@ -2296,14 +2299,10 @@ class CaptureView(context: Context) : View(context) {
             val selIndices = sel.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
             if (selIndices.isEmpty()) continue
 
-            val calX = CalibrationActivity.getSpatialDistanceX(context)
-            val margin = (calX * 0.75f).coerceIn(30f, 100f)
-            val selBounds = computeGroupBounds(selIndices)
-
+            // Fusionner les groupes qui contiennent des strokes du SELECTED (appartenance, pas geometrie)
             val toMerge = mutableListOf<Int>()
             for (gi in result.indices) {
-                val gBounds = computeGroupBounds(result[gi])
-                if (boundsOverlap(selBounds, gBounds, margin)) {
+                if (result[gi].any { it in selIndices }) {
                     toMerge.add(gi)
                 }
             }
@@ -2311,36 +2310,18 @@ class CaptureView(context: Context) : View(context) {
                 val merged = toMerge.flatMap { result[it] }.distinct().toMutableList()
                 for (gi in toMerge.sortedDescending()) { result.removeAt(gi) }
                 result.add(toMerge.first(), merged)
-                Log.d(TAG, "Absorption SELECTED: ${toMerge.size} groupes fusionnes (marge=$margin)")
+                Log.d(TAG, "Absorption SELECTED (stroke membership): ${toMerge.size} groupes fusionnes")
             }
         }
         return result
     }
 
-    private fun computeGroupBounds(indices: List<Int>): android.graphics.RectF {
-        val r = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
-        for (idx in indices) {
-            if (idx >= strokeRegistry.size) continue
-            for ((px, py) in strokeRegistry[idx].points) {
-                if (px < r.left) r.left = px; if (px > r.right) r.right = px
-                if (py < r.top) r.top = py; if (py > r.bottom) r.bottom = py
-            }
-        }
-        return r
-    }
-
-    private fun boundsOverlap(a: android.graphics.RectF, b: android.graphics.RectF, margin: Float): Boolean {
-        return !(a.right + margin < b.left || b.right + margin < a.left ||
-                 a.bottom + margin < b.top || b.bottom + margin < a.top)
-    }
     /** Trouve le groupe spatial contenant le stroke (cache unifié). */
     private fun findWordGroup(strokeIndex: Int): List<Int>? {
         return getSpatialGroups().find { strokeIndex in it }
     }
 
     /**
-     * Point d'acces public pour la sauvegarde : calcule les groupes
-     * de mots tels que vus par le mode edition, pour les injecter dans
      * le fichier VStar (tokens ps=4 separateurs).
      */
     /** Point d'accès pour la sauvegarde : groupes depuis GroupManager. */
