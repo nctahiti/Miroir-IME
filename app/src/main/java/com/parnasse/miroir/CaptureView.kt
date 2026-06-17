@@ -2278,8 +2278,8 @@ class CaptureView(context: Context) : View(context) {
 
         val distX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
         val distY = CalibrationActivity.getSpatialDistanceY(context)
-        val marginX = distX
-        val marginY = distY * 0.4f  // plus tolérant verticalement sans franchir la ligne
+        val marginX = (distX * 0.5f).coerceIn(7f, 20f)  // seuls les strokes qui se touchent
+        val marginY = (distY * 0.3f).coerceIn(10f, 25f)  // ne franchit pas l.interligne
 
         // Précalculer les bounds de chaque stroke
         val bounds = Array(strokeRegistry.size) { i ->
@@ -2304,24 +2304,20 @@ class CaptureView(context: Context) : View(context) {
             var gLeft = bounds[i].left; var gTop = bounds[i].top
             var gRight = bounds[i].right; var gBottom = bounds[i].bottom
 
-            var changed = true
-            while (changed) {
-                changed = false
-                val expRect = android.graphics.RectF(
-                    gLeft - marginX, gTop - marginY,
-                    gRight + marginX, gBottom + marginY
-                )
-                for (j in strokeRegistry.indices) {
-                    if (assigned[j]) continue
-                    if (android.graphics.RectF.intersects(expRect, bounds[j])) {
-                        group.add(j)
-                        assigned[j] = true
-                        if (bounds[j].left < gLeft) gLeft = bounds[j].left
-                        if (bounds[j].right > gRight) gRight = bounds[j].right
-                        if (bounds[j].top < gTop) gTop = bounds[j].top
-                        if (bounds[j].bottom > gBottom) gBottom = bounds[j].bottom
-                        changed = true
-                    }
+            // Un seul passage — pas de fermeture transitive
+            val expRect = android.graphics.RectF(
+                gLeft - marginX, gTop - marginY,
+                gRight + marginX, gBottom + marginY
+            )
+            for (j in strokeRegistry.indices) {
+                if (assigned[j]) continue
+                if (android.graphics.RectF.intersects(expRect, bounds[j])) {
+                    group.add(j)
+                    assigned[j] = true
+                    if (bounds[j].left < gLeft) gLeft = bounds[j].left
+                    if (bounds[j].right > gRight) gRight = bounds[j].right
+                    if (bounds[j].top < gTop) gTop = bounds[j].top
+                    if (bounds[j].bottom > gBottom) gBottom = bounds[j].bottom
                 }
             }
             groups.add(group)
