@@ -2272,14 +2272,16 @@ class CaptureView(context: Context) : View(context) {
     /** Groupement spatial 2D par blob — les bounds des strokes qui se chevauchent
      *  (avec marge = distX horizontal, distY*0.4 vertical) sont groupés ensemble.
      *  Indépendant de l'ordre d'écriture — une croix (+) est toujours un seul groupe. */
+    /** Groupement spatial 2D par blob, trié par X, séquentiel (pas de fermeture transitive).
+     *  marginX = distX plafonné à 25px (assez pour les lettres, pas pour l.espace entre mots). */
     private fun computeSpatialGroupsRaw(): List<MutableList<Int>> {
         if (strokeRegistry.isEmpty()) return emptyList()
         if (strokeRegistry.size == 1) return mutableListOf(mutableListOf(0))
 
         val distX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
         val distY = CalibrationActivity.getSpatialDistanceY(context)
-        val marginX = (distX * 0.5f).coerceIn(7f, 20f)  // seuls les strokes qui se touchent
-        val marginY = (distY * 0.3f).coerceIn(10f, 25f)  // ne franchit pas l.interligne
+        val marginX = distX.coerceIn(10f, 25f)  // lettres.groupées, mots.séparés
+        val marginY = (distY * 0.3f).coerceIn(10f, 25f)
 
         // Précalculer les bounds de chaque stroke
         val bounds = Array(strokeRegistry.size) { i ->
@@ -2293,38 +2295,36 @@ class CaptureView(context: Context) : View(context) {
             android.graphics.RectF(l, t, r, b)
         }
 
-        val assigned = BooleanArray(strokeRegistry.size)
+        // Trier par position X (gauche→droite) — la chaîne transitive est cassée
+        val sortedIndices = strokeRegistry.indices.sortedBy { bounds[it].left }
+
         val groups = mutableListOf<MutableList<Int>>()
+        var current = mutableListOf(sortedIndices[0])
+        var gLeft = bounds[current[0]].left; var gTop = bounds[current[0]].top
+        var gRight = bounds[current[0]].right; var gBottom = bounds[current[0]].bottom
 
-        for (i in strokeRegistry.indices) {
-            if (assigned[i]) continue
-            val group = mutableListOf(i)
-            assigned[i] = true
-
-            var gLeft = bounds[i].left; var gTop = bounds[i].top
-            var gRight = bounds[i].right; var gBottom = bounds[i].bottom
-
-            // Un seul passage — pas de fermeture transitive
+        for (k in 1 until sortedIndices.size) {
+            val idx = sortedIndices[k]
             val expRect = android.graphics.RectF(
                 gLeft - marginX, gTop - marginY,
                 gRight + marginX, gBottom + marginY
             )
-            for (j in strokeRegistry.indices) {
-                if (assigned[j]) continue
-                if (android.graphics.RectF.intersects(expRect, bounds[j])) {
-                    group.add(j)
-                    assigned[j] = true
-                    if (bounds[j].left < gLeft) gLeft = bounds[j].left
-                    if (bounds[j].right > gRight) gRight = bounds[j].right
-                    if (bounds[j].top < gTop) gTop = bounds[j].top
-                    if (bounds[j].bottom > gBottom) gBottom = bounds[j].bottom
-                }
+            if (android.graphics.RectF.intersects(expRect, bounds[idx])) {
+                current.add(idx)
+                if (bounds[idx].left < gLeft) gLeft = bounds[idx].left
+                if (bounds[idx].right > gRight) gRight = bounds[idx].right
+                if (bounds[idx].top < gTop) gTop = bounds[idx].top
+                if (bounds[idx].bottom > gBottom) gBottom = bounds[idx].bottom
+            } else {
+                groups.add(current)
+                current = mutableListOf(idx)
+                gLeft = bounds[idx].left; gRight = bounds[idx].right
+                gTop = bounds[idx].top; gBottom = bounds[idx].bottom
             }
-            groups.add(group)
         }
+        groups.add(current)
 
-        groups.sortBy { it.first() }
-        Log.d(TAG, "computeSpatialGroupsRaw (2D blob): ${groups.size} groupes, marginX=$marginX, marginY=$marginY")
+        Log.d(TAG, "computeSpatialGroupsRaw (2D blob, trié X): ${groups.size} groupes, marginX=$marginX, marginY=$marginY")
         return groups
     }
     /** Fusionne les groupes spatiaux proches du groupe SELECTED (correction/absorption). */
