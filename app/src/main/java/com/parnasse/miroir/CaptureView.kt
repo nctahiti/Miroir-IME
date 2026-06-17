@@ -2269,36 +2269,68 @@ class CaptureView(context: Context) : View(context) {
     }
 
     /** Groupement spatial pur (distance horizontale + retour à la ligne). */
+    /** Groupement spatial 2D par blob — les bounds des strokes qui se chevauchent
+     *  (avec marge = distX horizontal, distY*0.4 vertical) sont groupés ensemble.
+     *  Indépendant de l'ordre d'écriture — une croix (+) est toujours un seul groupe. */
     private fun computeSpatialGroupsRaw(): List<MutableList<Int>> {
         if (strokeRegistry.isEmpty()) return emptyList()
         if (strokeRegistry.size == 1) return mutableListOf(mutableListOf(0))
 
         val distX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
         val distY = CalibrationActivity.getSpatialDistanceY(context)
+        val marginX = distX
+        val marginY = distY * 0.4f  // plus tolérant verticalement sans franchir la ligne
 
-        val rightX = strokeRegistry.map { s -> s.points.take(s.activePoints).maxOf { it.first } }
-        val leftX  = strokeRegistry.map { s -> s.points.take(s.activePoints).minOf { it.first } }
-        val yMin   = strokeRegistry.map { s -> s.points.take(s.activePoints).minOf { it.second } }
-        val yMax   = strokeRegistry.map { s -> s.points.take(s.activePoints).maxOf { it.second } }
-
-        val groups = mutableListOf<MutableList<Int>>()
-        var current = mutableListOf(0)
-        for (i in 1 until strokeRegistry.size) {
-            val xGap = leftX[i] - rightX[i - 1]
-            val yGap = yMin[i] - yMax[i - 1]
-            val newLine = yGap > distY || (yGap > distY * 0.3f && xGap < 0)
-            if (newLine) {
-                groups.add(current); current = mutableListOf(i)
-            } else if (kotlin.math.abs(xGap) < distX) {
-                current.add(i)
-            } else {
-                groups.add(current); current = mutableListOf(i)
+        // Précalculer les bounds de chaque stroke
+        val bounds = Array(strokeRegistry.size) { i ->
+            val s = strokeRegistry[i]
+            var l = Float.MAX_VALUE; var t = Float.MAX_VALUE
+            var r = Float.MIN_VALUE; var b = Float.MIN_VALUE
+            for ((px, py) in s.points.take(s.activePoints)) {
+                if (px < l) l = px; if (px > r) r = px
+                if (py < t) t = py; if (py > b) b = py
             }
+            android.graphics.RectF(l, t, r, b)
         }
-        groups.add(current)
+
+        val assigned = BooleanArray(strokeRegistry.size)
+        val groups = mutableListOf<MutableList<Int>>()
+
+        for (i in strokeRegistry.indices) {
+            if (assigned[i]) continue
+            val group = mutableListOf(i)
+            assigned[i] = true
+
+            var gLeft = bounds[i].left; var gTop = bounds[i].top
+            var gRight = bounds[i].right; var gBottom = bounds[i].bottom
+
+            var changed = true
+            while (changed) {
+                changed = false
+                val expRect = android.graphics.RectF(
+                    gLeft - marginX, gTop - marginY,
+                    gRight + marginX, gBottom + marginY
+                )
+                for (j in strokeRegistry.indices) {
+                    if (assigned[j]) continue
+                    if (android.graphics.RectF.intersects(expRect, bounds[j])) {
+                        group.add(j)
+                        assigned[j] = true
+                        if (bounds[j].left < gLeft) gLeft = bounds[j].left
+                        if (bounds[j].right > gRight) gRight = bounds[j].right
+                        if (bounds[j].top < gTop) gTop = bounds[j].top
+                        if (bounds[j].bottom > gBottom) gBottom = bounds[j].bottom
+                        changed = true
+                    }
+                }
+            }
+            groups.add(group)
+        }
+
+        groups.sortBy { it.first() }
+        Log.d(TAG, "computeSpatialGroupsRaw (2D blob): ${groups.size} groupes, marginX=$marginX, marginY=$marginY")
         return groups
     }
-
     /** Fusionne les groupes spatiaux proches du groupe SELECTED (correction/absorption). */
     /** Fusionne les groupes spatiaux contenant des strokes du SELECTED (coherence visuelle).
      *  Ne fusionne PAS les groupes voisins — seule l.appartenance au SELECTED compte.
