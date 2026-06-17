@@ -135,7 +135,7 @@ class CalibrationActivity : Activity() {
                 spatialXSeek.progress = DEFAULT_SPATIAL_DISTANCE_X.toInt() - 5
                 spatialYSeek.progress = DEFAULT_SPATIAL_DISTANCE_Y.toInt() - 5
                 temporalSeek.progress = DEFAULT_TEMPORAL_DISTANCE.toInt() - 100
-                hoverSeek.progress = DEFAULT_LONG_HOVER_DELAY.toInt() - 50
+                hoverSeek.progress = (DEFAULT_LONG_HOVER_DELAY.toInt() - 500).coerceAtLeast(0)
                 absorbSeek.progress = DEFAULT_ABSORB_CONTACTS - 1
                 save()
             }
@@ -274,9 +274,9 @@ class CalibrationActivity : Activity() {
         })
         hoverSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sk: SeekBar, v: Int, fromUser: Boolean) {
-                hoverLabel.text = "Survol long (réactivation) : ${v + 50} ms"
+                hoverLabel.text = "Survol long (réactivation) : ${v + 500} ms"
                 if (fromUser) {
-                    prefs(this@CalibrationActivity).edit().putLong(KEY_LONG_HOVER_DELAY, (v + 50).toLong()).apply()
+                    prefs(this@CalibrationActivity).edit().putLong(KEY_LONG_HOVER_DELAY, (v + 500).toLong()).apply()
                     updateTestView()
                 }
             }
