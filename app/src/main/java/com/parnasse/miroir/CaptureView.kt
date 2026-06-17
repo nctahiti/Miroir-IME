@@ -2295,14 +2295,16 @@ class CaptureView(context: Context) : View(context) {
             android.graphics.RectF(l, t, r, b)
         }
 
-        // Trier par position X (gauche→droite) — la chaîne transitive est cassée
-        val sortedIndices = strokeRegistry.indices.sortedBy { bounds[it].left }
-
-        val groups = mutableListOf<MutableList<Int>>()
+        // Ordre d.écriture (chronologique) — les strokes d.une même ligne
+        // sont écrits ensemble, puis on passe à la ligne suivante.
+        // Pas de tri X (casserait les groupes quand un stroke de L2
+        // s.intercale horizontalement entre deux strokes de L1).
+        val sortedIndices = strokeRegistry.indices.toList()
         var current = mutableListOf(sortedIndices[0])
         var gLeft = bounds[current[0]].left; var gTop = bounds[current[0]].top
         var gRight = bounds[current[0]].right; var gBottom = bounds[current[0]].bottom
 
+        val groups = mutableListOf<MutableList<Int>>()
         for (k in 1 until sortedIndices.size) {
             val idx = sortedIndices[k]
             val expRect = android.graphics.RectF(
@@ -2324,7 +2326,7 @@ class CaptureView(context: Context) : View(context) {
         }
         groups.add(current)
 
-        Log.d(TAG, "computeSpatialGroupsRaw (2D blob, trié X): ${groups.size} groupes, marginX=$marginX, marginY=$marginY")
+        Log.d(TAG, "computeSpatialGroupsRaw (2D blob, ordre écriture): ${groups.size} groupes, marginX=$marginX, marginY=$marginY")
         return groups
     }
     /** Fusionne les groupes spatiaux proches du groupe SELECTED (correction/absorption). */
