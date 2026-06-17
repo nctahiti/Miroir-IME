@@ -600,13 +600,12 @@ class CaptureView(context: Context) : View(context) {
     private var cachedSpatialBounds: List<android.graphics.RectF>? = null
     private var cachedStrokeRegistrySize: Int = -1
 
-    /** Retourne les groupes spatiaux avec cache, réconciliés avec GroupManager. */
+    /** Retourne les groupes spatiaux avec cache, unifié (spatial + absorption SELECTED). */
     private fun getSpatialGroups(): List<List<Int>> {
         if (cachedStrokeRegistrySize != strokeRegistry.size) {
-            val rawGroups = computeWordGroups()
-            val (reconciled, _) = reconcileGroups(rawGroups)
-            cachedSpatialGroups = reconciled
-            cachedSpatialBounds = reconciled.map { group ->
+            val groups = computeWordGroups()
+            cachedSpatialGroups = groups
+            cachedSpatialBounds = groups.map { group ->
                 val r = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
                 for (idx in group) {
                     if (idx >= strokeRegistry.size) continue
@@ -1287,8 +1286,7 @@ class CaptureView(context: Context) : View(context) {
                     // Réactiver le timer d'inférence pour le groupe ouvert restant
                     inferFuture?.cancel(false)
                     inferFuture = inferExecutor.schedule({
-                        val rawGroups = computeWordGroups()
-                        val (groups, _) = reconcileGroups(rawGroups)
+                        val groups = computeWordGroups()
                         for (gi in (lastInferredSpatialGroup + 1) until groups.size) {
                             val group = groups[gi]
                             if (group.isEmpty()) continue
@@ -1721,21 +1719,7 @@ class CaptureView(context: Context) : View(context) {
         // Seul le dernier groupe (ouvert) attend un timer de 500ms.
         throttledInvalidate()
 
-        val rawGroups = computeWordGroups()
-        // ═══ RÉCONCILIATION : GroupManager a pu absorber un stroke dans un groupe existant ═══
-        // computeWordGroups() est purement spatial et ignore les décisions d'absorption.
-        // On corrige les groupes pour refléter l'état réel du GroupManager.
-        val (groups, wasReconciled) = reconcileGroups(rawGroups)
-        // ═══ Si la réconciliation a fusionné des groupes, ajuster lastInferredSpatialGroup ═══
-        // Les groupes fusionnés contiennent du nouveau contenu → doivent être ré-inférés.
-        if (wasReconciled) {
-            // Trouver le plus petit groupe spatial (par position) qui a changé
-            val firstMergedIdx = groups.indices.firstOrNull { i ->
-                i >= rawGroups.size || groups[i].size != rawGroups.getOrElse(i) { emptyList() }.size
-            } ?: 0
-            lastInferredSpatialGroup = (firstMergedIdx - 1).coerceAtLeast(-1)
-            Log.i(TAG, "Réconciliation: lastInferredSpatialGroup ajusté → $lastInferredSpatialGroup")
-        }
+        val groups = computeWordGroups()
         val openIdx = groups.size - 1
 
         // ── Inférer les groupes fermés immédiatement ──
@@ -1754,8 +1738,7 @@ class CaptureView(context: Context) : View(context) {
         if (openIdx >= 0 && openIdx > lastInferredSpatialGroup) {
             inferFuture?.cancel(false)
             inferFuture = inferExecutor.schedule({
-                val latestRawGroups = computeWordGroups()
-                val (latestGroups, _) = reconcileGroups(latestRawGroups)
+                val latestGroups = computeWordGroups()
                 val latestOpenIdx = latestGroups.size - 1
                 // Inférer le groupe ouvert s'il est resté stable 500ms
                 if (latestOpenIdx >= 0 && latestOpenIdx > lastInferredSpatialGroup) {
@@ -2265,53 +2248,21 @@ class CaptureView(context: Context) : View(context) {
         rebuildBitmap()
     }
 
-    /**
-     * Réconcilie les groupes spatiaux avec les décisions d'absorption du GroupManager.
-     * Retourne la paire (groupes réconciliés, true si des fusions ont eu lieu).
-     */
-    private fun reconcileGroups(spatialGroups: List<List<Int>>): Pair<List<List<Int>>, Boolean> {
-        val mutableGroups = spatialGroups.map { it.toMutableList() }.toMutableList()
-        var merged = false
-
-        for (inkGroup in groupManager.allGroups()) {
-            if (inkGroup.strokeIds.size <= 1) continue
-            val registryIndices = inkGroup.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
-            if (registryIndices.size <= 1) continue
-
-            // Trouver tous les groupes spatiaux qui contiennent ces strokes
-            val affectedGroupIndices = mutableGroups.mapIndexedNotNull { gi, g ->
-                if (g.any { it in registryIndices }) gi else null
-            }
-
-            if (affectedGroupIndices.size > 1) {
-                // Fusionner tous les groupes affectés en un seul
-                val mergedGroup = affectedGroupIndices
-                    .flatMap { mutableGroups[it] }
-                    .distinct()
-                    .toMutableList()
-                // Retirer les anciens groupes (ordre inverse pour préserver les indices)
-                for (gi in affectedGroupIndices.sortedDescending()) {
-                    mutableGroups.removeAt(gi)
-                }
-                // Insérer le groupe fusionné à la position du premier groupe affecté
-                mutableGroups.add(affectedGroupIndices.first(), mergedGroup)
-                merged = true
-                Log.d(TAG, "Réconciliation: ${affectedGroupIndices.size} groupes spatiaux fusionnés → [${mergedGroup.joinToString(",")}]")
-            }
-        }
-
-        return Pair(mutableGroups, merged)
+    /** Groupement spatial UNIFIÉ — source unique pour blob/survol/EDIT/sauvegarde. */
+    private fun computeWordGroups(): List<List<Int>> {
+        val groups = computeSpatialGroupsRaw()
+        // Absorption SELECTED : si un groupe est en correction, y fusionner les strokes proches
+        return absorbSelectedGroup(groups)
     }
 
-    /** Groupement spatial des strokes (distance horizontale + retour à la ligne). */
-    private fun computeWordGroups(): List<List<Int>> {
+    /** Groupement spatial pur (distance horizontale + retour à la ligne). */
+    private fun computeSpatialGroupsRaw(): List<MutableList<Int>> {
         if (strokeRegistry.isEmpty()) return emptyList()
-        if (strokeRegistry.size == 1) return listOf(listOf(0))
+        if (strokeRegistry.size == 1) return mutableListOf(mutableListOf(0))
 
-        val distX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)  // seuil mots
+        val distX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
         val distY = CalibrationActivity.getSpatialDistanceY(context)
 
-        // Bornes X droite/gauche et Y min/max de chaque stroke
         val rightX = strokeRegistry.map { s -> s.points.take(s.activePoints).maxOf { it.first } }
         val leftX  = strokeRegistry.map { s -> s.points.take(s.activePoints).minOf { it.first } }
         val yMin   = strokeRegistry.map { s -> s.points.take(s.activePoints).minOf { it.second } }
@@ -2321,28 +2272,68 @@ class CaptureView(context: Context) : View(context) {
         var current = mutableListOf(0)
         for (i in 1 until strokeRegistry.size) {
             val xGap = leftX[i] - rightX[i - 1]
-            val yGap = yMin[i] - yMax[i - 1]  // positif = plus bas
-
-            // Retour à la ligne : > distY toujours, ou > distY*0.3 si à gauche
+            val yGap = yMin[i] - yMax[i - 1]
             val newLine = yGap > distY || (yGap > distY * 0.3f && xGap < 0)
             if (newLine) {
-                Log.d(TAG, "computeWordGroups: NEW LINE — yGap=${yGap.toInt()}px > distY=${distY.toInt()} | stroke $i")
-                groups.add(current)
-                current = mutableListOf(i)
+                groups.add(current); current = mutableListOf(i)
             } else if (kotlin.math.abs(xGap) < distX) {
-                current.add(i)  // même mot
+                current.add(i)
             } else {
-                Log.d(TAG, "computeWordGroups: NEW GROUP — xGap=${xGap.toInt()}px >= distX=${distX.toInt()} | stroke $i")
-                groups.add(current)
-                current = mutableListOf(i)  // nouveau mot
+                groups.add(current); current = mutableListOf(i)
             }
         }
         groups.add(current)
-
-        Log.d(TAG, "computeWordGroups: ${groups.size} groupes, distX=$distX, distY=$distY")
         return groups
     }
-    /** Trouve le groupe spatial contenant le stroke (cache réconcilié avec GroupManager). */
+
+    /** Fusionne les groupes spatiaux proches du groupe SELECTED (correction/absorption). */
+    private fun absorbSelectedGroup(spatialGroups: List<MutableList<Int>>): List<List<Int>> {
+        val selectedGroups = groupManager.groupsInState(GroupState.SELECTED)
+        if (selectedGroups.isEmpty()) return spatialGroups
+
+        val result = spatialGroups.map { it.toMutableList() }.toMutableList()
+        for (sel in selectedGroups) {
+            val selIndices = sel.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+            if (selIndices.isEmpty()) continue
+
+            val calX = CalibrationActivity.getSpatialDistanceX(context)
+            val margin = (calX * 0.75f).coerceIn(30f, 100f)
+            val selBounds = computeGroupBounds(selIndices)
+
+            val toMerge = mutableListOf<Int>()
+            for (gi in result.indices) {
+                val gBounds = computeGroupBounds(result[gi])
+                if (boundsOverlap(selBounds, gBounds, margin)) {
+                    toMerge.add(gi)
+                }
+            }
+            if (toMerge.size > 1) {
+                val merged = toMerge.flatMap { result[it] }.distinct().toMutableList()
+                for (gi in toMerge.sortedDescending()) { result.removeAt(gi) }
+                result.add(toMerge.first(), merged)
+                Log.d(TAG, "Absorption SELECTED: ${toMerge.size} groupes fusionnes (marge=$margin)")
+            }
+        }
+        return result
+    }
+
+    private fun computeGroupBounds(indices: List<Int>): android.graphics.RectF {
+        val r = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
+        for (idx in indices) {
+            if (idx >= strokeRegistry.size) continue
+            for ((px, py) in strokeRegistry[idx].points) {
+                if (px < r.left) r.left = px; if (px > r.right) r.right = px
+                if (py < r.top) r.top = py; if (py > r.bottom) r.bottom = py
+            }
+        }
+        return r
+    }
+
+    private fun boundsOverlap(a: android.graphics.RectF, b: android.graphics.RectF, margin: Float): Boolean {
+        return !(a.right + margin < b.left || b.right + margin < a.left ||
+                 a.bottom + margin < b.top || b.bottom + margin < a.top)
+    }
+    /** Trouve le groupe spatial contenant le stroke (cache unifié). */
     private fun findWordGroup(strokeIndex: Int): List<Int>? {
         return getSpatialGroups().find { strokeIndex in it }
     }
@@ -2354,7 +2345,7 @@ class CaptureView(context: Context) : View(context) {
      */
     /** Point d'accès pour la sauvegarde : groupes depuis GroupManager. */
     fun computeWordGroupsForSave(): List<List<Int>> {
-        val groups = getSpatialGroups()  // cache réconcilié avec GroupManager
+        val groups = getSpatialGroups()  // cache unifié
         return computeVisualOrder(groups) ?: groups
     }
 
@@ -2993,6 +2984,9 @@ class CaptureView(context: Context) : View(context) {
         strokeCount = 0
         pointSeq = 0
         // reactivatedGroupIndex + activeStrokeBase supprimés — GroupManager gère
+        // ═══ Nettoyer les maps GroupManager (sinon accumulation → lag) ═══
+        inkStrokeIdToRegistryIndex.clear()
+        registryIndexToInkStrokeId.clear()
         pointInStroke = 0
         hasPrevPoint = false
         insertPending = false
