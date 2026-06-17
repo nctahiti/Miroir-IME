@@ -136,6 +136,8 @@ class CaptureActivity : Activity() {
             // ═══ Mettre à jour la transcription quand le groupe actif change ═══
             cv.onActiveGroupChanged = {
                 runOnUiThread { updatePoemText() }
+            // Persistance des groupes pour eviction du cache
+            cv.groupManager.persistence = GroupPersistence(GroupPersistence.groupsFile(noteDir, baseName))
             }
         }
 
@@ -425,6 +427,8 @@ class CaptureActivity : Activity() {
             val newTw = TranscriptionWriter(noteDir, baseName, CalibrationActivity.getSpatialDistanceY(this).toFloat())
             transcriptionWriter = newTw
             captureView?.strokeProcessor?.transcriptionWriter = newTw
+            // Persistance des groupes pour la nouvelle page
+            captureView?.groupManager?.persistence = GroupPersistence(GroupPersistence.groupsFile(noteDir, baseName))
             accumulatedText = ""
             wordTranscriptions.clear()
             currentPageIndex = -1  // nouvelle page
@@ -519,6 +523,8 @@ class CaptureActivity : Activity() {
         val tw = TranscriptionWriter(noteDir, baseName, CalibrationActivity.getSpatialDistanceY(this).toFloat())
         transcriptionWriter = tw
         captureView?.strokeProcessor?.transcriptionWriter = tw
+        // Persistance des groupes pour le chargement de page
+        captureView?.groupManager?.persistence = GroupPersistence(GroupPersistence.groupsFile(noteDir, baseName))
         
         // Afficher les transcriptions depuis le .transcription (source unique)
         if (tw.exists()) {
