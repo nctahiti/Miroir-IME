@@ -171,6 +171,18 @@ class GroupManager(
         return persistence?.readGroup(groupId)
     }
 
+    /** Enregistre un groupe charge depuis une note (loadNoteFile).
+     *  Remplit strokeToGroup pour que le survol long fonctionne. */
+    fun registerLoadedGroup(group: InkGroup) {
+        groups[group.id] = group
+        for (sid in group.strokeIds) {
+            strokeToGroup[sid] = group.id
+        }
+        machine.transition(group, GroupState.STORED)
+        persistence?.writeGroup(group)
+        Log.d(TAG, "Groupe charge: " + group.id + " (" + group.strokeCount + " strokes)")
+    }
+
     fun allGroups(): List<InkGroup> = groups.values.toList()
     fun groupsInState(state: GroupState): List<InkGroup> = groups.values.filter { it.state == state }
     fun cacheSize(): Int = groups.size

@@ -1562,7 +1562,20 @@ class CaptureView(context: Context) : View(context) {
                     loadedGroups.add(groupIndices.toList())
                 }
             }
-            // Groupes chargés — GroupManager gère maintenant
+            // ═══ Enregistrer les groupes dans GroupManager (survol, reactivation) ═══
+            for (groupIndices in loadedGroups) {
+                val inkGroup = InkGroup.create()
+                for (idx in groupIndices) {
+                    val inkStrokeId = (idx + 1).toLong()
+                    inkStrokeIdToRegistryIndex[inkStrokeId] = idx
+                    registryIndexToInkStrokeId[idx] = inkStrokeId
+                    inkGroup.strokeIds.add(inkStrokeId)
+                }
+                if (inkGroup.strokeIds.isNotEmpty()) {
+                    groupManager.registerLoadedGroup(inkGroup)
+                }
+            }
+            Log.i(TAG, "Note chargee: ${loadedGroups.size} groupes enregistres dans GroupManager")
 
             currentNotePath = file.absolutePath
             rebuildBitmap()
