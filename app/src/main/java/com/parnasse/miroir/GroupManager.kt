@@ -68,15 +68,16 @@ class GroupManager(
     }
 
     /** Test spatial simple : le stroke est-il dans le perimetre du groupe ? */
+    /** Teste si le stroke est dans le blob du groupe (mêmes règles que computeSpatialGroupsRaw). */
     private fun isStrokeNearGroup(stroke: InkStroke, group: InkGroup): Boolean {
         if (group.bounds.isEmpty) return false
-        val margin = (params.spatialDistancePx * 2f).coerceIn(30f, 100f)
+        val strokeBounds = BlobAbsorber.computeBounds(stroke)
+        if (strokeBounds.isEmpty) return false
+        val marginX = (params.spatialDistancePx * 2f).coerceIn(30f, 100f)
+        val marginY = (params.spatialDistancePx * 0.75f).coerceIn(12f, 35f)
         val expanded = RectF(group.bounds)
-        expanded.inset(-margin, -margin)
-        for (pt in stroke.points) {
-            if (expanded.contains(pt.x, pt.y)) return true
-        }
-        return false
+        expanded.inset(-marginX, -marginY)
+        return RectF.intersects(expanded, strokeBounds)
     }
     fun getOrCreateActiveGroup(): InkGroup {
         val selectedId = machine.pendingGroupId
