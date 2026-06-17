@@ -281,10 +281,10 @@ class CaptureView(context: Context) : View(context) {
         val wordSpatial = (calSpatialX * 0.5f).coerceIn(15f, 40f)  // 50% du seuil ligne, entre 15-40px
         
         groupManager.params = BlobParams(
-            spatialDistancePx = 1f,  // Absorption désactivée par défaut — activée au survol long (groupe SELECTED)
-            minOverlapPercent = 100,  // Jamais d'overlap → jamais d'absorption
-            temporalDistanceMs = 0L,  // Aucune absorption temporelle
-            transcriptionTimeoutMs = Long.MAX_VALUE,  // ⚠️ Désactivé : inférence immédiate + timer 500ms (registerCompletedStroke)
+            spatialDistancePx = wordSpatial,  // utilise par isStrokeNearGroup (marge = spatial*2, 30-100px)
+            minOverlapPercent = 100,  // plus utilise (absorption simplifiee)
+            temporalDistanceMs = 0L,  // plus utilise
+            transcriptionTimeoutMs = Long.MAX_VALUE,  // deseactive : inference via registerCompletedStroke
             groupLevel = GroupLevel.WORD,
             captureAnchor = CaptureAnchor.BOTTOM
         )

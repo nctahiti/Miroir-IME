@@ -41,18 +41,24 @@ class GroupManager(
         if (stroke.wasCanceled || stroke.points.isEmpty()) return
         val strokeBounds = BlobAbsorber.computeBounds(stroke)
         if (strokeBounds.isEmpty) return
-        val strokeTime = stroke.startNano / 1_000_000L
-        val currentActive = machine.activeGroupId?.let { groups[it] }
-        val currentSelected = machine.pendingGroupId?.let { groups[it] }
-        val group = when {
-            currentActive != null && currentActive.state == GroupState.LOADED && absorber.shouldAbsorb(currentActive, strokeBounds, strokeTime) -> currentActive
-            currentSelected != null && currentSelected.state == GroupState.SELECTED && absorber.shouldAbsorb(currentSelected, strokeBounds, strokeTime) -> {
-                Log.i(TAG, "Absorption SELECTED " + currentSelected.id + " -> LOADED")
-                machine.transition(currentSelected, GroupState.LOADED)
-                currentSelected
+
+        // Simplifie : seul le groupe SELECTED peut absorber
+        // L'intention est spatiale — stylet dans le blob → ajout, sinon → nouvelle session
+        val selected = machine.pendingGroupId?.let { groups[it] }
+        val group = if (selected != null && selected.state == GroupState.SELECTED
+                        && isStrokeNearGroup(stroke, selected)) {
+            Log.i(TAG, "Absorption SELECTED " + selected.id + " (stroke proche)")
+            selected
+        } else {
+            // Fermer l'ancien SELECTED avant d'ouvrir une nouvelle session
+            if (selected != null) {
+                machine.transition(selected, GroupState.STORED)
+                onGroupAutoDeselected?.invoke()
+                evictGroup(selected.id)
             }
-            else -> getOrCreateActiveGroup()
+            getOrCreateActiveGroup()
         }
+
         group.strokeIds.add(stroke.id)
         strokeToGroup[stroke.id] = group.id
         expandBounds(group, strokeBounds)
@@ -61,6 +67,17 @@ class GroupManager(
         resetTranscriptionTimeout(group)
     }
 
+    /** Test spatial simple : le stroke est-il dans le perimetre du groupe ? */
+    private fun isStrokeNearGroup(stroke: InkStroke, group: InkGroup): Boolean {
+        if (group.bounds.isEmpty) return false
+        val margin = (params.spatialDistancePx * 2f).coerceIn(30f, 100f)
+        val expanded = RectF(group.bounds)
+        expanded.inset(-margin, -margin)
+        for (pt in stroke.points) {
+            if (expanded.contains(pt.x, pt.y)) return true
+        }
+        return false
+    }
     fun getOrCreateActiveGroup(): InkGroup {
         val selectedId = machine.pendingGroupId
         if (selectedId != null) {
