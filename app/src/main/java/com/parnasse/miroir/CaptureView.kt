@@ -963,6 +963,9 @@ class CaptureView(context: Context) : View(context) {
                         postInvalidate()
                     }
                 }
+                // Mettre à jour la référence pour le prochain delta (incrémental)
+                editStartX = x
+                editStartY = y
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 // Réordonnancement : après un drag, l'ordre visuel des mots
