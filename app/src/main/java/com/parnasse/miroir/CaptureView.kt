@@ -2286,21 +2286,109 @@ class CaptureView(context: Context) : View(context) {
         rebuildBitmap()
     }
 
-    /** Groupement spatial UNIFIÉ — source unique pour blob/survol/EDIT/sauvegarde. */
+    /** Groupement spatial UNIFIÉ — source unique pour blob/survol/EDIT/sauvegarde.
+     *  seedGroups (non-null au rechargement) = contrainte, pas contournement :
+     *  les strokes d'un seedGroup restent ensemble, le blob 2D groupe les orphelins. */
     private fun computeWordGroups(): List<List<Int>> {
-        // ── MODE RECHARGEMENT : identité préservée depuis .groups ──
         val seed = seedGroups
-        if (seed != null) {
-            val covered = seed.flatten().toSet()
-            val allIndices = strokeRegistry.indices.toSet()
-            if (allIndices == covered) return seed  // rien de nouveau
-            // Nouveaux strokes → chacun son groupe (pas de blob 2D)
-            val newStrokes = (allIndices - covered).map { listOf(it) }
-            return seed + newStrokes
+        if (seed == null) {
+            // ── MODE ÉCRITURE LIVE : blob 2D spatial + absorption SELECTED ──
+            return absorbSelectedGroup(computeSpatialGroupsRaw())
         }
-        // ── MODE ÉCRITURE LIVE : blob 2D spatial + absorption SELECTED ──
-        val groups = computeSpatialGroupsRaw()
-        return absorbSelectedGroup(groups)
+        // ── MODE RECHARGEMENT : seedGroups = contrainte ──
+        val covered = seed.flatten().toSet()
+        val allIndices = strokeRegistry.indices.toSet()
+        if (allIndices == covered) return seed
+
+        // Blob 2D sur les strokes orphelins
+        val newIndices = (allIndices - covered).toList()
+        val newGroups = computeSpatialGroupsFor(newIndices)
+
+        // Absorption : chaque nouveau groupe blob → intersecte un seedGroup ?
+        val result = seed.map { it.toMutableList() }.toMutableList()
+        for (newGroup in newGroups) {
+            var absorbed = false
+            for (seedGroup in result) {
+                if (blobIntersects(newGroup, seedGroup)) {
+                    seedGroup.addAll(newGroup)
+                    absorbed = true
+                    break
+                }
+            }
+            if (!absorbed) result.add(newGroup.toMutableList())
+        }
+        return result
+    }
+
+    /** Vrai si les bounds (RectF) des deux groupes se chevauchent avec les marges blob 2D. */
+    private fun blobIntersects(groupA: List<Int>, groupB: List<Int>): Boolean {
+        val distX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
+        val distY = CalibrationActivity.getSpatialDistanceY(context)
+        val marginX = distX.coerceIn(10f, 25f)
+        val marginY = (distY * 0.3f).coerceIn(10f, 25f)
+        fun boundsOf(indices: List<Int>): android.graphics.RectF {
+            var l = Float.MAX_VALUE; var t = Float.MAX_VALUE
+            var r = Float.MIN_VALUE; var b = Float.MIN_VALUE
+            for (idx in indices) {
+                if (idx >= strokeRegistry.size) continue
+                for ((px, py) in strokeRegistry[idx].points.take(strokeRegistry[idx].activePoints)) {
+                    if (px < l) l = px; if (px > r) r = px
+                    if (py < t) t = py; if (py > b) b = py
+                }
+            }
+            return android.graphics.RectF(l, t, r, b)
+        }
+        val ba = boundsOf(groupA); if (ba.isEmpty) return false
+        val bb = boundsOf(groupB); if (bb.isEmpty) return false
+        val expanded = android.graphics.RectF(
+            ba.left - marginX, ba.top - marginY,
+            ba.right + marginX, ba.bottom + marginY
+        )
+        return android.graphics.RectF.intersects(expanded, bb)
+    }
+
+    /** Blob 2D restreint à un sous-ensemble d'indices (strokes orphelins au rechargement). */
+    private fun computeSpatialGroupsFor(indices: List<Int>): List<MutableList<Int>> {
+        if (indices.isEmpty()) return emptyList()
+        if (indices.size == 1) return mutableListOf(mutableListOf(indices[0]))
+        val distX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
+        val distY = CalibrationActivity.getSpatialDistanceY(context)
+        val marginX = distX.coerceIn(10f, 25f)
+        val marginY = (distY * 0.3f).coerceIn(10f, 25f)
+        val idxToBounds = mutableMapOf<Int, android.graphics.RectF>()
+        for (i in indices) {
+            val s = strokeRegistry[i]
+            var l = Float.MAX_VALUE; var t = Float.MAX_VALUE
+            var r = Float.MIN_VALUE; var b = Float.MIN_VALUE
+            for ((px, py) in s.points.take(s.activePoints)) {
+                if (px < l) l = px; if (px > r) r = px
+                if (py < t) t = py; if (py > b) b = py
+            }
+            idxToBounds[i] = android.graphics.RectF(l, t, r, b)
+        }
+        val sorted = indices.toList()
+        var current = mutableListOf(sorted[0])
+        var gLeft = idxToBounds[sorted[0]]!!.left; var gTop = idxToBounds[sorted[0]]!!.top
+        var gRight = idxToBounds[sorted[0]]!!.right; var gBottom = idxToBounds[sorted[0]]!!.bottom
+        val groups = mutableListOf<MutableList<Int>>()
+        for (k in 1 until sorted.size) {
+            val idx = sorted[k]
+            val expRect = android.graphics.RectF(gLeft - marginX, gTop - marginY, gRight + marginX, gBottom + marginY)
+            if (android.graphics.RectF.intersects(expRect, idxToBounds[idx]!!)) {
+                current.add(idx)
+                if (idxToBounds[idx]!!.left < gLeft) gLeft = idxToBounds[idx]!!.left
+                if (idxToBounds[idx]!!.right > gRight) gRight = idxToBounds[idx]!!.right
+                if (idxToBounds[idx]!!.top < gTop) gTop = idxToBounds[idx]!!.top
+                if (idxToBounds[idx]!!.bottom > gBottom) gBottom = idxToBounds[idx]!!.bottom
+            } else {
+                groups.add(current)
+                current = mutableListOf(idx)
+                gLeft = idxToBounds[idx]!!.left; gRight = idxToBounds[idx]!!.right
+                gTop = idxToBounds[idx]!!.top; gBottom = idxToBounds[idx]!!.bottom
+            }
+        }
+        groups.add(current)
+        return groups
     }
 
     /** Groupement spatial pur (distance horizontale + retour à la ligne). */
