@@ -922,7 +922,9 @@ class CaptureView(context: Context) : View(context) {
                     }
                 }
                 // ═══ Déplacement spatial (drag normal) ═══
-                if (Math.abs(x - editStartX) > 8 || Math.abs(y - editStartY) > 8) {
+                // Comparer avec la position d'origine (longPressStart), pas editStart
+                // car les MOVE consécutifs ont des deltas <1px à 100Hz
+                if (Math.abs(x - longPressStartX) > 8 || Math.abs(y - longPressStartY) > 8) {
                     wasDrag = true
                 }
                 val group = dragWordGroup
@@ -961,9 +963,6 @@ class CaptureView(context: Context) : View(context) {
                         postInvalidate()
                     }
                 }
-                // Toujours mettre à jour la référence pour le prochain MOVE
-                editStartX = x
-                editStartY = y
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 // Réordonnancement : après un drag, l'ordre visuel des mots
