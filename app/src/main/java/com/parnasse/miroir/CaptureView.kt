@@ -943,7 +943,7 @@ class CaptureView(context: Context) : View(context) {
                     val cy = computeGroupCenterY(group)
                     val snappedY = snapToLine(cy)
                     val distToLine = Math.abs(cy - snappedY)
-                    if (distToLine <= 50f) {
+                    if (distToLine <= 20f) {
                         val targetY = snappedY + dragWordYOffset
                         val snapDy = targetY - cy
                         for (idx in group) {
