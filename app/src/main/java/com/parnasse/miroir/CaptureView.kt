@@ -2023,19 +2023,18 @@ class CaptureView(context: Context) : View(context) {
             canvas.drawLine(0f, spacing * i, width.toFloat(), spacing * i, guidePaint)
         }
 
-        // ═══ POIGNÉES D'INTERLIGNE — zone de sélection pour chaque groupe ═══
+        // ═══ STROKES : bitmap (complétés) + tracé courant ═══
+        bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+
+        // ═══ POIGNÉES D'INTERLIGNE — au-dessus du bitmap, sous le blob ═══
         val groups = getSpatialGroups()
         val bounds = getSpatialBounds()
         for (gi in groups.indices) {
             val r = bounds[gi]
             if (r.left >= Float.MAX_VALUE) continue
             val lineY = snapToLine((r.top + r.bottom) / 2f)
-            handlePaint.strokeWidth = 4f
             canvas.drawLine(r.left, lineY, r.right, lineY, handlePaint)
         }
-
-        // ═══ STROKES : bitmap (complétés) + tracé courant ═══
-        bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
 
         // Blob visuel — sur le bitmap, derrière le stroke courant
         if (showVisualOverlays) drawActiveGroupBlob(canvas)
