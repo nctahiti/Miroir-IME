@@ -562,6 +562,12 @@ class CaptureView(context: Context) : View(context) {
                 isHovering = false
                 hoverStrokeIndex = null
                 hoverWordGroup = null
+                // Si en ÉDITION → retour CAPTURE (hover perdu = fin du mode déplacement)
+                if (currentMode == CaptureMode.EDIT) {
+                    currentMode = CaptureMode.CAPTURE
+                    onModeChanged?.invoke(currentMode)
+                    Log.d(TAG, "ÉDITION → CAPTURE (HOVER_EXIT)")
+                }
                 invalidate()
             }
         }
@@ -978,9 +984,14 @@ class CaptureView(context: Context) : View(context) {
                     flowState = null
                     flowBackup = null
                     selectedWordGroup = null
-                    currentMode = CaptureMode.CAPTURE
-                    onModeChanged?.invoke(currentMode)
-                    Log.d(TAG, "ÉDITION → CAPTURE (drag terminé)")
+                    // Rester en ÉDITION tant que le hover est actif (re-drag possible)
+                    if (!isHovering) {
+                        currentMode = CaptureMode.CAPTURE
+                        onModeChanged?.invoke(currentMode)
+                        Log.d(TAG, "ÉDITION → CAPTURE (drag terminé, pas de hover)")
+                    } else {
+                        Log.d(TAG, "ÉDITION maintenu (hover actif, re-drag possible)")
+                    }
                     refreshSpatialBounds()  // strokes déplacés → bounds à jour, groupes inchangés
                 }
                 // Si pas de drag, garder la sélection active (re-grab possible)
@@ -1118,6 +1129,12 @@ class CaptureView(context: Context) : View(context) {
     // =========================================================================
 
     private fun handleCaptureEvent(event: MotionEvent) {
+        // Si en ÉDITION sans long-press → l'utilisateur pose le stylet pour écrire
+        if (currentMode == CaptureMode.EDIT && !longPressTriggered && event.actionMasked == MotionEvent.ACTION_DOWN) {
+            currentMode = CaptureMode.CAPTURE
+            onModeChanged?.invoke(currentMode)
+            Log.d(TAG, "ÉDITION → CAPTURE (PENDOWN, écriture)")
+        }
         // Si un long-press a basculé en mode ÉDITION, forwarder au handler EDIT
         if (longPressTriggered && currentMode == CaptureMode.EDIT) {
             if (event.actionMasked == MotionEvent.ACTION_UP) {
@@ -1328,8 +1345,14 @@ class CaptureView(context: Context) : View(context) {
                     flowState = null
                     flowBackup = null
                     selectedWordGroup = null
-                    currentMode = CaptureMode.CAPTURE
-                    onModeChanged?.invoke(currentMode)
+                    // Rester en ÉDITION tant que le hover est actif (re-drag possible)
+                    if (!isHovering) {
+                        currentMode = CaptureMode.CAPTURE
+                        onModeChanged?.invoke(currentMode)
+                        Log.d(TAG, "ÉDITION → CAPTURE (stylet levé après long-press, pas de hover)")
+                    } else {
+                        Log.d(TAG, "ÉDITION maintenu après long-press (hover actif)")
+                    }
                     // Reconstruire le bitmap avec le mot à sa position finale
                     rebuildBitmap()
                     // Réactiver le timer d'inférence pour le groupe ouvert restant
