@@ -597,7 +597,7 @@ class CaptureView(context: Context) : View(context) {
         val found = spatialGroups.withIndex().firstOrNull { (gi, group) ->
             val r = spatialBounds[gi]
             val groupLine = snapToLine((r.top + r.bottom) / 2f)
-            r.left < Float.MAX_VALUE && x >= r.left && x <= r.right && Math.abs(y - groupLine) < 30f
+            r.left < Float.MAX_VALUE && x >= r.left && x <= r.right && Math.abs(y - groupLine) < 50f
         }
         val newWordGroup = found?.value
         val newStrokeIdx = newWordGroup?.firstOrNull()
@@ -690,7 +690,7 @@ class CaptureView(context: Context) : View(context) {
             val r = spatialBounds[gi]
             // Sélection par poignée d'interligne : Y proche de la ligne, X dans l'emprise du groupe
             val groupLine = snapToLine((r.top + r.bottom) / 2f)
-            r.left < Float.MAX_VALUE && hx >= r.left && hx <= r.right && Math.abs(hy - groupLine) < 30f
+            r.left < Float.MAX_VALUE && hx >= r.left && hx <= r.right && Math.abs(hy - groupLine) < 50f
         }
         val targetIndices = targetGroup?.value ?: run {
             longHoverStartMs = 0; longHoverFirstStroke = -1; return
