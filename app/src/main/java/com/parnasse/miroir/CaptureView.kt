@@ -678,7 +678,9 @@ class CaptureView(context: Context) : View(context) {
         val spatialBounds = getSpatialBounds()
         val targetGroup = spatialGroups.withIndex().firstOrNull { (gi, group) ->
             val r = spatialBounds[gi]
-            r.left < Float.MAX_VALUE && hx >= r.left && hx <= r.right && hy >= r.top - 20 && hy <= r.bottom + 20
+            // Sélection par poignée d'interligne : Y proche de la ligne, X dans l'emprise du groupe
+            val groupLine = snapToLine((r.top + r.bottom) / 2f)
+            r.left < Float.MAX_VALUE && hx >= r.left && hx <= r.right && Math.abs(hy - groupLine) < 30f
         }
         val targetIndices = targetGroup?.value ?: run {
             longHoverStartMs = 0; longHoverFirstStroke = -1; return
