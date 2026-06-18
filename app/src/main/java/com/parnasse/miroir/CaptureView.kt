@@ -333,6 +333,14 @@ class CaptureView(context: Context) : View(context) {
         style = Paint.Style.STROKE
     }
 
+    // Poignée d'interligne (zone de sélection)
+    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(80, 80, 80, 80)  // gris discret e-ink
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+
     // -- Blob visuel du groupe actif (avant inférence) ------------------------
     private val blobActivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(40, 68, 136, 255)    // bleu très discret (e-ink friendly)
@@ -2013,6 +2021,17 @@ class CaptureView(context: Context) : View(context) {
         val spacing = height.toFloat() / (guideLines + 1)
         for (i in 1..guideLines) {
             canvas.drawLine(0f, spacing * i, width.toFloat(), spacing * i, guidePaint)
+        }
+
+        // ═══ POIGNÉES D'INTERLIGNE — zone de sélection pour chaque groupe ═══
+        val groups = getSpatialGroups()
+        val bounds = getSpatialBounds()
+        for (gi in groups.indices) {
+            val r = bounds[gi]
+            if (r.left >= Float.MAX_VALUE) continue
+            val lineY = snapToLine((r.top + r.bottom) / 2f)
+            handlePaint.strokeWidth = 4f
+            canvas.drawLine(r.left, lineY, r.right, lineY, handlePaint)
         }
 
         // ═══ STROKES : bitmap (complétés) + tracé courant ═══
