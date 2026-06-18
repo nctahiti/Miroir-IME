@@ -680,6 +680,7 @@ class CaptureView(context: Context) : View(context) {
 
         // Désélectionner l'ancien
         deselectAllGroups()
+        temporalEraseAvailable = false  // nouveau groupe → reset effacement temporel
 
         // Trouver le stroke dans GroupManager et sélectionner
         val anyStrokeId = registryIndexToInkStrokeId[firstStroke] ?: return
@@ -745,6 +746,8 @@ class CaptureView(context: Context) : View(context) {
     private var longPressStartTime = 0L
     private var longPressTriggered = false
     private var longPressDisabled = false   // armé si le stylet bouge hors zone → pas de long-press
+    // ═══ Effacement temporel (phase 1: structure, phase 2: mécanique) ═══
+    private var temporalEraseAvailable = false  // armé après un drag → prochain long-press = effacement
 
     /**
      * Détecte un double-tap sur un mot clôturé → le réactive.
@@ -948,6 +951,9 @@ class CaptureView(context: Context) : View(context) {
                             }
                         }
                     }
+                    // ═══ Phase 1: armer l'effacement temporel pour le prochain long-press ═══
+                    temporalEraseAvailable = true
+                    Log.d(TAG, "Effacement temporel disponible (prochain long-press = ⏳)")
                     dragWordGroup = null
                     flowState = null
                     flowBackup = null
@@ -1159,6 +1165,7 @@ class CaptureView(context: Context) : View(context) {
                     val dy = Math.abs(event.y - longPressStartY)
                     if (dt > 500 && dx < 15f && dy < 15f) {
                         longPressTriggered = true
+                        // ═══ PHASE 2 (à venir) : si temporalEraseAvailable → effacement temporel ═══
                         // ═══ LONG-PRESS → DRAG : annuler le stroke, préparer le drag ═══
                         drawingStroke = null
                         currentPath.clear()
@@ -3140,6 +3147,7 @@ class CaptureView(context: Context) : View(context) {
         pointInStroke = 0
         hasPrevPoint = false
         insertPending = false
+        temporalEraseAvailable = false  // reset effacement temporel
         throttledInvalidate()
     }
 }
