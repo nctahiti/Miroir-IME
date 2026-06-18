@@ -939,21 +939,6 @@ class CaptureView(context: Context) : View(context) {
                         }
                     }
 
-                    // Snap Y : préserver l'offset du mot par rapport à l'interligne
-                    // (pour garder l'empreinte cursive : descente du 'g', hampe du 't', etc.)
-                    val cy = computeGroupCenterY(group)
-                    val snappedY = snapToLine(cy)
-                    val targetY = snappedY + dragWordYOffset
-                    val snapDy = targetY - cy
-                    if (Math.abs(snapDy) > 0.5f) {
-                        for (idx in group) {
-                            if (idx < strokeRegistry.size) {
-                                strokeRegistry[idx].translate(0f, snapDy)
-                            }
-                        }
-                        editStartY += snapDy
-                    }
-
                     // Pendant un long-press drag, utiliser currentPath pour le rendu visible
                     if (longPressTriggered) {
                         updateDragCurrentPath()
