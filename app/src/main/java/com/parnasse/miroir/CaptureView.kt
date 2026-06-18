@@ -774,6 +774,7 @@ class CaptureView(context: Context) : View(context) {
     private var longPressDisabled = false   // armé si le stylet bouge hors zone → pas de long-press
     // ═══ Effacement temporel (phase 1: structure, phase 2: mécanique) ═══
     private var temporalEraseAvailable = false  // armé après un drag → prochain long-press = effacement
+    private var temporalMode = false             // actif pendant l'effacement temporel
 
     /**
      * Détecte un double-tap sur un mot clôturé → le réactive.
@@ -821,6 +822,11 @@ class CaptureView(context: Context) : View(context) {
             MotionEvent.ACTION_DOWN -> {
                 editStartX = x; editStartY = y
                 wasDrag = false
+                // Armer le timer long-press pour le toggle EDIT_SPATIAL ↔ TEMPORAL
+                longPressStartX = x
+                longPressStartY = y
+                longPressStartTime = System.currentTimeMillis()
+                longPressDisabled = false
                 val hitIdx = hitTest(x, y)
 
                 // Tap sur espace vide → retour en mode CAPTURE (ou annuler merge)
@@ -896,6 +902,26 @@ class CaptureView(context: Context) : View(context) {
                 invalidate()
             }
             MotionEvent.ACTION_MOVE -> {
+                // ═══ Mode temporel actif : scrub timeline (phase 2) ═══
+                if (temporalMode) {
+                    // TODO phase 2 : deltaX → timelinePosition → applyTimelineScrub
+                    Log.v(TAG, "⏳ temporalMode MOVE @ ($x, $y)")
+                    return
+                }
+                // ═══ Long-press en EDIT : toggle EDIT_SPATIAL ↔ EDIT_TEMPORAL ═══
+                if (!longPressTriggered && !longPressDisabled && temporalEraseAvailable) {
+                    val dt = System.currentTimeMillis() - longPressStartTime
+                    val dx = Math.abs(x - longPressStartX)
+                    val dy = Math.abs(y - longPressStartY)
+                    if (dt > 500 && dx < 15f && dy < 15f) {
+                        longPressTriggered = true
+                        temporalMode = !temporalMode  // toggle
+                        temporalEraseAvailable = false // consommé
+                        Log.i(TAG, if (temporalMode) "⏳ EDIT_TEMPORAL activé" else "✋ Retour EDIT_SPATIAL")
+                        return  // ce MOVE ne produit pas de drag
+                    }
+                }
+                // ═══ Déplacement spatial (drag normal) ═══
                 if (Math.abs(x - editStartX) > 8 || Math.abs(y - editStartY) > 8) {
                     wasDrag = true
                 }
@@ -3179,6 +3205,7 @@ class CaptureView(context: Context) : View(context) {
         hasPrevPoint = false
         insertPending = false
         temporalEraseAvailable = false  // reset effacement temporel
+        temporalMode = false
         throttledInvalidate()
     }
 }
