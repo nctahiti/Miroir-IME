@@ -637,6 +637,26 @@ class CaptureView(context: Context) : View(context) {
         cachedSpatialBounds = null
     }
 
+    /** Rafraîchit uniquement les bounds (sans recalculer les groupes).
+     *  À appeler après un drag — les strokes ont bougé mais les groupes sont inchangés. */
+    private fun refreshSpatialBounds() {
+        val groups = cachedSpatialGroups ?: return
+        cachedSpatialBounds = groups.map { group ->
+            val r = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
+            for (idx in group) {
+                if (idx >= strokeRegistry.size) continue
+                val s = strokeRegistry[idx]
+                for ((px, py) in s.points.take(s.activePoints)) {
+                    if (px < r.left) r.left = px
+                    if (px > r.right) r.right = px
+                    if (py < r.top) r.top = py
+                    if (py > r.bottom) r.bottom = py
+                }
+            }
+            r
+        }
+    }
+
     /**
      * Survol long : timer basé sur System.currentTimeMillis() — résistant au jitter e-ink.
      */
@@ -961,6 +981,7 @@ class CaptureView(context: Context) : View(context) {
                     currentMode = CaptureMode.CAPTURE
                     onModeChanged?.invoke(currentMode)
                     Log.d(TAG, "ÉDITION → CAPTURE (drag terminé)")
+                    refreshSpatialBounds()  // strokes déplacés → bounds à jour, groupes inchangés
                 }
                 // Si pas de drag, garder la sélection active (re-grab possible)
                 // Mais si on vient d'un long-press, nettoyer currentPath et rebuild
@@ -1327,6 +1348,7 @@ class CaptureView(context: Context) : View(context) {
                         }
                     }, 500, java.util.concurrent.TimeUnit.MILLISECONDS)
                     Log.d(TAG, "ÉDITION → CAPTURE (stylet levé après long-press)")
+                    refreshSpatialBounds()  // strokes déplacés → bounds à jour
                     invalidate()
                     return
                 }
