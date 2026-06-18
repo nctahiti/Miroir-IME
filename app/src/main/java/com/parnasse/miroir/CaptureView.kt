@@ -599,6 +599,9 @@ class CaptureView(context: Context) : View(context) {
     private var cachedSpatialGroups: List<List<Int>>? = null
     private var cachedSpatialBounds: List<android.graphics.RectF>? = null
     private var cachedStrokeRegistrySize: Int = -1
+    // Groupes chargés depuis .groups — si non-null, computeWordGroups() les restitue
+    // sans recalcul spatial. null = mode écriture live (blob 2D normal).
+    private var seedGroups: List<List<Int>>? = null
 
     /** Retourne les groupes spatiaux avec cache, unifié (spatial + absorption SELECTED). */
     private fun getSpatialGroups(): List<List<Int>> {
@@ -625,6 +628,13 @@ class CaptureView(context: Context) : View(context) {
     private fun getSpatialBounds(): List<android.graphics.RectF> {
         getSpatialGroups()  // assure le cache
         return cachedSpatialBounds!!
+    }
+
+    /** Invalide le cache spatial — force un recalcul au prochain getSpatialGroups(). */
+    private fun invalidateSpatialCache() {
+        cachedStrokeRegistrySize = -1
+        cachedSpatialGroups = null
+        cachedSpatialBounds = null
     }
 
     /**
@@ -1588,6 +1598,10 @@ class CaptureView(context: Context) : View(context) {
             }
             Log.i(TAG, "Note chargee: ${loadedGroups.size} groupes enregistres dans GroupManager")
 
+            // ═══ seedGroups : identité préservée au rechargement ═══
+            seedGroups = loadedGroups.toList()
+            invalidateSpatialCache()
+
             currentNotePath = file.absolutePath
             rebuildBitmap()
             currentMode = CaptureMode.EDIT
@@ -2274,8 +2288,18 @@ class CaptureView(context: Context) : View(context) {
 
     /** Groupement spatial UNIFIÉ — source unique pour blob/survol/EDIT/sauvegarde. */
     private fun computeWordGroups(): List<List<Int>> {
+        // ── MODE RECHARGEMENT : identité préservée depuis .groups ──
+        val seed = seedGroups
+        if (seed != null) {
+            val covered = seed.flatten().toSet()
+            val allIndices = strokeRegistry.indices.toSet()
+            if (allIndices == covered) return seed  // rien de nouveau
+            // Nouveaux strokes → chacun son groupe (pas de blob 2D)
+            val newStrokes = (allIndices - covered).map { listOf(it) }
+            return seed + newStrokes
+        }
+        // ── MODE ÉCRITURE LIVE : blob 2D spatial + absorption SELECTED ──
         val groups = computeSpatialGroupsRaw()
-        // Absorption SELECTED : si un groupe est en correction, y fusionner les strokes proches
         return absorbSelectedGroup(groups)
     }
 
@@ -3022,6 +3046,9 @@ class CaptureView(context: Context) : View(context) {
         // ═══ Nettoyer les maps GroupManager (sinon accumulation → lag) ═══
         inkStrokeIdToRegistryIndex.clear()
         registryIndexToInkStrokeId.clear()
+        // ═══ seedGroups : retour au mode écriture live ═══
+        seedGroups = null
+        invalidateSpatialCache()
         pointInStroke = 0
         hasPrevPoint = false
         insertPending = false
