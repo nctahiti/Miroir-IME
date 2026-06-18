@@ -511,7 +511,16 @@ class CaptureView(context: Context) : View(context) {
         // Stylo : dispatch selon le mode (EDIT/INSERT/REVIEW)
         if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) {
             when (currentMode) {
-                CaptureMode.EDIT -> handleEditEvent(event)
+                CaptureMode.EDIT -> {
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                        // Pose du stylet = fin du déplacement, retour à l'écriture
+                        currentMode = CaptureMode.CAPTURE
+                        onModeChanged?.invoke(currentMode)
+                        handleCaptureEvent(event)
+                    } else {
+                        handleEditEvent(event)
+                    }
+                }
                 CaptureMode.INSERT -> handleInsertEvent(event)
                 else -> { /* REVIEW / autres : ignorer le stylo */ }
             }
@@ -1124,12 +1133,6 @@ class CaptureView(context: Context) : View(context) {
     // =========================================================================
 
     private fun handleCaptureEvent(event: MotionEvent) {
-        // Si en ÉDITION sans long-press → l'utilisateur pose le stylet pour écrire
-        if (currentMode == CaptureMode.EDIT && !longPressTriggered && event.actionMasked == MotionEvent.ACTION_DOWN) {
-            currentMode = CaptureMode.CAPTURE
-            onModeChanged?.invoke(currentMode)
-            Log.d(TAG, "ÉDITION → CAPTURE (PENDOWN, écriture)")
-        }
         // Si un long-press a basculé en mode ÉDITION, forwarder au handler EDIT
         if (longPressTriggered && currentMode == CaptureMode.EDIT) {
             if (event.actionMasked == MotionEvent.ACTION_UP) {
