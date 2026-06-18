@@ -2351,10 +2351,10 @@ class CaptureView(context: Context) : View(context) {
 
     /** Vrai si les bounds (RectF) des deux groupes se chevauchent avec les marges blob 2D. */
     private fun blobIntersects(groupA: List<Int>, groupB: List<Int>): Boolean {
-        val distX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
+        val distX = CalibrationActivity.getSpatialDistanceX(context) * 0.5f
         val distY = CalibrationActivity.getSpatialDistanceY(context)
-        val marginX = distX.coerceIn(10f, 25f)
-        val marginY = (distY * 0.3f).coerceIn(10f, 25f)
+        val marginX = maxOf(distX, 5f)
+        val marginY = maxOf(distY * 0.3f, 5f)
         fun boundsOf(indices: List<Int>): android.graphics.RectF {
             var l = Float.MAX_VALUE; var t = Float.MAX_VALUE
             var r = Float.MIN_VALUE; var b = Float.MIN_VALUE
@@ -2380,10 +2380,10 @@ class CaptureView(context: Context) : View(context) {
     private fun computeSpatialGroupsFor(indices: List<Int>): List<MutableList<Int>> {
         if (indices.isEmpty()) return emptyList()
         if (indices.size == 1) return mutableListOf(mutableListOf(indices[0]))
-        val distX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
+        val distX = CalibrationActivity.getSpatialDistanceX(context) * 0.5f
         val distY = CalibrationActivity.getSpatialDistanceY(context)
-        val marginX = distX.coerceIn(10f, 25f)
-        val marginY = (distY * 0.3f).coerceIn(10f, 25f)
+        val marginX = maxOf(distX, 5f)
+        val marginY = maxOf(distY * 0.3f, 5f)
         val idxToBounds = mutableMapOf<Int, android.graphics.RectF>()
         for (i in indices) {
             val s = strokeRegistry[i]
@@ -2430,10 +2430,10 @@ class CaptureView(context: Context) : View(context) {
         if (strokeRegistry.isEmpty()) return emptyList()
         if (strokeRegistry.size == 1) return mutableListOf(mutableListOf(0))
 
-        val distX = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
+        val distX = CalibrationActivity.getSpatialDistanceX(context) * 0.5f
         val distY = CalibrationActivity.getSpatialDistanceY(context)
-        val marginX = distX.coerceIn(10f, 25f)  // lettres.groupées, mots.séparés
-        val marginY = (distY * 0.3f).coerceIn(10f, 25f)
+        val marginX = maxOf(distX, 5f)
+        val marginY = maxOf(distY * 0.3f, 5f)
 
         // Précalculer les bounds de chaque stroke
         val bounds = Array(strokeRegistry.size) { i ->
