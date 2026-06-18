@@ -919,8 +919,6 @@ class CaptureView(context: Context) : View(context) {
                             strokeRegistry[idx].translate(dx, dy)
                         }
                     }
-                    editStartX = x
-                    editStartY = y
 
                     // Snap Y : préserver l'offset du mot par rapport à l'interligne
                     // (pour garder l'empreinte cursive : descente du 'g', hampe du 't', etc.)
@@ -946,6 +944,9 @@ class CaptureView(context: Context) : View(context) {
                         postInvalidate()
                     }
                 }
+                // Toujours mettre à jour la référence pour le prochain MOVE
+                editStartX = x
+                editStartY = y
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 // Réordonnancement : après un drag, l'ordre visuel des mots
@@ -1001,6 +1002,7 @@ class CaptureView(context: Context) : View(context) {
                 // Si pas de drag, garder la sélection active (re-grab possible)
                 // Mais si on vient d'un long-press, nettoyer currentPath et rebuild
                 if (longPressTriggered) {
+                    longPressTriggered = false
                     currentPath.clear()
                     rebuildBitmap()
                     postInvalidate()
