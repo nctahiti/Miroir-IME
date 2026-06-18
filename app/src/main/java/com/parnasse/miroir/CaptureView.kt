@@ -734,6 +734,7 @@ class CaptureView(context: Context) : View(context) {
     private var longPressStartY = 0f
     private var longPressStartTime = 0L
     private var longPressTriggered = false
+    private var longPressDisabled = false   // armé si le stylet bouge hors zone → pas de long-press
 
     /**
      * Détecte un double-tap sur un mot clôturé → le réactive.
@@ -1098,6 +1099,7 @@ class CaptureView(context: Context) : View(context) {
                 longPressStartY = event.y
                 longPressStartTime = System.currentTimeMillis()
                 longPressTriggered = false
+                longPressDisabled = false
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     requestUnbufferedDispatch(event)
@@ -1131,8 +1133,17 @@ class CaptureView(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_MOVE -> {
+                // Si le stylet sort significativement de la zone de stabilité,
+                // on est en train d'écrire — PAS un long-press. Désactiver pour ce stroke.
+                if (!longPressDisabled && !longPressTriggered && isBlocnoteMode) {
+                    val moveDx = Math.abs(event.x - longPressStartX)
+                    val moveDy = Math.abs(event.y - longPressStartY)
+                    if (moveDx > 30f || moveDy > 30f) {
+                        longPressDisabled = true
+                    }
+                }
                 // Détection d'appui long (>500ms sans bouger) → basculer en mode ÉDITION
-                if (!longPressTriggered && isBlocnoteMode) {
+                if (!longPressTriggered && !longPressDisabled && isBlocnoteMode) {
                     val dt = System.currentTimeMillis() - longPressStartTime
                     val dx = Math.abs(event.x - longPressStartX)
                     val dy = Math.abs(event.y - longPressStartY)
