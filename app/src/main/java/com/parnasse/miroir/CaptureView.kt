@@ -939,6 +939,21 @@ class CaptureView(context: Context) : View(context) {
                         }
                     }
 
+                    // Magnétisme : snap Y si le groupe est à ≤50px d'une ligne
+                    val cy = computeGroupCenterY(group)
+                    val snappedY = snapToLine(cy)
+                    val distToLine = Math.abs(cy - snappedY)
+                    if (distToLine <= 50f) {
+                        val targetY = snappedY + dragWordYOffset
+                        val snapDy = targetY - cy
+                        for (idx in group) {
+                            if (idx < strokeRegistry.size) {
+                                strokeRegistry[idx].translate(0f, snapDy)
+                            }
+                        }
+                        editStartY += snapDy
+                    }
+
                     // Pendant un long-press drag, utiliser currentPath pour le rendu visible
                     if (longPressTriggered) {
                         updateDragCurrentPath()
