@@ -591,10 +591,20 @@ class CaptureView(context: Context) : View(context) {
         hoverX = x
         hoverY = y
         isHovering = true
-        val hitIdx = hitTest(x, y)
-        if (hitIdx != hoverStrokeIndex) {
-            hoverStrokeIndex = hitIdx
-            Log.d(TAG, "Hover stroke: $hitIdx (${strokeRegistry.size} total)")
+        // Sélection par poignée d'interligne (cohérent avec checkLongHoverReactivation)
+        val spatialGroups = getSpatialGroups()
+        val spatialBounds = getSpatialBounds()
+        val found = spatialGroups.withIndex().firstOrNull { (gi, group) ->
+            val r = spatialBounds[gi]
+            val groupLine = snapToLine((r.top + r.bottom) / 2f)
+            r.left < Float.MAX_VALUE && x >= r.left && x <= r.right && Math.abs(y - groupLine) < 30f
+        }
+        val newWordGroup = found?.value
+        val newStrokeIdx = newWordGroup?.firstOrNull()
+        if (newStrokeIdx != hoverStrokeIndex || newWordGroup != hoverWordGroup) {
+            hoverStrokeIndex = newStrokeIdx
+            hoverWordGroup = newWordGroup
+            Log.d(TAG, "Hover stroke: $newStrokeIdx (${strokeRegistry.size} total)")
             invalidate()
         }
         // Survol long → sélection via GroupManager
