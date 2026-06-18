@@ -511,16 +511,7 @@ class CaptureView(context: Context) : View(context) {
         // Stylo : dispatch selon le mode (EDIT/INSERT/REVIEW)
         if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) {
             when (currentMode) {
-                CaptureMode.EDIT -> {
-                    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-                        // Pose du stylet = fin du déplacement, retour à l'écriture
-                        currentMode = CaptureMode.CAPTURE
-                        onModeChanged?.invoke(currentMode)
-                        handleCaptureEvent(event)
-                    } else {
-                        handleEditEvent(event)
-                    }
-                }
+                CaptureMode.EDIT -> handleEditEvent(event)
                 CaptureMode.INSERT -> handleInsertEvent(event)
                 else -> { /* REVIEW / autres : ignorer le stylo */ }
             }
