@@ -3413,7 +3413,7 @@ class CaptureView(context: Context) : View(context) {
      * EDIT_TEMPORAL: montre (cadran + aiguilles)
      */
     private fun drawModeIndicator(canvas: Canvas) {
-        val margin = 42f
+        val margin = 52f
         val cx = width - margin
         val cy = margin
         val p = modeIndicatorPaint
@@ -3421,43 +3421,49 @@ class CaptureView(context: Context) : View(context) {
 
         when {
             temporalMode -> {
-                // MONTRE — cadran circulaire + 2 aiguilles
-                val r = 13f
+                // MONTRE — cadran circulaire + 2 aiguilles (~28px)
+                val r = 18f
+                p.strokeWidth = 3f
                 canvas.drawCircle(cx, cy, r, p)
-                val hx = cx - r * 0.35f; val hy = cy - r * 0.5f
-                canvas.drawLine(cx, cy, hx, hy, p)
-                val mx = cx + r * 0.5f; val my = cy - r * 0.6f
-                canvas.drawLine(cx, cy, mx, my, p)
-                canvas.drawCircle(cx, cy, 2.5f, pf)
+                // Aiguille heures (10h)
+                canvas.drawLine(cx, cy, cx - r * 0.4f, cy - r * 0.55f, p)
+                // Aiguille minutes (2h)
+                canvas.drawLine(cx, cy, cx + r * 0.55f, cy - r * 0.6f, p)
+                canvas.drawCircle(cx, cy, 4f, pf)
+                p.strokeWidth = 2.5f
             }
             currentMode == CaptureMode.EDIT -> {
-                // PHARE — tour rectangulaire + toit triangulaire + lumiere
-                val bw = 9f; val bh = 18f
+                // PHARE — tour + toit + lumiere (~28px haut)
+                val bw = 12f; val bh = 22f
                 val tx = cx - bw; val ty = cy - bh / 2
-                canvas.drawRect(tx, ty + 4f, cx + bw, cy + bh / 2, p)
+                canvas.drawRect(tx, ty + 5f, cx + bw, cy + bh / 2, p)
+                // Toit triangulaire
                 val roofPath = Path()
-                roofPath.moveTo(tx - 3f, ty + 4f)
-                roofPath.lineTo(cx, ty - 6f)
-                roofPath.lineTo(cx + bw + 3f, ty + 4f)
+                roofPath.moveTo(tx - 4f, ty + 5f)
+                roofPath.lineTo(cx, ty - 8f)
+                roofPath.lineTo(cx + bw + 4f, ty + 5f)
                 roofPath.close()
                 canvas.drawPath(roofPath, pf)
                 canvas.drawPath(roofPath, p)
-                canvas.drawCircle(cx, ty, 3.5f, pf)
-                canvas.drawCircle(cx, ty, 3.5f, p)
+                // Lumiere (point au sommet)
+                canvas.drawCircle(cx, ty - 3f, 5f, pf)
+                canvas.drawCircle(cx, ty - 3f, 5f, p)
             }
             else -> {
-                // BATEAU — coque en arc + mat vertical + voile triangulaire
-                val boatY = cy + 8f
+                // BATEAU — coque + mat + voile (~28px haut)
+                val boatY = cy + 10f
                 val hullPath = Path()
-                hullPath.moveTo(cx - 16f, boatY)
-                hullPath.quadTo(cx - 10f, boatY + 7f, cx, boatY + 8f)
-                hullPath.quadTo(cx + 10f, boatY + 7f, cx + 16f, boatY)
+                hullPath.moveTo(cx - 20f, boatY)
+                hullPath.quadTo(cx - 12f, boatY + 9f, cx, boatY + 10f)
+                hullPath.quadTo(cx + 12f, boatY + 9f, cx + 20f, boatY)
                 canvas.drawPath(hullPath, p)
-                canvas.drawLine(cx, boatY - 18f, cx, boatY, p)
+                // Mat
+                canvas.drawLine(cx, boatY - 24f, cx, boatY, p)
+                // Voile triangulaire
                 val sailPath = Path()
-                sailPath.moveTo(cx + 1f, boatY - 16f)
-                sailPath.lineTo(cx + 13f, boatY - 2f)
-                sailPath.lineTo(cx + 1f, boatY - 2f)
+                sailPath.moveTo(cx + 2f, boatY - 22f)
+                sailPath.lineTo(cx + 17f, boatY - 3f)
+                sailPath.lineTo(cx + 2f, boatY - 3f)
                 sailPath.close()
                 canvas.drawPath(sailPath, pf)
                 canvas.drawPath(sailPath, p)
