@@ -981,7 +981,7 @@ class CaptureView(context: Context) : View(context) {
                     return
                 }
                 // ═══ Long-press en EDIT : entrer/sortir EDIT_TEMPORAL ═══
-                if (!longPressTriggered && !longPressDisabled && temporalEraseAvailable && currentMode != CaptureMode.EDIT_TEMPORAL) {
+                if (!longPressTriggered && !longPressDisabled && temporalEraseAvailable) {
                     val dt = System.currentTimeMillis() - longPressStartTime
                     val dx = Math.abs(x - longPressStartX)
                     val dy = Math.abs(y - longPressStartY)
@@ -992,7 +992,7 @@ class CaptureView(context: Context) : View(context) {
                     // Seuils assouplis pour e-ink (jitter + MOVE rares si stylet immobile)
                     if (dt > 350 && dx < 40f && dy < 40f) {
                         longPressTriggered = true
-                        if (currentMode != CaptureMode.EDIT_TEMPORAL) {
+                        if (currentMode == CaptureMode.EDIT) {
                             // Entrer en EDIT_TEMPORAL : initialiser le scrub
                             currentMode = CaptureMode.EDIT_TEMPORAL
                             scrubStartX = x
