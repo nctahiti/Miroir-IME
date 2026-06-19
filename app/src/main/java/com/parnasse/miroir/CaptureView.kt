@@ -818,6 +818,7 @@ class CaptureView(context: Context) : View(context) {
     private var scrubStartX = 0f                 // X au debut du scrub (repere absolu)
     private var scrubInitialPos = 0f             // timelinePos au debut du scrub
     private var scrubGroupIndices: List<Int>? = null  // groupe en cours de scrub
+    private var isWritingInEdit = false          // ecriture en cours depuis le mode EDIT
 
     /**
      * Détecte un double-tap sur un mot clôturé → le réactive.
@@ -933,18 +934,29 @@ class CaptureView(context: Context) : View(context) {
                     initReflow(hitIdx)
                     // Sauvegarder l'offset Y du mot par rapport à l'interligne
                     dragWordYOffset = computeGroupCenterY(selectedWordGroup!!) - snapToLine(computeGroupCenterY(selectedWordGroup!!))
+                    dragWordGroup = selectedWordGroup
                 } else {
+                    // Touche le vide = ecriture d'une correction (absorbe par le groupe SELECTED)
                     selectedWordGroup = null
                     flowState = null
                     dragWordYOffset = 0f
+                    dragWordGroup = null
+                    isWritingInEdit = true
+                    handleCaptureEvent(event)  // pipeline d'ecriture, reste en EDIT
+                    Log.d(TAG, "EDIT DOWN — ecriture (hit vide, reste en EDIT)")
+                    return
                 }
-                dragWordGroup = selectedWordGroup
                 selectedStrokeIndex = hitIdx
                 val wgMsg = if (selectedWordGroup != null) " (mot: [${selectedWordGroup!!.joinToString(",")}])" else ""
                 Log.d(TAG, "EDIT DOWN @ ($x, $y) hit=$hitIdx${wgMsg} (registry=${strokeRegistry.size})")
                 invalidate()
             }
             MotionEvent.ACTION_MOVE -> {
+                // ═══ Ecriture en cours depuis EDIT → forward au pipeline capture ═══
+                if (isWritingInEdit) {
+                    handleCaptureEvent(event)
+                    return
+                }
                 // ═══ Mode temporel actif : scrub timeline ═══
                 if (temporalMode) {
                     // deltaX negatif = stylet a gauche = reculer dans le temps = effacer
@@ -1015,6 +1027,17 @@ class CaptureView(context: Context) : View(context) {
                 editStartY = y
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // ═══ Fin d'écriture depuis EDIT → forward + rester en EDIT ═══
+                if (isWritingInEdit) {
+                    isWritingInEdit = false
+                    handleCaptureEvent(event)
+                    // Le stroke est absorbé dans le groupe SELECTED (si proche)
+                    // On reste en EDIT_SPATIAL, le groupe reste sélectionné
+                    rebuildBitmap()
+                    throttledInvalidate()
+                    Log.d(TAG, "EDIT UP — ecriture terminee, reste en EDIT")
+                    return
+                }
                 // Réordonnancement : après un drag, l'ordre visuel des mots
                 // devient l'ordre de lecture dans le fichier.
                 if (wasDrag && dragWordGroup != null && flowState != null) {
@@ -1270,13 +1293,12 @@ class CaptureView(context: Context) : View(context) {
                     }
                 }
                 // Détection d'appui long (>500ms sans bouger) → basculer en mode ÉDITION
-                if (!longPressTriggered && !longPressDisabled && isBlocnoteMode) {
+                if (!longPressTriggered && !longPressDisabled && isBlocnoteMode && currentMode == CaptureMode.CAPTURE) {
                     val dt = System.currentTimeMillis() - longPressStartTime
                     val dx = Math.abs(event.x - longPressStartX)
                     val dy = Math.abs(event.y - longPressStartY)
                     if (dt > 500 && dx < 15f && dy < 15f) {
                         longPressTriggered = true
-                        // ═══ PHASE 2 (à venir) : si temporalEraseAvailable → effacement temporel ═══
                         // ═══ LONG-PRESS → DRAG : annuler le stroke, préparer le drag ═══
                         drawingStroke = null
                         currentPath.clear()
@@ -3406,6 +3428,7 @@ class CaptureView(context: Context) : View(context) {
         temporalMode = false
         scrubTimelinePos = 0f
         scrubGroupIndices = null
+        isWritingInEdit = false
         throttledInvalidate()
     }
 }
