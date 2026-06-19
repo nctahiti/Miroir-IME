@@ -603,7 +603,16 @@ class CaptureView(context: Context) : View(context) {
                 hoverStrokeIndex = null
                 hoverWordGroup = null
                 // ⚠️ NE PAS changer de mode sur HOVER_EXIT :
-                // sur e-ink, le passage hover→contact emet HOVER_EXIT avant ACTION_DOWN
+                // Sortie du mode temporel si le stylet quitte l'ecran
+                if (temporalMode) {
+                    temporalMode = false
+                    scrubGroupIndices = null
+                    scrubTimelinePos = 0f
+                    rebuildBitmap()
+                    Log.d(TAG, "HOVER_EXIT en mode temporel -> retour EDIT_SPATIAL")
+                    invalidate()
+                }
+                // sur e-ink, le passage hover->contact emet HOVER_EXIT avant ACTION_DOWN
                 // → le mode EDIT serait perdu avant meme que le touch n'arrive.
                 // Le retour CAPTURE est gere par le tap vide dans handleEditEvent UP.
                 invalidate()
@@ -878,8 +887,19 @@ class CaptureView(context: Context) : View(context) {
                 editStartX = x; editStartY = y
                 wasDrag = false
                 // ═══ En mode temporel : nouveau PENDOWN = nouveau scrub ═══
+                
                 if (temporalMode) {
                     scrubStartX = x
+                    val hitIdx = hitTest(x, y)
+                    if (hitIdx == null) {
+                        temporalMode = false
+                        scrubGroupIndices = null
+                        scrubTimelinePos = 0f
+                        rebuildBitmap()
+                        invalidate()
+                        Log.d(TAG, "⏳ Tap vide -> sortie EDIT_TEMPORAL")
+                        return
+                    }
                     scrubInitialPos = scrubTimelinePos
                     // Garder le meme groupe cible
                     longPressStartX = x; longPressStartY = y
@@ -994,7 +1014,7 @@ class CaptureView(context: Context) : View(context) {
                         Log.d(TAG, "⏳ LP check: dt=${dt}ms dx=${dx} dy=${dy} trig=${longPressTriggered} dis=${longPressDisabled} avail=${temporalEraseAvailable}")
                     }
                     // Seuils assouplis pour e-ink (jitter + MOVE rares si stylet immobile)
-                    if (dt > 400 && dx < 25f && dy < 25f) {
+                    if (dt > 350 && dx < 40f && dy < 40f) {
                         longPressTriggered = true
                         if (!temporalMode) {
                             // Entrer en EDIT_TEMPORAL : initialiser le scrub
@@ -1087,7 +1107,7 @@ class CaptureView(context: Context) : View(context) {
                     val dt = System.currentTimeMillis() - longPressStartTime
                     val dx = Math.abs(x - longPressStartX)
                     val dy = Math.abs(y - longPressStartY)
-                    if (dt > 400 && dx < 25f && dy < 25f) {
+                    if (dt > 350 && dx < 40f && dy < 40f) {
                         longPressTriggered = true
                         temporalMode = true
                         scrubStartX = x
