@@ -367,6 +367,10 @@ class CaptureView(context: Context) : View(context) {
     }
     // Transcriptions par groupe (firstStrokeIndex → texte), peuplé directement à l'inférence
     private val groupTranscriptions = mutableMapOf<Int, String>()
+    // Compteur d'inférences par groupe (pour détecter les ré-inférences inutiles)
+    private val groupInferenceCount = mutableMapOf<Int, Int>()
+    // Horodatage de la dernière inférence (ms)
+    private var lastInferenceTime: Long = 0
 
     /** Appelé par CaptureActivity quand un groupe vient d'être inféré. */
     internal fun onGroupInferred(firstIdx: Int, text: String) {
@@ -1891,7 +1895,10 @@ class CaptureView(context: Context) : View(context) {
         val snapshot = strokeRegistry.toList()
         val seq = groupSequenceCounter.getAndIncrement()
         val gi = latest.indexOf(group)
-        Log.i(TAG, "🧠 Inférer groupe $gi (${group.size}s) → seq=$seq")
+        val count = (groupInferenceCount[firstIdx] ?: 0) + 1
+        groupInferenceCount[firstIdx] = count
+        lastInferenceTime = System.currentTimeMillis()
+        Log.i(TAG, "🧠 Inférer groupe $gi (${group.size}s) → seq=$seq · #$count · ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date(lastInferenceTime))}")
         mapSpatialGroupToSeq(group, seq)
         onWordGroupCompleted?.invoke(snapshot, group, seq)
         inferredGroups.add(firstIdx)
@@ -3224,8 +3231,15 @@ class CaptureView(context: Context) : View(context) {
             val state = if (isSelected) "★" else "G$gi"
             val firstIdx = groupIndices.first()
             val transcription = groupTranscriptions[firstIdx]
-            val label = "*$state-${groupIndices.size}S${transcription?.let { " $it" } ?: ""}"
+            val infCount = groupInferenceCount[firstIdx]
+            val countSuffix = if (infCount != null && infCount > 1) " #$infCount" else ""
+            val label = "*$state-${groupIndices.size}S${transcription?.let { " $it" } ?: ""}$countSuffix"
             canvas.drawText(label, labelX, labelY, debugTextPaint)
+        }
+        // Timecode dernière inférence
+        if (lastInferenceTime > 0) {
+            val ts = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date(lastInferenceTime))
+            canvas.drawText("Dernière inférence: $ts", 20f, height - 20f, debugTextPaint)
         }
     }
 
@@ -3258,6 +3272,8 @@ class CaptureView(context: Context) : View(context) {
         // Nettoyer les timers par groupe
         groupTimers.values.forEach { it.cancel(false) }
         groupTimers.clear()
+        groupInferenceCount.clear()
+        lastInferenceTime = 0
         invalidateSpatialCache()
         pointInStroke = 0
         hasPrevPoint = false
