@@ -117,6 +117,7 @@ class CaptureActivity : Activity() {
         // ── CaptureView ───────────────────────────────────
         captureView = CaptureView(this).also { cv ->
             cv.strokeProcessor = processor
+            cv.transcriptionFile = tw.file
             // Reconnaissance automatique via StrokeProcessor (thread background)
             cv.onWordGroupCompleted = { strokes, group, groupIndex ->
                 processor.processGroup(
@@ -405,6 +406,8 @@ class CaptureActivity : Activity() {
         accumulatedText = tw.getOrderedText()
         wordTranscriptions.clear()
         wordTranscriptions.addAll(tw.getOrderedWords())
+        // Rafraîchir le cache de transcriptions pour les labels d'interligne
+        captureView?.refreshTranscriptionCache()
         updatePoemText()
     }
 
@@ -427,6 +430,7 @@ class CaptureActivity : Activity() {
             val newTw = TranscriptionWriter(noteDir, baseName, CalibrationActivity.getSpatialDistanceY(this).toFloat())
             transcriptionWriter = newTw
             captureView?.strokeProcessor?.transcriptionWriter = newTw
+            captureView?.transcriptionFile = newTw.file
             // Persistance des groupes pour la nouvelle page
             captureView?.groupManager?.persistence = GroupPersistence(GroupPersistence.groupsFile(noteDir, baseName))
             accumulatedText = ""
@@ -523,6 +527,7 @@ class CaptureActivity : Activity() {
         val tw = TranscriptionWriter(noteDir, baseName, CalibrationActivity.getSpatialDistanceY(this).toFloat())
         transcriptionWriter = tw
         captureView?.strokeProcessor?.transcriptionWriter = tw
+        captureView?.transcriptionFile = tw.file
         // Persistance des groupes pour le chargement de page
         captureView?.groupManager?.persistence = GroupPersistence(GroupPersistence.groupsFile(noteDir, baseName))
         
@@ -568,6 +573,7 @@ class CaptureActivity : Activity() {
         }
         // Mettre à jour le processor
         captureView?.strokeProcessor?.transcriptionWriter = newTw
+        captureView?.transcriptionFile = newTw.file
 
         accumulatedText = ""
         wordTranscriptions.clear()

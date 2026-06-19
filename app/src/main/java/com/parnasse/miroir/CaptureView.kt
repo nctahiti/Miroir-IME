@@ -365,6 +365,9 @@ class CaptureView(context: Context) : View(context) {
         textSize = 28f
         isFakeBoldText = true
     }
+    // Cache de transcriptions (orderIndex → texte), rafraîchi depuis .transcription
+    private val transcriptionCache = mutableMapOf<Int, String>()
+    internal var transcriptionFile: java.io.File? = null
     private var blobRadiusX = 28f  // rayon horizontal du blob
     private var blobRadiusY = 48f  // rayon vertical du blob
 
@@ -1376,6 +1379,7 @@ class CaptureView(context: Context) : View(context) {
                     rebuildBitmap()
                     // Réactiver le timer d'inférence (groupes non inférés seulement)
                     inferFuture?.cancel(false)
+                    val inferDelay = CalibrationActivity.getAutoInferDelay(context)
                     inferFuture = inferExecutor.schedule({
                         val groups = computeWordGroups()
                         for ((gi, group) in groups.withIndex()) {
@@ -1390,7 +1394,7 @@ class CaptureView(context: Context) : View(context) {
                                 inferredGroups.add(firstIdx)
                             }
                         }
-                    }, 500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
                     Log.d(TAG, "ÉDITION → CAPTURE (stylet levé après long-press)")
                     refreshSpatialBounds()  // strokes déplacés → bounds à jour
                     invalidate()
@@ -1836,11 +1840,12 @@ class CaptureView(context: Context) : View(context) {
             inferredGroups.remove(openFirst)
         }
 
-        // ═══ Timer unique 500ms pour TOUS les groupes ═══
+        // ═══ Timer unique (délai depuis calibration) pour TOUS les groupes ═══
         // Annulé au prochain PENDOWN. Si l'utilisateur écrit sans pause,
         // le timer est constamment réarmé → pas d'inférence intempestive.
-        // Si l'utilisateur marque une pause ≥ 500ms, tous les groupes
+        // Si l'utilisateur marque une pause ≥ délai, tous les groupes
         // modifiés depuis leur dernière inférence sont inférés.
+        val inferDelay = CalibrationActivity.getAutoInferDelay(context)
         inferFuture?.cancel(false)
         inferFuture = inferExecutor.schedule({
             val latest = computeWordGroups()
@@ -1856,8 +1861,8 @@ class CaptureView(context: Context) : View(context) {
                     inferredGroups.add(firstIdx)
                 }
             }
-        }, 500, java.util.concurrent.TimeUnit.MILLISECONDS)
-        Log.d(TAG, "Timer 500ms réarmé (${groups.size} groupes, ${inferredGroups.size} déjà inférés)")
+        }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
+        Log.d(TAG, "Timer ${inferDelay}ms réarmé (${groups.size} groupes, ${inferredGroups.size} déjà inférés)")
     }
 
     /**
@@ -3163,10 +3168,28 @@ class CaptureView(context: Context) : View(context) {
     }
 
     /**
-     * Label des groupes : affiché sous l'interligne.
-     * Format : *G{index}-{N}S {transcription}
-     * ★ pour le groupe sélectionné.
+     * Lit le fichier .transcription et reconstruit le cache (orderIndex → texte).
+     * Appelé après chaque inférence ou chargement de note.
      */
+    fun refreshTranscriptionCache() {
+        val file = transcriptionFile ?: return
+        if (!file.exists()) return
+        try {
+            transcriptionCache.clear()
+            file.readLines()
+                .filter { it.startsWith("snapY=") }
+                .forEach { line ->
+                    val parts = line.split("  ", limit = 3)
+                    if (parts.size >= 3) {
+                        val orderStr = parts[1].removePrefix("order=")
+                        val order = orderStr.toIntOrNull() ?: return@forEach
+                        val text = parts[2].trim()
+                        if (text.isNotEmpty()) transcriptionCache[order] = text
+                    }
+                }
+            Log.d(TAG, "📋 Cache transcriptions: ${transcriptionCache.size} entrées")
+        } catch (_: Exception) {}
+    }
     private fun drawGroupDebugInfo(canvas: Canvas) {
         val groups = getSpatialGroups()
         for ((gi, groupIndices) in groups.withIndex()) {
@@ -3193,7 +3216,13 @@ class CaptureView(context: Context) : View(context) {
                 .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
             val isSelected = groupIndices.any { it in selectedIndices }
             val state = if (isSelected) "★" else "G$gi"
-            val label = "*$state-${groupIndices.size}S"
+            // Obtenir la transcription pour ce groupe (via orderIndex du InkGroup)
+            val firstIdx = groupIndices.first()
+            val inkStrokeId = registryIndexToInkStrokeId[firstIdx]
+            val inkGroup = if (inkStrokeId != null) groupManager.findGroupByStroke(inkStrokeId) else null
+            val orderIndex = inkGroup?.orderIndex ?: -1
+            val transcription = if (orderIndex >= 0) transcriptionCache[orderIndex] else null
+            val label = "*$state-${groupIndices.size}S${transcription?.let { " $it" } ?: ""}"
             canvas.drawText(label, labelX, labelY, debugTextPaint)
         }
     }
@@ -3223,6 +3252,7 @@ class CaptureView(context: Context) : View(context) {
         // ═══ seedGroups : retour au mode écriture live ═══
         seedGroups = null
         inferredGroups.clear()
+        transcriptionCache.clear()
         invalidateSpatialCache()
         pointInStroke = 0
         hasPrevPoint = false
