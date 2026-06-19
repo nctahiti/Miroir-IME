@@ -996,9 +996,23 @@ class CaptureView(context: Context) : View(context) {
                             temporalMode = true
                             scrubStartX = x
                             scrubInitialPos = scrubTimelinePos
-                            // Groupe cible = groupe selectionne (hover) ou dragWordGroup
-                            scrubGroupIndices = dragWordGroup ?: selectedWordGroup
-                            Log.i(TAG, "⏳ EDIT_TEMPORAL active (scrubInitPos=$scrubInitialPos)")
+                            // Trouver le groupe sous le stylet (hitTest → spatialGroups)
+                            val hitIdx = hitTest(x, y)
+                            scrubGroupIndices = if (hitIdx != null) findWordGroup(hitIdx)
+                                                else dragWordGroup ?: selectedWordGroup
+                            if (scrubGroupIndices == null) {
+                                // Fallback: chercher dans les groupes spatiaux
+                                val sg = getSpatialGroups()
+                                val sb = getSpatialBounds()
+                                for (gi in sg.indices) {
+                                    val r = sb[gi]
+                                    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+                                        scrubGroupIndices = sg[gi]
+                                        break
+                                    }
+                                }
+                            }
+                            Log.i(TAG, "⏳ EDIT_TEMPORAL active (scrubInitPos=$scrubInitialPos, groupe=${scrubGroupIndices?.size}s)")
                         } else {
                             // Sortir d'EDIT_TEMPORAL → retour EDIT_SPATIAL
                             temporalMode = false
@@ -1073,7 +1087,17 @@ class CaptureView(context: Context) : View(context) {
                         temporalMode = true
                         scrubStartX = x
                         scrubInitialPos = scrubTimelinePos
-                        scrubGroupIndices = dragWordGroup ?: selectedWordGroup
+                        val hitIdx = hitTest(x, y)
+                        scrubGroupIndices = if (hitIdx != null) findWordGroup(hitIdx)
+                                            else dragWordGroup ?: selectedWordGroup
+                        if (scrubGroupIndices == null) {
+                            val sg = getSpatialGroups(); val sb = getSpatialBounds()
+                            for (gi in sg.indices) {
+                                val r = sb[gi]
+                                if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom)
+                                { scrubGroupIndices = sg[gi]; break }
+                            }
+                        }
                         // Pas de rebuild — on entre en mode temporel, le prochain MOVE fera le scrub
                         Log.i(TAG, "⏳ EDIT_TEMPORAL active depuis UP (fallback, stylet immobile)")
                         invalidate()
