@@ -960,7 +960,8 @@ class CaptureView(context: Context) : View(context) {
                     val dt = System.currentTimeMillis() - longPressStartTime
                     val dx = Math.abs(x - longPressStartX)
                     val dy = Math.abs(y - longPressStartY)
-                    if (dt > 500 && dx < 15f && dy < 15f) {
+                    // Seuils assouplis pour e-ink (jitter + MOVE rares si stylet immobile)
+                    if (dt > 400 && dx < 25f && dy < 25f) {
                         longPressTriggered = true
                         if (!temporalMode) {
                             // Entrer en EDIT_TEMPORAL : initialiser le scrub
@@ -1034,6 +1035,23 @@ class CaptureView(context: Context) : View(context) {
                 editStartY = y
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // ═══ Fallback long-press temporel au UP (e-ink: pas de MOVE si stylet immobile) ═══
+                if (!wasDrag && !temporalMode && !isWritingInEdit && !longPressTriggered && !longPressDisabled && temporalEraseAvailable) {
+                    val dt = System.currentTimeMillis() - longPressStartTime
+                    val dx = Math.abs(x - longPressStartX)
+                    val dy = Math.abs(y - longPressStartY)
+                    if (dt > 400 && dx < 25f && dy < 25f) {
+                        longPressTriggered = true
+                        temporalMode = true
+                        scrubStartX = x
+                        scrubInitialPos = scrubTimelinePos
+                        scrubGroupIndices = dragWordGroup ?: selectedWordGroup
+                        // Pas de rebuild — on entre en mode temporel, le prochain MOVE fera le scrub
+                        Log.i(TAG, "⏳ EDIT_TEMPORAL active depuis UP (fallback, stylet immobile)")
+                        invalidate()
+                        return
+                    }
+                }
                 // ═══ Tap sur espace vide (pas de drag, pas d'ecriture, pas de long-press) → CAPTURE ═══
                 if (!wasDrag && dragWordGroup == null && !temporalMode && !isWritingInEdit && !longPressTriggered) {
                     currentMode = CaptureMode.CAPTURE
