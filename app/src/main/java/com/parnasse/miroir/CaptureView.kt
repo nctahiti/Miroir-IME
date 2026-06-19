@@ -719,6 +719,7 @@ class CaptureView(context: Context) : View(context) {
 
     private fun checkLongHoverReactivation() {
         if (!isBlocnoteMode) return
+        if (temporalMode) return  // pas de selection hover en mode effacement
         if (!isHovering) { longHoverStartMs = 0; longHoverFirstStroke = -1; return }
 
         val hx = hoverX; val hy = hoverY
