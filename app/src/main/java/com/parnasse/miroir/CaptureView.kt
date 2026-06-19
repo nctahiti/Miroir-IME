@@ -362,7 +362,7 @@ class CaptureView(context: Context) : View(context) {
     // Debug : indices des groupes
     // Ghost : points neutralises par le scrub temporel (affichage debug)
     private val ghostPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(30, 160, 160, 160)  // gris tres pale
+        color = Color.argb(180, 0, 0, 0)  // gris tres pale
         strokeWidth = 2f
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
@@ -884,7 +884,7 @@ class CaptureView(context: Context) : View(context) {
                     scrubStartX = x
                     val hitIdx = hitTest(x, y)
                     if (hitIdx == null) {
-                        currentMode = CaptureMode.EDIT
+                        currentMode = CaptureMode.CAPTURE
                         scrubGroupIndices = null
                         scrubTimelinePos = 0f
                         rebuildBitmap()
@@ -981,7 +981,7 @@ class CaptureView(context: Context) : View(context) {
                     return
                 }
                 // ═══ Long-press en EDIT : entrer/sortir EDIT_TEMPORAL ═══
-                if (!longPressTriggered && !longPressDisabled && temporalEraseAvailable) {
+                if (!longPressTriggered && !longPressDisabled && temporalEraseAvailable && currentMode == CaptureMode.EDIT) {
                     val dt = System.currentTimeMillis() - longPressStartTime
                     val dx = Math.abs(x - longPressStartX)
                     val dy = Math.abs(y - longPressStartY)
