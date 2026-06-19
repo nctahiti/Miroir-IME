@@ -1840,32 +1840,31 @@ class CaptureView(context: Context) : View(context) {
         for ((gi, group) in groups.withIndex()) {
             if (group.isEmpty()) continue
             val firstIdx = group.first()
+            val isOpen = (gi == openIdx)
 
-            // Groupe déjà inféré et non modifié → nettoyer le timer
+            // Groupe ouvert modifié → retirer de inferredGroups pour ré-inférence
+            if (isOpen) {
+                inferredGroups.remove(firstIdx)
+            }
+
+            // Groupe déjà inféré et non modifié → juste nettoyer le timer
             if (firstIdx in inferredGroups) {
                 groupTimers.remove(firstIdx)?.cancel(false)
                 continue
             }
 
-            val isOpen = (gi == openIdx)
+            // Démarrer ou réarmer le timer pour ce groupe
+            groupTimers.remove(firstIdx)?.cancel(false)
+            val timer = inferExecutor.schedule({
+                armGroupInference(firstIdx)
+            }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
+            groupTimers[firstIdx] = timer
 
             if (isOpen) {
-                // Groupe ouvert : annuler et réarmer à chaque stroke
-                groupTimers.remove(firstIdx)?.cancel(false)
-                val timer = inferExecutor.schedule({
-                    armGroupInference(firstIdx)
-                }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
-                groupTimers[firstIdx] = timer
                 Log.d(TAG, "⏱️ Groupe ouvert G$gi ($firstIdx) → timer ${inferDelay}ms")
-            } else if (!groupTimers.containsKey(firstIdx)) {
-                // Groupe fermé sans timer → démarrer un timer indépendant
-                val timer = inferExecutor.schedule({
-                    armGroupInference(firstIdx)
-                }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
-                groupTimers[firstIdx] = timer
+            } else {
                 Log.d(TAG, "📦 Groupe fermé G$gi ($firstIdx) → timer ${inferDelay}ms indépendant")
             }
-            // Groupe fermé avec timer existant → ne pas toucher
         }
     }
 
@@ -3139,12 +3138,8 @@ class CaptureView(context: Context) : View(context) {
         if (currentMode != CaptureMode.CAPTURE) return
         if (!isBlocnoteMode) return
 
-        // ═══ Priorité 1 : groupe SELECTED (survol long) ═══
-        var phareGroup = groupManager.groupsInState(GroupState.SELECTED).firstOrNull()
-        // ═══ Priorité 2 : groupe LOADED (actif, reçoit les strokes) ═══
-        if (phareGroup == null) {
-            phareGroup = groupManager.groupsInState(GroupState.LOADED).firstOrNull()
-        }
+        // ═══ Phare uniquement pour le groupe SELECTED (survol long) ═══
+        val phareGroup = groupManager.groupsInState(GroupState.SELECTED).firstOrNull()
         if (phareGroup == null) return
 
         val indices = phareGroup.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
