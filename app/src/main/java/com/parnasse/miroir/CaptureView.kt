@@ -551,7 +551,7 @@ class CaptureView(context: Context) : View(context) {
         // Stylo : dispatch selon le mode (EDIT/INSERT/REVIEW)
         if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) {
             when (currentMode) {
-                CaptureMode.EDIT -> handleEditEvent(event)
+                CaptureMode.EDIT, CaptureMode.EDIT_TEMPORAL -> handleEditEvent(event)
                 CaptureMode.INSERT -> handleInsertEvent(event)
                 else -> { /* REVIEW / autres : ignorer le stylo */ }
             }
