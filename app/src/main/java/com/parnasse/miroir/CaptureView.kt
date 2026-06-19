@@ -367,6 +367,19 @@ class CaptureView(context: Context) : View(context) {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
     }
+    // Indicateur de mode (bateau/phare/montre) — coin haut-droit
+    private val modeIndicatorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(180, 40, 40, 40)  // gris fonce
+        strokeWidth = 2.5f
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+        isAntiAlias = true
+    }
+    private val modeIndicatorFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(60, 40, 40, 40)  // remplissage leger
+        style = Paint.Style.FILL
+    }
     private val debugTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.RED
         textSize = 28f
@@ -960,6 +973,10 @@ class CaptureView(context: Context) : View(context) {
                     val dt = System.currentTimeMillis() - longPressStartTime
                     val dx = Math.abs(x - longPressStartX)
                     val dy = Math.abs(y - longPressStartY)
+                    // Log diagnostic une fois par gesture (dt ~200ms)
+                    if (dt > 200 && dt < 220) {
+                        Log.d(TAG, "⏳ LP check: dt=${dt}ms dx=${dx} dy=${dy} trig=${longPressTriggered} dis=${longPressDisabled} avail=${temporalEraseAvailable}")
+                    }
                     // Seuils assouplis pour e-ink (jitter + MOVE rares si stylet immobile)
                     if (dt > 400 && dx < 25f && dy < 25f) {
                         longPressTriggered = true
@@ -1339,6 +1356,8 @@ class CaptureView(context: Context) : View(context) {
                         currentPath.clear()
                         currentMode = CaptureMode.EDIT
                         onModeChanged?.invoke(currentMode)
+                        temporalEraseAvailable = true  // arme des l'entree en EDIT
+                        scrubTimelinePos = 0f          // reset scrub
                         // Trouver le mot sous le stylet
                         val hitIdx = hitTest(longPressStartX, longPressStartY)
                         if (hitIdx != null) {
@@ -2229,6 +2248,9 @@ class CaptureView(context: Context) : View(context) {
 
         // ── DEBUG : indices des groupes ────────────────────────────────
         if (showVisualOverlays) drawGroupDebugInfo(canvas)
+
+        // Indicateur de mode — bateau / phare / montre
+        drawModeIndicator(canvas)
 
         // SURCOUCHE EDITION
         if (currentMode == CaptureMode.EDIT) {
@@ -3382,6 +3404,65 @@ class CaptureView(context: Context) : View(context) {
 
     private fun stopCursorAnimation() {
         // Plus rien à arrêter.
+    }
+
+    /**
+     * Indicateur visuel du mode actif — coin haut-droit.
+     * CAPTURE: bateau (coque + mat + voile)
+     * EDIT_SPATIAL: phare (tour + toit + lumiere)
+     * EDIT_TEMPORAL: montre (cadran + aiguilles)
+     */
+    private fun drawModeIndicator(canvas: Canvas) {
+        val margin = 42f
+        val cx = width - margin
+        val cy = margin
+        val p = modeIndicatorPaint
+        val pf = modeIndicatorFill
+
+        when {
+            temporalMode -> {
+                // MONTRE — cadran circulaire + 2 aiguilles
+                val r = 13f
+                canvas.drawCircle(cx, cy, r, p)
+                val hx = cx - r * 0.35f; val hy = cy - r * 0.5f
+                canvas.drawLine(cx, cy, hx, hy, p)
+                val mx = cx + r * 0.5f; val my = cy - r * 0.6f
+                canvas.drawLine(cx, cy, mx, my, p)
+                canvas.drawCircle(cx, cy, 2.5f, pf)
+            }
+            currentMode == CaptureMode.EDIT -> {
+                // PHARE — tour rectangulaire + toit triangulaire + lumiere
+                val bw = 9f; val bh = 18f
+                val tx = cx - bw; val ty = cy - bh / 2
+                canvas.drawRect(tx, ty + 4f, cx + bw, cy + bh / 2, p)
+                val roofPath = Path()
+                roofPath.moveTo(tx - 3f, ty + 4f)
+                roofPath.lineTo(cx, ty - 6f)
+                roofPath.lineTo(cx + bw + 3f, ty + 4f)
+                roofPath.close()
+                canvas.drawPath(roofPath, pf)
+                canvas.drawPath(roofPath, p)
+                canvas.drawCircle(cx, ty, 3.5f, pf)
+                canvas.drawCircle(cx, ty, 3.5f, p)
+            }
+            else -> {
+                // BATEAU — coque en arc + mat vertical + voile triangulaire
+                val boatY = cy + 8f
+                val hullPath = Path()
+                hullPath.moveTo(cx - 16f, boatY)
+                hullPath.quadTo(cx - 10f, boatY + 7f, cx, boatY + 8f)
+                hullPath.quadTo(cx + 10f, boatY + 7f, cx + 16f, boatY)
+                canvas.drawPath(hullPath, p)
+                canvas.drawLine(cx, boatY - 18f, cx, boatY, p)
+                val sailPath = Path()
+                sailPath.moveTo(cx + 1f, boatY - 16f)
+                sailPath.lineTo(cx + 13f, boatY - 2f)
+                sailPath.lineTo(cx + 1f, boatY - 2f)
+                sailPath.close()
+                canvas.drawPath(sailPath, pf)
+                canvas.drawPath(sailPath, p)
+            }
+        }
     }
 
     private fun drawGroupDebugInfo(canvas: Canvas) {
