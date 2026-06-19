@@ -1374,19 +1374,21 @@ class CaptureView(context: Context) : View(context) {
                     Log.d(TAG, "ÉDITION maintenu après long-press (hover actif)")
                     // Reconstruire le bitmap avec le mot à sa position finale
                     rebuildBitmap()
-                    // Réactiver le timer d'inférence pour le groupe ouvert restant
+                    // Réactiver le timer d'inférence (groupes non inférés seulement)
                     inferFuture?.cancel(false)
                     inferFuture = inferExecutor.schedule({
                         val groups = computeWordGroups()
-                        for (gi in (lastInferredSpatialGroup + 1) until groups.size) {
-                            val group = groups[gi]
+                        for ((gi, group) in groups.withIndex()) {
                             if (group.isEmpty()) continue
-                            val snapshot = strokeRegistry.toList()
-                            val seq = groupSequenceCounter.getAndIncrement()
-                            Log.i(TAG, "⏱️ Post-édition: groupe $gi (${group.size}s) → seq=$seq")
-                            mapSpatialGroupToSeq(group, seq)
-                            onWordGroupCompleted?.invoke(snapshot, group, seq)
-                            lastInferredSpatialGroup = gi
+                            val firstIdx = group.first()
+                            if (firstIdx !in inferredGroups) {
+                                val snapshot = strokeRegistry.toList()
+                                val seq = groupSequenceCounter.getAndIncrement()
+                                Log.i(TAG, "⏱️ Post-édition: groupe $gi (${group.size}s) → seq=$seq")
+                                mapSpatialGroupToSeq(group, seq)
+                                onWordGroupCompleted?.invoke(snapshot, group, seq)
+                                inferredGroups.add(firstIdx)
+                            }
                         }
                     }, 500, java.util.concurrent.TimeUnit.MILLISECONDS)
                     Log.d(TAG, "ÉDITION → CAPTURE (stylet levé après long-press)")
@@ -1801,10 +1803,11 @@ class CaptureView(context: Context) : View(context) {
 
     // activeStrokeBase supprimé — GroupManager gère l'archivage
 
-    // ── Timer d'inférence 500ms (thread séparé pour ne pas être bloqué par le hover) ──
+    // ── Timer d'inférence 500ms (thread séparé, async pour ne pas bloquer le UI/hover) ──
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
     private var inferFuture: java.util.concurrent.ScheduledFuture<*>? = null
-    private var lastInferredSpatialGroup: Int = -1
+    // Groupes déjà inférés (identifié par l'index du premier stroke — stable)
+    private val inferredGroups = mutableSetOf<Int>()
 
     private fun registerCompletedStroke() {
         val ds = drawingStroke ?: return
@@ -1822,49 +1825,39 @@ class CaptureView(context: Context) : View(context) {
         groupManager.onStrokeSealed(inkStroke)
         Log.d(TAG, "GroupManager: stroke #$inkStrokeId → ${groupManager.allGroups().size} groupes actifs")
 
-        // ═══ MOTS OUVERTS : inférence immédiate des groupes fermés ═══
-        // Dès qu'un nouveau groupe est créé, tous les groupes avant le dernier
-        // sont "fermés" (plus aucun stroke n'ira dedans) → inférés immédiatement.
-        // Seul le dernier groupe (ouvert) attend un timer de 500ms.
         throttledInvalidate()
 
+        // ═══ Marquer le groupe modifié comme « non inféré » ═══
+        // Le groupe ouvert vient de recevoir un nouveau stroke → sa transcription est obsolète.
         val groups = computeWordGroups()
         val openIdx = groups.size - 1
-
-        // ── Inférer les groupes fermés immédiatement ──
-        for (gi in (lastInferredSpatialGroup + 1) until openIdx.coerceAtLeast(0)) {
-            val group = groups[gi]
-            if (group.isEmpty()) continue
-            val snapshot = strokeRegistry.toList()
-            val seq = groupSequenceCounter.getAndIncrement()
-            Log.i(TAG, "⚡ Inférer immédiat: groupe $gi/${openIdx} (${group.size} strokes) → seq=$seq")
-            mapSpatialGroupToSeq(group, seq)
-            onWordGroupCompleted?.invoke(snapshot, group, seq)
-            lastInferredSpatialGroup = gi
+        if (openIdx >= 0 && groups[openIdx].isNotEmpty()) {
+            val openFirst = groups[openIdx].first()
+            inferredGroups.remove(openFirst)
         }
 
-        // ── Timer pour le groupe ouvert (dernier) ──
-        if (openIdx >= 0 && openIdx > lastInferredSpatialGroup) {
-            inferFuture?.cancel(false)
-            inferFuture = inferExecutor.schedule({
-                val latestGroups = computeWordGroups()
-                val latestOpenIdx = latestGroups.size - 1
-                // Inférer le groupe ouvert s'il est resté stable 500ms
-                if (latestOpenIdx >= 0 && latestOpenIdx > lastInferredSpatialGroup) {
-                    for (gi in (lastInferredSpatialGroup + 1)..latestOpenIdx) {
-                        val group = latestGroups[gi]
-                        if (group.isEmpty()) continue
-                        val snapshot = strokeRegistry.toList()
-                        val seq = groupSequenceCounter.getAndIncrement()
-                        Log.i(TAG, "⏱️ Timeout 500ms: groupe $gi/${latestOpenIdx} (${group.size} strokes) → seq=$seq")
-                        mapSpatialGroupToSeq(group, seq)
-                        onWordGroupCompleted?.invoke(snapshot, group, seq)
-                        lastInferredSpatialGroup = gi
-                    }
+        // ═══ Timer unique 500ms pour TOUS les groupes ═══
+        // Annulé au prochain PENDOWN. Si l'utilisateur écrit sans pause,
+        // le timer est constamment réarmé → pas d'inférence intempestive.
+        // Si l'utilisateur marque une pause ≥ 500ms, tous les groupes
+        // modifiés depuis leur dernière inférence sont inférés.
+        inferFuture?.cancel(false)
+        inferFuture = inferExecutor.schedule({
+            val latest = computeWordGroups()
+            for ((gi, group) in latest.withIndex()) {
+                if (group.isEmpty()) continue
+                val firstIdx = group.first()
+                if (firstIdx !in inferredGroups) {
+                    val snapshot = strokeRegistry.toList()
+                    val seq = groupSequenceCounter.getAndIncrement()
+                    Log.i(TAG, "🧠 Inférer groupe $gi (${group.size}s) → seq=$seq")
+                    mapSpatialGroupToSeq(group, seq)
+                    onWordGroupCompleted?.invoke(snapshot, group, seq)
+                    inferredGroups.add(firstIdx)
                 }
-            }, 500, java.util.concurrent.TimeUnit.MILLISECONDS)
-            Log.d(TAG, "Timer 500ms réarmé pour groupe ouvert $openIdx (thread séparé)")
-        }
+            }
+        }, 500, java.util.concurrent.TimeUnit.MILLISECONDS)
+        Log.d(TAG, "Timer 500ms réarmé (${groups.size} groupes, ${inferredGroups.size} déjà inférés)")
     }
 
     /**
@@ -3170,27 +3163,39 @@ class CaptureView(context: Context) : View(context) {
     }
 
     /**
-     * DEBUG : affiche l'état des groupes via GroupManager.
+     * Label des groupes : affiché sous l'interligne.
+     * Format : *G{index}-{N}S {transcription}
+     * ★ pour le groupe sélectionné.
      */
     private fun drawGroupDebugInfo(canvas: Canvas) {
         val groups = getSpatialGroups()
         for ((gi, groupIndices) in groups.withIndex()) {
             if (groupIndices.isEmpty()) continue
-            val firstIdx = groupIndices.first()
-            if (firstIdx >= strokeRegistry.size) continue
-            val s = strokeRegistry[firstIdx]
-            if (s.activePoints < 1) continue
-            val x = s.points[0].first
-            val y = s.points[0].second - 20f
+            // Calculer le centre Y du groupe, puis le snap à l'interligne
+            var sumY = 0f; var count = 0
+            for (si in groupIndices) {
+                if (si >= strokeRegistry.size) continue
+                val s = strokeRegistry[si]
+                for (k in 0 until s.activePoints) {
+                    sumY += s.points[k].second; count++
+                }
+            }
+            if (count == 0) continue
+            val avgY = sumY / count
+            val lineY = snapToLine(avgY)
+            val labelY = lineY + 28f  // sous l'interligne
+            // Position X : bord gauche du groupe
+            val bounds = getSpatialBounds()[gi]
+            val labelX = bounds.left
 
             // État SELECTED ?
             val selectedIndices = groupManager.groupsInState(GroupState.SELECTED)
                 .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
             val isSelected = groupIndices.any { it in selectedIndices }
-            val state = if (isSelected) "★" else "$gi"
-            canvas.drawText("$state:${groupIndices.size}s", x, y, debugTextPaint)
+            val state = if (isSelected) "★" else "G$gi"
+            val label = "*$state-${groupIndices.size}S"
+            canvas.drawText(label, labelX, labelY, debugTextPaint)
         }
-        canvas.drawText("${groups.size} groupes", 20f, height - 20f, debugTextPaint)
     }
 
     fun clear() {
@@ -3217,6 +3222,7 @@ class CaptureView(context: Context) : View(context) {
         registryIndexToInkStrokeId.clear()
         // ═══ seedGroups : retour au mode écriture live ═══
         seedGroups = null
+        inferredGroups.clear()
         invalidateSpatialCache()
         pointInStroke = 0
         hasPrevPoint = false
