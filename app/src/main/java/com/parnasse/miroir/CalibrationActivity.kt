@@ -178,7 +178,7 @@ class CalibrationActivity : Activity() {
                 else Color.argb(180, 80, 80, 80))
                 if (newState) {
                     testView?.currentMode = CaptureMode.EDIT
-                    testView?.temporalMode = true
+                    testView?.currentMode = CaptureMode.EDIT_TEMPORAL
                     Toast.makeText(this@CalibrationActivity, "🔗 Tapez deux groupes pour les fusionner", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -269,7 +269,7 @@ class CalibrationActivity : Activity() {
         // Mettre a jour le bouton mode quand le mode change
         cv.onModeChanged = { mode ->
             modeIndicatorBtn.text = when {
-                cv.temporalMode -> "⏳"
+                cv.currentMode == CaptureMode.EDIT_TEMPORAL -> "⏳"
                 mode == CaptureMode.CAPTURE -> "🚢"
                 mode == CaptureMode.EDIT -> "🔦"
                 else -> "🚢"

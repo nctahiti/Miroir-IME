@@ -71,6 +71,7 @@ data class RectF(val left: Float, val top: Float, val right: Float, val bottom: 
 enum class CaptureMode(val label: String) {
     CAPTURE("capture"),
     EDIT("édition"),
+    EDIT_TEMPORAL("effacement"),
     INSERT("insertion"),
     REVIEW("relecture")
 }

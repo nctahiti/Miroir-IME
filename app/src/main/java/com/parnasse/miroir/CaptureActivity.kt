@@ -238,7 +238,7 @@ class CaptureActivity : Activity() {
             setOnClickListener {
                 captureMode = if (captureMode == CaptureMode.CAPTURE) CaptureMode.EDIT else CaptureMode.CAPTURE
                 captureView?.currentMode = captureMode
-                if (captureMode == CaptureMode.EDIT) captureView?.temporalMode = true
+                if (captureMode == CaptureMode.EDIT) captureView?.currentMode = CaptureMode.EDIT_TEMPORAL
                 this.text = if (captureMode == CaptureMode.CAPTURE) "✎" else "Ed"
                 this.setBackgroundColor(if (captureMode == CaptureMode.CAPTURE)
                     android.graphics.Color.argb(180, 80, 80, 80)
@@ -267,7 +267,7 @@ class CaptureActivity : Activity() {
                 else
                     android.graphics.Color.argb(180, 80, 80, 80))
                 if (newState) {
-                    captureView?.temporalMode = true
+                    captureView?.currentMode = CaptureMode.EDIT_TEMPORAL
                     captureView?.currentMode = CaptureMode.EDIT
                     captureMode = CaptureMode.EDIT
                     Toast.makeText(this@CaptureActivity, "🪄 Tapez un groupe pour le décomposer", Toast.LENGTH_SHORT).show()
@@ -286,7 +286,7 @@ class CaptureActivity : Activity() {
                     android.graphics.Color.argb(200, 100, 180, 255)
                 else
                     android.graphics.Color.argb(180, 80, 80, 80))
-                    captureView?.temporalMode = true
+                    captureView?.currentMode = CaptureMode.EDIT_TEMPORAL
                 if (newState) {
                     captureView?.currentMode = CaptureMode.EDIT
                     captureMode = CaptureMode.EDIT
