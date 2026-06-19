@@ -1409,11 +1409,11 @@ class CaptureView(context: Context) : View(context) {
                         // Trouver le mot sous le stylet
                         val hitIdx = hitTest(longPressStartX, longPressStartY)
                         if (hitIdx != null) {
-                            scrubGroupIndices = selectedWordGroup
-                            scrubStartX = longPressStartX
                             selectedWordGroup = findWordGroup(hitIdx)
                             initReflow(hitIdx)
                             if (selectedWordGroup != null) {
+                            scrubGroupIndices = selectedWordGroup
+                            scrubStartX = longPressStartX
                                 dragWordYOffset = computeGroupCenterY(selectedWordGroup!!) - snapToLine(computeGroupCenterY(selectedWordGroup!!))
                             }
                             dragWordGroup = selectedWordGroup
@@ -1421,10 +1421,14 @@ class CaptureView(context: Context) : View(context) {
                             editStartX = longPressStartX
                             editStartY = longPressStartY
                             wasDrag = false
-                            // ═══ Dessiner le mot comme currentPath pour rendu visible ═══
-                            updateDragCurrentPath()
-                            rebuildBitmap()  // enlever le mot du bitmap immediatement
-                            Log.i(TAG, "Long-press → DRAG: mot ${selectedWordGroup?.size ?: 0}s (currentPath actif)")
+                            if (temporalMode) {
+                                // Mode effacement: le mot reste dans le bitmap
+                                Log.i(TAG, "Long-press -> TEMPORAL: mot ${selectedWordGroup?.size ?: 0}s")
+                            } else {
+                                updateDragCurrentPath()
+                                rebuildBitmap()
+                                Log.i(TAG, "Long-press -> DRAG: mot ${selectedWordGroup?.size ?: 0}s")
+                            }
                         } else {
                             Log.d(TAG, "Long-press → ÉDITION: aucun mot sous le stylet")
                         }
