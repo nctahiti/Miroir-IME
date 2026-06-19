@@ -1333,7 +1333,7 @@ class CaptureView(context: Context) : View(context) {
 
     private fun handleCaptureEvent(event: MotionEvent) {
         // Si un long-press a basculé en mode ÉDITION, forwarder au handler EDIT
-        if (longPressTriggered && currentMode == CaptureMode.EDIT) {
+        if (longPressTriggered && currentMode == (CaptureMode.EDIT || currentMode == CaptureMode.EDIT_TEMPORAL) {
             if (event.actionMasked == MotionEvent.ACTION_UP) {
                 longPressTriggered = false
             }
