@@ -589,12 +589,10 @@ class CaptureView(context: Context) : View(context) {
                 isHovering = false
                 hoverStrokeIndex = null
                 hoverWordGroup = null
-                // Si en ÉDITION → retour CAPTURE (hover perdu = fin du mode déplacement)
-                if (currentMode == CaptureMode.EDIT) {
-                    currentMode = CaptureMode.CAPTURE
-                    onModeChanged?.invoke(currentMode)
-                    Log.d(TAG, "ÉDITION → CAPTURE (HOVER_EXIT)")
-                }
+                // ⚠️ NE PAS changer de mode sur HOVER_EXIT :
+                // sur e-ink, le passage hover→contact emet HOVER_EXIT avant ACTION_DOWN
+                // → le mode EDIT serait perdu avant meme que le touch n'arrive.
+                // Le retour CAPTURE est gere par le tap vide dans handleEditEvent UP.
                 invalidate()
             }
         }
