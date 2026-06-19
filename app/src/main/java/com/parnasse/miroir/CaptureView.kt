@@ -887,6 +887,7 @@ class CaptureView(context: Context) : View(context) {
                         currentMode = CaptureMode.CAPTURE
                         onModeChanged?.invoke(currentMode)
                         invalidate()
+                        applyScrubTruncation()
                         Log.d(TAG, "⏳ Tap vide -> sortie EDIT_TEMPORAL")
                         return
                     }
@@ -2450,6 +2451,42 @@ class CaptureView(context: Context) : View(context) {
                 currentPath.add(s.points[i])
             }
         }
+    }
+
+    /** Applique definitivement la troncature du scrub temporel aux strokes */
+    private fun applyScrubTruncation() {
+        val indices = scrubGroupIndices ?: return
+        if (scrubTimelinePos <= 0f) return
+        var tMin = Long.MAX_VALUE; var tMax = Long.MIN_VALUE
+        for (si in indices) {
+            if (si >= strokeRegistry.size) continue
+            for (t in strokeRegistry[si].timestamps) {
+                if (t < tMin) tMin = t
+                if (t > tMax) tMax = t
+            }
+        }
+        if (tMin >= tMax) return
+        val span = tMax - tMin
+        val cutoff = tMax - (scrubTimelinePos * span).toLong()
+        var removed = 0
+        for (si in indices) {
+            if (si >= strokeRegistry.size) continue
+            val stroke = strokeRegistry[si]
+            var keepIdx = -1
+            val newCount = stroke.activePoints
+            for (i in 0 until stroke.activePoints) {
+                if (i < stroke.timestamps.size && stroke.timestamps[i] <= cutoff) keepIdx = i
+            }
+            val keep = keepIdx + 1
+            removed += (newCount - keep)
+            while (stroke.points.size > keep) { stroke.points.removeAt(stroke.points.size - 1) }
+            while (stroke.timestamps.size > keep) { stroke.timestamps.removeAt(stroke.timestamps.size - 1) }
+            while (stroke.pressures.size > keep) { stroke.pressures.removeAt(stroke.pressures.size - 1) }
+        }
+        Log.i(TAG, "Scrub permanent: $removed points retires de ${indices.size} strokes")
+        scrubGroupIndices = null
+        scrubTimelinePos = 0f
+        rebuildBitmap()
     }
 
     private fun rebuildBitmap() {
