@@ -992,6 +992,9 @@ class CaptureView(context: Context) : View(context) {
                     // Seuils assouplis pour e-ink (jitter + MOVE rares si stylet immobile)
                     if (dt > 350 && dx < 40f && dy < 40f) {
                         longPressTriggered = true
+                    if (dt > 100 && (dx > 15f || dy > 15f)) {
+                        longPressDisabled = true
+                    }
                         if (currentMode == CaptureMode.EDIT) {
                             // Entrer en EDIT_TEMPORAL : initialiser le scrub
                             currentMode = CaptureMode.EDIT_TEMPORAL
@@ -1017,6 +1020,10 @@ class CaptureView(context: Context) : View(context) {
                         } else {
                             // Sortir d'EDIT_TEMPORAL → retour EDIT_SPATIAL
                             currentMode = CaptureMode.EDIT
+                            dragWordGroup = null
+                            selectedWordGroup = null
+                            wasDrag = false
+                            longPressDisabled = true
                             scrubGroupIndices = null
                             rebuildBitmap()  // restaurer tout le mot
                             throttledInvalidate()
