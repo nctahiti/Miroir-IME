@@ -1024,11 +1024,6 @@ class CaptureView(context: Context) : View(context) {
                         return  // ce MOVE ne produit pas de drag
                     }
                 }
-                // ═══ Pas de groupe selectionne + mouvement → debut d'ecriture ═══
-                if (dragWordGroup == null && !temporalMode) {
-                    val moveDx = Math.abs(x - longPressStartX)
-                    val moveDy = Math.abs(y - longPressStartY)
-                    if (moveDx > 8f || moveDy > 8f) {
                 // ═══ Mode temporel actif : scrub timeline ═══
                 if (temporalMode) {
                     // deltaX negatif = stylet a gauche = reculer dans le temps = effacer
@@ -1046,6 +1041,11 @@ class CaptureView(context: Context) : View(context) {
                     invalidate()
                     return
                 }
+                // ═══ Pas de groupe selectionne + mouvement → debut d'ecriture ═══
+                if (dragWordGroup == null && !temporalMode) {
+                    val moveDx = Math.abs(x - longPressStartX)
+                    val moveDy = Math.abs(y - longPressStartY)
+                    if (moveDx > 8f || moveDy > 8f) {
                         // L'utilisateur ecrit dans le vide → forward au pipeline capture
                         isWritingInEdit = true
                         // Rejouer le DOWN pour initialiser le stroke dans handleCaptureEvent
