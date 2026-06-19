@@ -183,28 +183,16 @@ class CalibrationActivity : Activity() {
             }
         }
         playgroundBar.addView(mergeBtn)
-        // Bouton 🪄 décomposition
-        val decompBtn = TextView(this).apply {
-            text = "🪄"
+        // Bouton MODE — affiche le mode actif (🚢 CAPTURE / 🔦 EDIT / ⏳ TEMPOREL)
+        val modeIndicatorBtn = TextView(this).apply {
+            text = "🚢"
             textSize = 28f
             setTextColor(Color.WHITE)
             setPadding(dp(16), dp(12), dp(16), dp(12))
-            setBackgroundColor(Color.argb(180, 80, 80, 80))
+            setBackgroundColor(Color.argb(180, 60, 60, 60))
             gravity = Gravity.CENTER
-            setOnClickListener {
-                val newState = !(testView?.decomposeMode ?: false)
-                testView?.decomposeMode = newState
-                this.text = if (newState) "🪄✓" else "🪄"
-                this.setBackgroundColor(if (newState)
-                    Color.argb(200, 255, 160, 0)
-                else Color.argb(180, 80, 80, 80))
-                if (newState) {
-                    testView?.currentMode = CaptureMode.EDIT
-                    Toast.makeText(this@CalibrationActivity, "🪄 Tapez un groupe pour le décomposer", Toast.LENGTH_SHORT).show()
-                }
-            }
         }
-        playgroundBar.addView(decompBtn)
+        playgroundBar.addView(modeIndicatorBtn)
         root.addView(playgroundBar)
 
         // ── Couleur du blob ──────────────────────────────────────────
@@ -277,6 +265,15 @@ class CalibrationActivity : Activity() {
             onWordGroupCompleted = null  // pas de reco, juste affichage
         }
         testView = cv
+        // Mettre a jour le bouton mode quand le mode change
+        cv.onModeChanged = { mode ->
+            modeIndicatorBtn.text = when {
+                cv.temporalMode -> "⏳"
+                mode == CaptureMode.CAPTURE -> "🚢"
+                mode == CaptureMode.EDIT -> "🔦"
+                else -> "🚢"
+            }
+        }
         root.addView(cv, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
         ))

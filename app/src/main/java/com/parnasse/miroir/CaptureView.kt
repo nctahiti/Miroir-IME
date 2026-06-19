@@ -824,7 +824,7 @@ class CaptureView(context: Context) : View(context) {
     private var longPressDisabled = false   // armé si le stylet bouge hors zone → pas de long-press
     // ═══ Effacement temporel (phase 1: structure, phase 2: mécanique) ═══
     private var temporalEraseAvailable = false  // armé après un drag → prochain long-press = effacement
-    private var temporalMode = false             // actif pendant l'effacement temporel
+    internal var temporalMode = false             // actif pendant l'effacement temporel
     private var scrubTimelinePos = 0f            // 0=tout visible, 1=tout neutralise
     private var scrubStartX = 0f                 // X au debut du scrub (repere absolu)
     private var scrubInitialPos = 0f             // timelinePos au debut du scrub
@@ -877,6 +877,17 @@ class CaptureView(context: Context) : View(context) {
             MotionEvent.ACTION_DOWN -> {
                 editStartX = x; editStartY = y
                 wasDrag = false
+                // ═══ En mode temporel : nouveau PENDOWN = nouveau scrub ═══
+                if (temporalMode) {
+                    scrubStartX = x
+                    scrubInitialPos = scrubTimelinePos
+                    // Garder le meme groupe cible
+                    longPressStartX = x; longPressStartY = y
+                    longPressStartTime = System.currentTimeMillis()
+                    longPressDisabled = false
+                    Log.d(TAG, "⏳ PENDOWN en mode temporel — pret pour scrub (initPos=$scrubInitialPos)")
+                    return
+                }
                 // Armer le timer long-press pour le toggle EDIT_SPATIAL ↔ TEMPORAL
                 longPressStartX = x
                 longPressStartY = y
@@ -1082,6 +1093,7 @@ class CaptureView(context: Context) : View(context) {
                 // ═══ Fin d'écriture depuis EDIT → forward + rester en EDIT ═══
                 if (isWritingInEdit) {
                     isWritingInEdit = false
+        modeIndicatorLogged = false
                     handleCaptureEvent(event)
                     // Le stroke est absorbé dans le groupe SELECTED (si proche)
                     // On reste en EDIT_SPATIAL, le groupe reste sélectionné
@@ -1140,14 +1152,7 @@ class CaptureView(context: Context) : View(context) {
                     Log.d(TAG, "ÉDITION maintenu (hover actif, re-drag possible)")
                     refreshSpatialBounds()  // strokes déplacés → bounds à jour, groupes inchangés
                 }
-                // ═══ Sortie EDIT_TEMPORAL au lever du stylet → retour EDIT_SPATIAL ═══
-                if (temporalMode && !wasDrag) {
-                    temporalMode = false
-                    scrubGroupIndices = null
-                    rebuildBitmap()  // restaurer tout le mot
-                    refreshSpatialBounds()
-                    Log.d(TAG, "EDIT_TEMPORAL → EDIT_SPATIAL (UP, scrubPos=$scrubTimelinePos)")
-                }
+                // ═══ Mode temporel TIENT au UP — sortie uniquement par long-press toggle ═══
                 // Si pas de drag, garder la sélection active (re-grab possible)
                 // Mais si on vient d'un long-press, nettoyer currentPath et rebuild
                 if (longPressTriggered) {
@@ -3412,10 +3417,16 @@ class CaptureView(context: Context) : View(context) {
      * EDIT_SPATIAL: phare (tour + toit + lumiere)
      * EDIT_TEMPORAL: montre (cadran + aiguilles)
      */
+    private var modeIndicatorLogged = false
     private fun drawModeIndicator(canvas: Canvas) {
+        if (!modeIndicatorLogged) {
+            Log.i(TAG, "drawModeIndicator: width=$width height=$height mode=$currentMode temporal=$temporalMode")
+            modeIndicatorLogged = true
+        }
+        // Position sous la barre d'outils (~180px du haut de la CaptureView)
         val margin = 52f
         val cx = width - margin
-        val cy = margin
+        val cy = 180f
         val p = modeIndicatorPaint
         val pf = modeIndicatorFill
 
@@ -3551,6 +3562,7 @@ class CaptureView(context: Context) : View(context) {
         scrubTimelinePos = 0f
         scrubGroupIndices = null
         isWritingInEdit = false
+        modeIndicatorLogged = false
         throttledInvalidate()
     }
 }
