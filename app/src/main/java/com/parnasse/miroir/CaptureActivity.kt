@@ -593,6 +593,12 @@ class CaptureActivity : Activity() {
                 reloadFromTranscription()
                 poemText?.setTextColor(android.graphics.Color.argb(220, 40, 120, 200))
                 Log.i(TAG, "🔄 Transcriptions rafraîchies: $accumulatedText")
+                // Peupler les labels d'interligne
+                for ((idx, group) in groups.withIndex()) {
+                    if (group.isNotEmpty() && idx < results.size) {
+                        captureView?.onGroupInferred(group.first(), results[idx])
+                    }
+                }
                 // Sauvegarder dans le fichier .note aussi
                 val txWords = newTw.getOrderedWords()
                 val path = captureView?.saveCurrentNote(mode = "blocnote", transcriptions = txWords)

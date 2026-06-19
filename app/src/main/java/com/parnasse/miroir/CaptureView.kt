@@ -1677,6 +1677,20 @@ class CaptureView(context: Context) : View(context) {
             seedGroups = loadedGroups.toList()
             invalidateSpatialCache()
 
+            // ═══ Peupler inferredGroups + groupTranscriptions depuis le .note ═══
+            for (wi in 0 until words.length()) {
+                val word = words.getJSONObject(wi)
+                val transcription = word.optString("transcription", "")
+                if (wi < loadedGroups.size && loadedGroups[wi].isNotEmpty()) {
+                    val firstIdx = loadedGroups[wi].first()
+                    inferredGroups.add(firstIdx)
+                    if (transcription.isNotEmpty()) {
+                        groupTranscriptions[firstIdx] = transcription
+                    }
+                }
+            }
+            Log.i(TAG, "Note chargée: ${inferredGroups.size} groupes marqués inférés, ${groupTranscriptions.size} transcriptions")
+
             currentNotePath = file.absolutePath
             rebuildBitmap()
             currentMode = CaptureMode.EDIT
