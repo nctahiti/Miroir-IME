@@ -29,6 +29,7 @@ class CalibrationActivity : Activity() {
         private const val KEY_TEMPORAL_DISTANCE = "temporal_distance_ms"
         private const val KEY_LONG_HOVER_DELAY = "long_hover_delay_ms"
         private const val KEY_ABSORB_CONTACTS = "absorb_contacts"
+        private const val KEY_BLOB_COLOR = "blob_color"  // ARGB int persiste
 
         const val DEFAULT_AUTO_INFER_DELAY = 1500L
         const val DEFAULT_SPATIAL_DISTANCE_X = 40f
@@ -36,6 +37,7 @@ class CalibrationActivity : Activity() {
         const val DEFAULT_TEMPORAL_DISTANCE = 800L
         const val DEFAULT_LONG_HOVER_DELAY = 1000L
         const val DEFAULT_ABSORB_CONTACTS = 1  // 1 = binaire, 10 = amorti
+        const val DEFAULT_BLOB_COLOR = 0x503C3C3C.toInt()  // gris fonce alpha 80
 
         fun prefs(ctx: Context): SharedPreferences =
             ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -57,6 +59,9 @@ class CalibrationActivity : Activity() {
 
         fun getAbsorbContacts(ctx: Context): Int =
             prefs(ctx).getInt(KEY_ABSORB_CONTACTS, DEFAULT_ABSORB_CONTACTS)
+
+        fun getBlobColor(ctx: Context): Int =
+            prefs(ctx).getInt(KEY_BLOB_COLOR, DEFAULT_BLOB_COLOR)
     }
 
     private lateinit var delaySeek: SeekBar
@@ -201,6 +206,70 @@ class CalibrationActivity : Activity() {
         }
         playgroundBar.addView(decompBtn)
         root.addView(playgroundBar)
+
+        // ── Couleur du blob ──────────────────────────────────────────
+        val blobColorLabel = TextView(this).apply {
+            text = "Couleur du blob"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setPadding(0, dp(8), 0, dp(4))
+            setTextColor(Color.DKGRAY)
+        }
+        root.addView(blobColorLabel)
+
+        val blobColors = listOf(
+            0x503C3C3C.toInt() to "Gris",      // gris fonce (defaut)
+            0x50222222.toInt() to "Noir",       // presque noir
+            0x50444488.toInt() to "Bleu",       // bleu discret
+            0x50664433.toInt() to "Sepia",      // brun chaud
+            0x50336633.toInt() to "Vert",       // vert sombre
+            0x50882222.toInt() to "Rouge"       // rouge sombre
+        )
+        var currentBlobColor = p.getInt(KEY_BLOB_COLOR, DEFAULT_BLOB_COLOR)
+
+        val swatchRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, dp(8))
+        }
+
+        val swatches = mutableListOf<TextView>()
+        for ((color, name) in blobColors) {
+            val swatch = TextView(this).apply {
+                text = "  "  // petit carre
+                textSize = 14f
+                setTextColor(Color.TRANSPARENT)
+                setBackgroundColor(color)
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+                // Bordure de selection
+                val isSelected = color == currentBlobColor
+                if (isSelected) {
+                    setPadding(dp(10), dp(10), dp(10), dp(10))
+                    // bordure epaisse = padding reduit + fond + stroke simule
+                    this.setTextColor(Color.BLACK)
+                    this.text = "✓"
+                    this.gravity = Gravity.CENTER
+                }
+                setOnClickListener {
+                    // Deselectionner tous
+                    for (s in swatches) {
+                        s.setPadding(dp(12), dp(12), dp(12), dp(12))
+                        s.setTextColor(Color.TRANSPARENT)
+                        s.text = "  "
+                    }
+                    // Selectionner celui-ci
+                    this.setPadding(dp(10), dp(10), dp(10), dp(10))
+                    this.setTextColor(Color.BLACK)
+                    this.text = "✓"
+                    this.gravity = Gravity.CENTER
+                    // Persister
+                    prefs(this@CalibrationActivity).edit().putInt(KEY_BLOB_COLOR, color).apply()
+                    currentBlobColor = color
+                    testView?.invalidate()  // redessiner le blob
+                }
+            }
+            swatches.add(swatch)
+            swatchRow.addView(swatch)
+        }
+        root.addView(swatchRow)
 
         // ── Zone d'essai (CaptureView réelle avec TouchHelper) ──────────
         val cv = CaptureView(this).apply {

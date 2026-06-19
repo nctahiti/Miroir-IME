@@ -3062,7 +3062,9 @@ class CaptureView(context: Context) : View(context) {
     /**
      * 🔦 PHARE + BLOB — affichés ensemble pour le groupe SELECTED.
      * Utilise GroupManager pour trouver le groupe sélectionné (hover maintenu).
-     * Blob ovoïde : contour autour des strokes du groupe.
+     * Contour extérieur par tracé épais (tube autour de chaque stroke) —
+     * remplace les centaines d'ovales individuels (O(n_points) → O(n_strokes)).
+     * L'union naturelle des tubes aux caps ronds crée l'aura du mot.
      * Phare : point noir sur l'interligne (dessiné dans drawActiveGroupCursor).
      */
     private fun drawActiveGroupBlob(canvas: Canvas) {
@@ -3083,25 +3085,34 @@ class CaptureView(context: Context) : View(context) {
         val blobDistY = CalibrationActivity.getSpatialDistanceY(context)
         blobRadiusX = blobDistX * 0.7f
         blobRadiusY = blobDistY * 0.35f
-        val sampleStep = ((blobRadiusX + blobRadiusY) / 12f).toInt().coerceIn(1, 6)
+        // Épaisseur du tube = somme des rayons → même couverture que les anciens ovales
+        val strokeW = (blobRadiusX + blobRadiusY).coerceIn(15f, 120f)
+
+        // Tracé épais à caps ronds → tube continu autour de chaque stroke
+        // L'union naturelle des tubes forme le contour extérieur (aura)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            this.strokeWidth = strokeW
+            color = CalibrationActivity.getBlobColor(context)
+        }
 
         for (groupIndices in groupsToDraw) {
-            val isSelected = groupIndices.any { it in selectedIndices }
+            // Tous les strokes du groupe combines en UN SEUL Path
+            // -> un seul drawPath par groupe -> pas d'accumulation d'alpha
+            // entre strokes superposes (meme opacite partout)
+            val combinedPath = Path()
             for (idx in groupIndices) {
                 if (idx >= strokeRegistry.size) continue
                 val s = strokeRegistry[idx]
-                var pi = 0
-                for ((x, y) in s.points) {
-                    if (pi % sampleStep == 0) {
-                        canvas.drawOval(
-                            x - blobRadiusX, y - blobRadiusY,
-                            x + blobRadiusX, y + blobRadiusY,
-                            blobActivePaint
-                        )
-                    }
-                    pi++
+                if (s.points.size < 2) continue
+                combinedPath.moveTo(s.points[0].first, s.points[0].second)
+                for (i in 1 until s.points.size) {
+                    combinedPath.lineTo(s.points[i].first, s.points[i].second)
                 }
             }
+            canvas.drawPath(combinedPath, paint)
         }
     }
 
