@@ -603,15 +603,6 @@ class CaptureView(context: Context) : View(context) {
                 hoverStrokeIndex = null
                 hoverWordGroup = null
                 // ⚠️ NE PAS changer de mode sur HOVER_EXIT :
-                // Sortie du mode temporel si le stylet quitte l'ecran
-                if (temporalMode) {
-                    temporalMode = false
-                    scrubGroupIndices = null
-                    scrubTimelinePos = 0f
-                    rebuildBitmap()
-                    Log.d(TAG, "HOVER_EXIT en mode temporel -> retour EDIT_SPATIAL")
-                    invalidate()
-                }
                 // sur e-ink, le passage hover->contact emet HOVER_EXIT avant ACTION_DOWN
                 // → le mode EDIT serait perdu avant meme que le touch n'arrive.
                 // Le retour CAPTURE est gere par le tap vide dans handleEditEvent UP.
@@ -898,8 +889,8 @@ class CaptureView(context: Context) : View(context) {
                         rebuildBitmap()
                         invalidate()
                         Log.d(TAG, "⏳ Tap vide -> sortie EDIT_TEMPORAL")
-                        // fallthrough - pas de return
-                    } else {
+                        return
+                    }
                     scrubInitialPos = scrubTimelinePos
                     // Garder le meme groupe cible
                     longPressStartX = x; longPressStartY = y
@@ -907,7 +898,6 @@ class CaptureView(context: Context) : View(context) {
                     longPressDisabled = false
                     Log.d(TAG, "⏳ PENDOWN en mode temporel — pret pour scrub (initPos=$scrubInitialPos)")
                     return
-                    }
                 }
                 // Armer le timer long-press pour le toggle EDIT_SPATIAL ↔ TEMPORAL
                 longPressStartX = x
@@ -988,6 +978,23 @@ class CaptureView(context: Context) : View(context) {
                     handleCaptureEvent(event)
                     return
                 }
+                // ═══ Mode temporel actif : scrub timeline ═══
+                if (temporalMode) {
+                    // deltaX negatif = stylet a gauche = reculer dans le temps = effacer
+                    val deltaX = scrubStartX - x
+                    val scrubScale = 300f  // pixels pour parcourir 0→1
+                    val prevPos = scrubTimelinePos
+                    scrubTimelinePos = (scrubInitialPos + deltaX / scrubScale).coerceIn(0f, 1f)
+                    if (Math.abs(scrubTimelinePos - prevPos) > 0.01f) {
+                        Log.d(TAG, "⏳ scrub: pos=$scrubTimelinePos deltaX=$deltaX groupe=${scrubGroupIndices?.size}s")
+                    }
+                    // Appliquer au rendu : rebuildBitmap avec filtre temporel
+                    rebuildBitmap()
+                    refreshSpatialBounds()
+                    // Invalidation directe (pas de throttling) — le scrub doit etre reactif
+                    invalidate()
+                    return
+                }
                 // ═══ Long-press en EDIT : entrer/sortir EDIT_TEMPORAL ═══
                 if (!longPressTriggered && !longPressDisabled && temporalEraseAvailable) {
                     val dt = System.currentTimeMillis() - longPressStartTime
@@ -1039,23 +1046,6 @@ class CaptureView(context: Context) : View(context) {
                     val moveDy = Math.abs(y - longPressStartY)
                     if (moveDx > 8f || moveDy > 8f) {
                         // L'utilisateur ecrit dans le vide → forward au pipeline capture
-                // ═══ Mode temporel actif : scrub timeline ═══
-                if (temporalMode) {
-                    // deltaX negatif = stylet a gauche = reculer dans le temps = effacer
-                    val deltaX = scrubStartX - x
-                    val scrubScale = 100f  // pixels pour parcourir 0→1
-                    val prevPos = scrubTimelinePos
-                    scrubTimelinePos = (scrubInitialPos + deltaX / scrubScale).coerceIn(0f, 1f)
-                    if (Math.abs(scrubTimelinePos - prevPos) > 0.01f) {
-                        Log.d(TAG, "⏳ scrub: pos=$scrubTimelinePos deltaX=$deltaX groupe=${scrubGroupIndices?.size}s")
-                    }
-                    // Appliquer au rendu : rebuildBitmap avec filtre temporel
-                    rebuildBitmap()
-                    refreshSpatialBounds()
-                    // Invalidation directe (pas de throttling) — le scrub doit etre reactif
-                    invalidate()
-                    return
-                }
                         isWritingInEdit = true
                         // Rejouer le DOWN pour initialiser le stroke dans handleCaptureEvent
                         val downEvent = MotionEvent.obtain(
@@ -1406,39 +1396,33 @@ class CaptureView(context: Context) : View(context) {
                     val dy = Math.abs(event.y - longPressStartY)
                     if (dt > 500 && dx < 15f && dy < 15f) {
                         longPressTriggered = true
-                        // ═══ LONG-PRESS → TEMPORAL (effacement par defaut) : annuler le stroke, préparer le drag ═══
+                        // ═══ LONG-PRESS → DRAG : annuler le stroke, préparer le drag ═══
                         drawingStroke = null
                         currentPath.clear()
                         currentMode = CaptureMode.EDIT
-                        temporalMode = true  // mode effacement par defaut en EDIT
-
+                        temporalMode = true  // mode effacement par defaut
+                        onModeChanged?.invoke(currentMode)
                         temporalEraseAvailable = true  // arme des l'entree en EDIT
                         scrubTimelinePos = 0f          // reset scrub
                         // Trouver le mot sous le stylet
                         val hitIdx = hitTest(longPressStartX, longPressStartY)
                         if (hitIdx != null) {
+                            scrubGroupIndices = selectedWordGroup
+                            scrubStartX = longPressStartX
                             selectedWordGroup = findWordGroup(hitIdx)
                             initReflow(hitIdx)
                             if (selectedWordGroup != null) {
                                 dragWordYOffset = computeGroupCenterY(selectedWordGroup!!) - snapToLine(computeGroupCenterY(selectedWordGroup!!))
-                            scrubGroupIndices = selectedWordGroup
-                            scrubStartX = longPressStartX
-                            scrubInitialPos = 0f
                             }
                             dragWordGroup = selectedWordGroup
                             selectedStrokeIndex = hitIdx
                             editStartX = longPressStartX
                             editStartY = longPressStartY
                             wasDrag = false
-                            if (temporalMode) {
-                                // Mode effacement: le mot reste dans le bitmap, le scrub filtrera
-                                Log.i(TAG, "Long-press -> TEMPORAL: mot ${selectedWordGroup?.size ?: 0}s")
-                            } else {
-                                // Mode deplacement: currentPath + suppression du bitmap
-                                updateDragCurrentPath()
-                                rebuildBitmap()  // enlever le mot du bitmap immediatement
-                                Log.i(TAG, "Long-press -> DRAG: mot ${selectedWordGroup?.size ?: 0}s")
-                            }
+                            // ═══ Dessiner le mot comme currentPath pour rendu visible ═══
+                            updateDragCurrentPath()
+                            rebuildBitmap()  // enlever le mot du bitmap immediatement
+                            Log.i(TAG, "Long-press → DRAG: mot ${selectedWordGroup?.size ?: 0}s (currentPath actif)")
                         } else {
                             Log.d(TAG, "Long-press → ÉDITION: aucun mot sous le stylet")
                         }

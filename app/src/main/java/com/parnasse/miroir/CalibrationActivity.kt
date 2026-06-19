@@ -178,6 +178,7 @@ class CalibrationActivity : Activity() {
                 else Color.argb(180, 80, 80, 80))
                 if (newState) {
                     testView?.currentMode = CaptureMode.EDIT
+                    testView?.temporalMode = true
                     Toast.makeText(this@CalibrationActivity, "🔗 Tapez deux groupes pour les fusionner", Toast.LENGTH_SHORT).show()
                 }
             }
