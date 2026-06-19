@@ -978,23 +978,6 @@ class CaptureView(context: Context) : View(context) {
                     handleCaptureEvent(event)
                     return
                 }
-                // ═══ Mode temporel actif : scrub timeline ═══
-                if (temporalMode) {
-                    // deltaX negatif = stylet a gauche = reculer dans le temps = effacer
-                    val deltaX = scrubStartX - x
-                    val scrubScale = 300f  // pixels pour parcourir 0→1
-                    val prevPos = scrubTimelinePos
-                    scrubTimelinePos = (scrubInitialPos + deltaX / scrubScale).coerceIn(0f, 1f)
-                    if (Math.abs(scrubTimelinePos - prevPos) > 0.01f) {
-                        Log.d(TAG, "⏳ scrub: pos=$scrubTimelinePos deltaX=$deltaX groupe=${scrubGroupIndices?.size}s")
-                    }
-                    // Appliquer au rendu : rebuildBitmap avec filtre temporel
-                    rebuildBitmap()
-                    refreshSpatialBounds()
-                    // Invalidation directe (pas de throttling) — le scrub doit etre reactif
-                    invalidate()
-                    return
-                }
                 // ═══ Long-press en EDIT : entrer/sortir EDIT_TEMPORAL ═══
                 if (!longPressTriggered && !longPressDisabled && temporalEraseAvailable) {
                     val dt = System.currentTimeMillis() - longPressStartTime
@@ -1045,6 +1028,23 @@ class CaptureView(context: Context) : View(context) {
                     val moveDx = Math.abs(x - longPressStartX)
                     val moveDy = Math.abs(y - longPressStartY)
                     if (moveDx > 8f || moveDy > 8f) {
+                // ═══ Mode temporel actif : scrub timeline ═══
+                if (temporalMode) {
+                    // deltaX negatif = stylet a gauche = reculer dans le temps = effacer
+                    val deltaX = scrubStartX - x
+                    val scrubScale = 100f  // pixels pour parcourir 0→1
+                    val prevPos = scrubTimelinePos
+                    scrubTimelinePos = (scrubInitialPos + deltaX / scrubScale).coerceIn(0f, 1f)
+                    if (Math.abs(scrubTimelinePos - prevPos) > 0.01f) {
+                        Log.d(TAG, "⏳ scrub: pos=$scrubTimelinePos deltaX=$deltaX groupe=${scrubGroupIndices?.size}s")
+                    }
+                    // Appliquer au rendu : rebuildBitmap avec filtre temporel
+                    rebuildBitmap()
+                    refreshSpatialBounds()
+                    // Invalidation directe (pas de throttling) — le scrub doit etre reactif
+                    invalidate()
+                    return
+                }
                         // L'utilisateur ecrit dans le vide → forward au pipeline capture
                         isWritingInEdit = true
                         // Rejouer le DOWN pour initialiser le stroke dans handleCaptureEvent
@@ -1401,6 +1401,7 @@ class CaptureView(context: Context) : View(context) {
                         currentPath.clear()
                         currentMode = CaptureMode.EDIT
                         temporalMode = true  // mode effacement par defaut
+                        deselectAllGroups()  // quitter SELECTED, groupe en mode scrub
                         onModeChanged?.invoke(currentMode)
                         temporalEraseAvailable = true  // arme des l'entree en EDIT
                         scrubTimelinePos = 0f          // reset scrub
