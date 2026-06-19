@@ -365,9 +365,13 @@ class CaptureView(context: Context) : View(context) {
         textSize = 28f
         isFakeBoldText = true
     }
-    // Cache de transcriptions (orderIndex → texte), rafraîchi depuis .transcription
-    private val transcriptionCache = mutableMapOf<Int, String>()
-    internal var transcriptionFile: java.io.File? = null
+    // Transcriptions par groupe (firstStrokeIndex → texte), peuplé directement à l'inférence
+    private val groupTranscriptions = mutableMapOf<Int, String>()
+
+    /** Appelé par CaptureActivity quand un groupe vient d'être inféré. */
+    internal fun onGroupInferred(firstIdx: Int, text: String) {
+        groupTranscriptions[firstIdx] = text
+    }
     private var blobRadiusX = 28f  // rayon horizontal du blob
     private var blobRadiusY = 48f  // rayon vertical du blob
 
@@ -3167,29 +3171,6 @@ class CaptureView(context: Context) : View(context) {
         // Plus rien à arrêter.
     }
 
-    /**
-     * Lit le fichier .transcription et reconstruit le cache (orderIndex → texte).
-     * Appelé après chaque inférence ou chargement de note.
-     */
-    fun refreshTranscriptionCache() {
-        val file = transcriptionFile ?: return
-        if (!file.exists()) return
-        try {
-            transcriptionCache.clear()
-            file.readLines()
-                .filter { it.startsWith("snapY=") }
-                .forEach { line ->
-                    val parts = line.split("  ", limit = 3)
-                    if (parts.size >= 3) {
-                        val orderStr = parts[1].removePrefix("order=")
-                        val order = orderStr.toIntOrNull() ?: return@forEach
-                        val text = parts[2].trim()
-                        if (text.isNotEmpty()) transcriptionCache[order] = text
-                    }
-                }
-            Log.d(TAG, "📋 Cache transcriptions: ${transcriptionCache.size} entrées")
-        } catch (_: Exception) {}
-    }
     private fun drawGroupDebugInfo(canvas: Canvas) {
         val groups = getSpatialGroups()
         for ((gi, groupIndices) in groups.withIndex()) {
@@ -3216,12 +3197,8 @@ class CaptureView(context: Context) : View(context) {
                 .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
             val isSelected = groupIndices.any { it in selectedIndices }
             val state = if (isSelected) "★" else "G$gi"
-            // Obtenir la transcription pour ce groupe (via orderIndex du InkGroup)
             val firstIdx = groupIndices.first()
-            val inkStrokeId = registryIndexToInkStrokeId[firstIdx]
-            val inkGroup = if (inkStrokeId != null) groupManager.findGroupByStroke(inkStrokeId) else null
-            val orderIndex = inkGroup?.orderIndex ?: -1
-            val transcription = if (orderIndex >= 0) transcriptionCache[orderIndex] else null
+            val transcription = groupTranscriptions[firstIdx]
             val label = "*$state-${groupIndices.size}S${transcription?.let { " $it" } ?: ""}"
             canvas.drawText(label, labelX, labelY, debugTextPaint)
         }
@@ -3252,7 +3229,7 @@ class CaptureView(context: Context) : View(context) {
         // ═══ seedGroups : retour au mode écriture live ═══
         seedGroups = null
         inferredGroups.clear()
-        transcriptionCache.clear()
+        groupTranscriptions.clear()
         invalidateSpatialCache()
         pointInStroke = 0
         hasPrevPoint = false
