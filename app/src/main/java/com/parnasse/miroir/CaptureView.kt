@@ -155,7 +155,7 @@ class CaptureView(context: Context) : View(context) {
             // TouchHelper ne doit etre actif qu'en mode CAPTURE
             // sinon il consomme les events stylo et bloque le hover
             if (wasCapture && !isCapture) {
-                post { releaseTouchHelper() }  // differe pour laisser le geste en cours se terminer
+                releaseTouchHelper()
             } else if (!wasCapture && isCapture) {
                 initTouchHelper()
             }
