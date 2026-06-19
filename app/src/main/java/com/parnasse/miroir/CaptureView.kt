@@ -885,9 +885,7 @@ class CaptureView(context: Context) : View(context) {
                     val hitIdx = hitTest(x, y)
                     if (hitIdx == null) {
                         currentMode = CaptureMode.CAPTURE
-                        scrubGroupIndices = null
-                        scrubTimelinePos = 0f
-                        rebuildBitmap()
+                        onModeChanged?.invoke(currentMode)
                         invalidate()
                         Log.d(TAG, "⏳ Tap vide -> sortie EDIT_TEMPORAL")
                         return
