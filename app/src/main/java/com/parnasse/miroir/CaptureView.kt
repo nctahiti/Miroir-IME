@@ -975,11 +975,12 @@ class CaptureView(context: Context) : View(context) {
             MotionEvent.ACTION_MOVE -> {
                 // ═══ Ecriture en cours depuis EDIT → forward au pipeline capture ═══
                 if (isWritingInEdit) {
+                    longPressTriggered = false  // eviter boucle infinie handleCaptureEvent<->handleEditEvent
                     handleCaptureEvent(event)
                     return
                 }
                 // ═══ Long-press en EDIT : entrer/sortir EDIT_TEMPORAL ═══
-                if (!longPressTriggered && !longPressDisabled && temporalEraseAvailable) {
+                if (!longPressTriggered && !longPressDisabled && temporalEraseAvailable && !temporalMode) {
                     val dt = System.currentTimeMillis() - longPressStartTime
                     val dx = Math.abs(x - longPressStartX)
                     val dy = Math.abs(y - longPressStartY)
@@ -1094,7 +1095,7 @@ class CaptureView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 // ═══ Fallback long-press temporel au UP (e-ink: pas de MOVE si stylet immobile) ═══
-                if (!wasDrag && !temporalMode && !isWritingInEdit && !longPressTriggered && !longPressDisabled && temporalEraseAvailable) {
+                if (!wasDrag && !temporalMode && !isWritingInEdit && !longPressTriggered && !longPressDisabled && temporalEraseAvailable && !temporalMode) {
                     val dt = System.currentTimeMillis() - longPressStartTime
                     val dx = Math.abs(x - longPressStartX)
                     val dy = Math.abs(y - longPressStartY)
