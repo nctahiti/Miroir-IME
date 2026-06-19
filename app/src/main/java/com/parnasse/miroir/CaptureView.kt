@@ -972,11 +972,16 @@ class CaptureView(context: Context) : View(context) {
                     // deltaX negatif = stylet a gauche = reculer dans le temps = effacer
                     val deltaX = scrubStartX - x
                     val scrubScale = 300f  // pixels pour parcourir 0→1
+                    val prevPos = scrubTimelinePos
                     scrubTimelinePos = (scrubInitialPos + deltaX / scrubScale).coerceIn(0f, 1f)
+                    if (Math.abs(scrubTimelinePos - prevPos) > 0.01f) {
+                        Log.d(TAG, "⏳ scrub: pos=$scrubTimelinePos deltaX=$deltaX groupe=${scrubGroupIndices?.size}s")
+                    }
                     // Appliquer au rendu : rebuildBitmap avec filtre temporel
                     rebuildBitmap()
                     refreshSpatialBounds()
-                    throttledInvalidate()
+                    // Invalidation directe (pas de throttling) — le scrub doit etre reactif
+                    invalidate()
                     return
                 }
                 // ═══ Long-press en EDIT : entrer/sortir EDIT_TEMPORAL ═══
@@ -2445,6 +2450,9 @@ class CaptureView(context: Context) : View(context) {
             if (tMin < tMax) {
                 val span = tMax - tMin
                 scrubCutoffMs = tMax - (scrubTimelinePos * span).toLong()
+                Log.v(TAG, "⏳ rebuildBitmap: tMin=$tMin tMax=$tMax span=$span cutoff=$scrubCutoffMs pos=$scrubTimelinePos indices=${scrubIndices.size}")
+            } else {
+                Log.w(TAG, "⏳ rebuildBitmap: tMin=$tMin tMax=$tMax → PAS de span, cutoff=MAX_VALUE")
             }
         }
         var idx = 0
