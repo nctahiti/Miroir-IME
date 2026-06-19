@@ -1128,6 +1128,22 @@ class CaptureView(context: Context) : View(context) {
                         return
                     }
                 }
+                // Tap sur un mot -> toggle EDIT_SPATIAL / EDIT_TEMPORAL
+                if (!wasDrag && dragWordGroup != null && !isWritingInEdit && !longPressTriggered) {
+                    if (currentMode == CaptureMode.EDIT) {
+                        currentMode = CaptureMode.EDIT_TEMPORAL
+                        scrubStartX = x
+                        scrubInitialPos = 0f
+                        scrubGroupIndices = selectedWordGroup
+                        Log.i(TAG, "Tap mot -> EDIT_TEMPORAL")
+                    } else if (currentMode == CaptureMode.EDIT_TEMPORAL) {
+                        currentMode = CaptureMode.EDIT
+                        Log.i(TAG, "Tap mot -> EDIT_SPATIAL")
+                    }
+                    onModeChanged?.invoke(currentMode)
+                    invalidate()
+                    return
+                }
                 // ═══ Tap sur espace vide (pas de drag, pas d'ecriture, pas de long-press) → CAPTURE ═══
                 if (!wasDrag && dragWordGroup == null && currentMode != CaptureMode.EDIT_TEMPORAL && !isWritingInEdit && !longPressTriggered) {
                     currentMode = CaptureMode.CAPTURE
