@@ -360,6 +360,13 @@ class CaptureView(context: Context) : View(context) {
         pathEffect = DashPathEffect(floatArrayOf(6f, 4f), 0f)
     }
     // Debug : indices des groupes
+    // Ghost : points neutralises par le scrub temporel (affichage debug)
+    private val ghostPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(30, 160, 160, 160)  // gris tres pale
+        strokeWidth = 2f
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
     private val debugTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.RED
         textSize = 28f
@@ -738,7 +745,7 @@ class CaptureView(context: Context) : View(context) {
 
         // Désélectionner l'ancien
         deselectAllGroups()
-        temporalEraseAvailable = false  // nouveau groupe → reset effacement temporel
+        // temporalEraseAvailable SURVIT au changement de groupe (outil du mode)
 
         // Trouver le stroke dans GroupManager et sélectionner
         val anyStrokeId = registryIndexToInkStrokeId[firstStroke] ?: return
@@ -807,6 +814,10 @@ class CaptureView(context: Context) : View(context) {
     // ═══ Effacement temporel (phase 1: structure, phase 2: mécanique) ═══
     private var temporalEraseAvailable = false  // armé après un drag → prochain long-press = effacement
     private var temporalMode = false             // actif pendant l'effacement temporel
+    private var scrubTimelinePos = 0f            // 0=tout visible, 1=tout neutralise
+    private var scrubStartX = 0f                 // X au debut du scrub (repere absolu)
+    private var scrubInitialPos = 0f             // timelinePos au debut du scrub
+    private var scrubGroupIndices: List<Int>? = null  // groupe en cours de scrub
 
     /**
      * Détecte un double-tap sur un mot clôturé → le réactive.
@@ -934,22 +945,41 @@ class CaptureView(context: Context) : View(context) {
                 invalidate()
             }
             MotionEvent.ACTION_MOVE -> {
-                // ═══ Mode temporel actif : scrub timeline (phase 2) ═══
+                // ═══ Mode temporel actif : scrub timeline ═══
                 if (temporalMode) {
-                    // TODO phase 2 : deltaX → timelinePosition → applyTimelineScrub
-                    Log.v(TAG, "⏳ temporalMode MOVE @ ($x, $y)")
+                    // deltaX negatif = stylet a gauche = reculer dans le temps = effacer
+                    val deltaX = scrubStartX - x
+                    val scrubScale = 300f  // pixels pour parcourir 0→1
+                    scrubTimelinePos = (scrubInitialPos + deltaX / scrubScale).coerceIn(0f, 1f)
+                    // Appliquer au rendu : rebuildBitmap avec filtre temporel
+                    rebuildBitmap()
+                    refreshSpatialBounds()
+                    throttledInvalidate()
                     return
                 }
-                // ═══ Long-press en EDIT : toggle EDIT_SPATIAL ↔ EDIT_TEMPORAL ═══
+                // ═══ Long-press en EDIT : entrer/sortir EDIT_TEMPORAL ═══
                 if (!longPressTriggered && !longPressDisabled && temporalEraseAvailable) {
                     val dt = System.currentTimeMillis() - longPressStartTime
                     val dx = Math.abs(x - longPressStartX)
                     val dy = Math.abs(y - longPressStartY)
                     if (dt > 500 && dx < 15f && dy < 15f) {
                         longPressTriggered = true
-                        temporalMode = !temporalMode  // toggle
-                        temporalEraseAvailable = false // consommé
-                        Log.i(TAG, if (temporalMode) "⏳ EDIT_TEMPORAL activé" else "✋ Retour EDIT_SPATIAL")
+                        if (!temporalMode) {
+                            // Entrer en EDIT_TEMPORAL : initialiser le scrub
+                            temporalMode = true
+                            scrubStartX = x
+                            scrubInitialPos = scrubTimelinePos
+                            // Groupe cible = groupe selectionne (hover) ou dragWordGroup
+                            scrubGroupIndices = dragWordGroup ?: selectedWordGroup
+                            Log.i(TAG, "⏳ EDIT_TEMPORAL active (scrubInitPos=$scrubInitialPos)")
+                        } else {
+                            // Sortir d'EDIT_TEMPORAL → retour EDIT_SPATIAL
+                            temporalMode = false
+                            scrubGroupIndices = null
+                            rebuildBitmap()  // restaurer tout le mot
+                            throttledInvalidate()
+                            Log.i(TAG, "✋ Retour EDIT_SPATIAL (scrubPos=$scrubTimelinePos preserve)")
+                        }
                         return  // ce MOVE ne produit pas de drag
                     }
                 }
@@ -1035,12 +1065,21 @@ class CaptureView(context: Context) : View(context) {
                     Log.d(TAG, "ÉDITION maintenu (hover actif, re-drag possible)")
                     refreshSpatialBounds()  // strokes déplacés → bounds à jour, groupes inchangés
                 }
+                // ═══ Sortie EDIT_TEMPORAL au lever du stylet → retour EDIT_SPATIAL ═══
+                if (temporalMode && !wasDrag) {
+                    temporalMode = false
+                    scrubGroupIndices = null
+                    rebuildBitmap()  // restaurer tout le mot
+                    refreshSpatialBounds()
+                    Log.d(TAG, "EDIT_TEMPORAL → EDIT_SPATIAL (UP, scrubPos=$scrubTimelinePos)")
+                }
                 // Si pas de drag, garder la sélection active (re-grab possible)
                 // Mais si on vient d'un long-press, nettoyer currentPath et rebuild
                 if (longPressTriggered) {
                     longPressTriggered = false
                     currentPath.clear()
-                    rebuildBitmap()
+                    // Ne pas rebuild si on sort de temporalMode (deja fait)
+                    if (!temporalMode) rebuildBitmap()
                     postInvalidate()
                 }
             }
@@ -2064,6 +2103,33 @@ class CaptureView(context: Context) : View(context) {
         // ═══ STROKES : bitmap (complétés) + tracé courant ═══
         bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
 
+        // ═══ GHOST TEMPOREL — points neutralises en gris pale (debug 👁) ═══
+        if (showVisualOverlays && temporalMode && scrubTimelinePos > 0f && scrubGroupIndices != null) {
+            val scrubSet = scrubGroupIndices!!.toSet()
+            // Recalculer le cutoff (meme logique que rebuildBitmap)
+            var tMin = Long.MAX_VALUE; var tMax = Long.MIN_VALUE
+            for (si in scrubSet) {
+                if (si < strokeRegistry.size) {
+                    for (t in strokeRegistry[si].timestamps) {
+                        if (t < tMin) tMin = t; if (t > tMax) tMax = t
+                    }
+                }
+            }
+            if (tMin < tMax) {
+                val cutoff = tMax - (scrubTimelinePos * (tMax - tMin)).toLong()
+                for (si in scrubSet) {
+                    if (si >= strokeRegistry.size) continue
+                    val sr = strokeRegistry[si]
+                    for (i in 0 until sr.activePoints) {
+                        if (i < sr.timestamps.size && sr.timestamps[i] <= cutoff) continue
+                        val (px, py) = sr.points[i]
+                        // Petit cercle pour chaque point neutralise
+                        canvas.drawCircle(px, py, 3f, ghostPaint)
+                    }
+                }
+            }
+        }
+
         // ═══ POIGNÉES D'INTERLIGNE — au-dessus du bitmap, sous le blob ═══
         val groups = getSpatialGroups()
         val bounds = getSpatialBounds()
@@ -2253,16 +2319,49 @@ class CaptureView(context: Context) : View(context) {
         val dragIndices: Set<Int> = if (longPressTriggered && dragWordGroup != null) {
             dragWordGroup!!.toSet()
         } else emptySet()
+        // ═══ Filtre temporel : points neutralises par le scrub ═══
+        val scrubIndices = scrubGroupIndices?.toSet() ?: emptySet()
+        // Calculer le cutoff temporel pour le groupe scrubbé
+        var scrubCutoffMs = Long.MAX_VALUE
+        if (temporalMode && scrubTimelinePos > 0f && scrubIndices.isNotEmpty()) {
+            // Trouver le timestamp du point le plus recent et le plus ancien du groupe
+            var tMin = Long.MAX_VALUE; var tMax = Long.MIN_VALUE
+            for (si in scrubIndices) {
+                if (si < strokeRegistry.size) {
+                    val sr = strokeRegistry[si]
+                    for (t in sr.timestamps) {
+                        if (t < tMin) tMin = t; if (t > tMax) tMax = t
+                    }
+                }
+            }
+            if (tMin < tMax) {
+                val span = tMax - tMin
+                scrubCutoffMs = tMax - (scrubTimelinePos * span).toLong()
+            }
+        }
         var idx = 0
         for (stroke in strokeRegistry) {
             if (stroke.activePoints < 2) { idx++; continue }
             if (idx in dragIndices) { idx++; continue }  // skip dragged word
+            // ═══ Filtre temporel : les strokes hors du groupe scrub sont normaux ═══
+            val isScrubStroke = idx in scrubIndices && temporalMode && scrubTimelinePos > 0f
             path.rewind()
-            path.moveTo(stroke.points[0].first, stroke.points[0].second)
-            for (i in 1 until stroke.activePoints) {
-                path.lineTo(stroke.points[i].first, stroke.points[i].second)
+            var started = false
+            for (i in 0 until stroke.activePoints) {
+                if (isScrubStroke && i < stroke.timestamps.size) {
+                    val t = stroke.timestamps[i]
+                    if (t > scrubCutoffMs) continue  // point neutralise
+                }
+                if (!started) {
+                    path.moveTo(stroke.points[i].first, stroke.points[i].second)
+                    started = true
+                } else {
+                    path.lineTo(stroke.points[i].first, stroke.points[i].second)
+                }
             }
-            bitmapCanvas?.drawPath(path, strokePaint)
+            if (started) {
+                bitmapCanvas?.drawPath(path, strokePaint)
+            }
             idx++
         }
     }
@@ -3086,23 +3185,27 @@ class CaptureView(context: Context) : View(context) {
         blobRadiusX = blobDistX * 0.7f
         blobRadiusY = blobDistY * 0.35f
         // Épaisseur du tube = somme des rayons → même couverture que les anciens ovales
-        val strokeW = (blobRadiusX + blobRadiusY).coerceIn(15f, 120f)
+        val baseR = minOf(blobRadiusX, blobRadiusY)
+        val scaleX = blobRadiusX / baseR  // >1 si blobRadiusX dominant
+        val scaleY = blobRadiusY / baseR  // >1 si blobRadiusY dominant
+        val paintStrokeW = (baseR * 2f).coerceIn(15f, 100f)
 
         // Tracé épais à caps ronds → tube continu autour de chaque stroke
-        // L'union naturelle des tubes forme le contour extérieur (aura)
+        // canvas.scale() autour du centre → le tube circulaire devient elliptique
+        // (blobRadiusX en horizontal, blobRadiusY en vertical)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
-            this.strokeWidth = strokeW
+            this.strokeWidth = paintStrokeW
             color = CalibrationActivity.getBlobColor(context)
         }
 
         for (groupIndices in groupsToDraw) {
-            // Tous les strokes du groupe combines en UN SEUL Path
+            // Tous les strokes du groupe combinés en UN SEUL Path
             // -> un seul drawPath par groupe -> pas d'accumulation d'alpha
-            // entre strokes superposes (meme opacite partout)
             val combinedPath = Path()
+            var sumX = 0f; var sumY = 0f; var nPts = 0
             for (idx in groupIndices) {
                 if (idx >= strokeRegistry.size) continue
                 val s = strokeRegistry[idx]
@@ -3111,8 +3214,18 @@ class CaptureView(context: Context) : View(context) {
                 for (i in 1 until s.points.size) {
                     combinedPath.lineTo(s.points[i].first, s.points[i].second)
                 }
+                sumX += s.points[0].first; sumY += s.points[0].second; nPts++
             }
+            if (nPts == 0) continue
+            val cx = sumX / nPts; val cy = sumY / nPts
+
+            // Scale autour du centre → tube circulaire devient elliptique
+            canvas.save()
+            canvas.translate(cx, cy)
+            canvas.scale(scaleX, scaleY)
+            canvas.translate(-cx, -cy)
             canvas.drawPath(combinedPath, paint)
+            canvas.restore()
         }
     }
 
@@ -3291,6 +3404,8 @@ class CaptureView(context: Context) : View(context) {
         insertPending = false
         temporalEraseAvailable = false  // reset effacement temporel
         temporalMode = false
+        scrubTimelinePos = 0f
+        scrubGroupIndices = null
         throttledInvalidate()
     }
 }
