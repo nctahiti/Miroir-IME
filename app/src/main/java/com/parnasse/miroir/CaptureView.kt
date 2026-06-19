@@ -369,15 +369,15 @@ class CaptureView(context: Context) : View(context) {
     }
     // Indicateur de mode (bateau/phare/montre) — coin haut-droit
     private val modeIndicatorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(180, 40, 40, 40)  // gris fonce
-        strokeWidth = 2.5f
+        color = Color.BLACK  // noir plein, lisible e-ink
+        strokeWidth = 3.5f
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
         isAntiAlias = true
     }
     private val modeIndicatorFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(60, 40, 40, 40)  // remplissage leger
+        color = Color.argb(80, 0, 0, 0)  // remplissage noir leger
         style = Paint.Style.FILL
     }
     private val debugTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -2249,9 +2249,6 @@ class CaptureView(context: Context) : View(context) {
         // ── DEBUG : indices des groupes ────────────────────────────────
         if (showVisualOverlays) drawGroupDebugInfo(canvas)
 
-        // Indicateur de mode — bateau / phare / montre
-        drawModeIndicator(canvas)
-
         // SURCOUCHE EDITION
         if (currentMode == CaptureMode.EDIT) {
             // Points d'ancrage : tous les strokes montrent leur premier/dernier point
@@ -2345,6 +2342,9 @@ class CaptureView(context: Context) : View(context) {
             }
             canvas.drawCircle(insertX, insertY, 30f, zonePaint)
         }
+
+        // Indicateur de mode — bateau / phare / montre (toujours au premier plan)
+        drawModeIndicator(canvas)
     }
 
     private fun drawStrokeRecord(canvas: Canvas, sr: StrokeRecord, paint: Paint) {
