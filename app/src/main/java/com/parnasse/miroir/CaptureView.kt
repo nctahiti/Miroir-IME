@@ -1403,6 +1403,7 @@ class CaptureView(context: Context) : View(context) {
                         currentMode = CaptureMode.EDIT
                         temporalMode = true  // mode effacement par defaut
                         deselectAllGroups()  // quitter SELECTED, groupe en mode scrub
+                        currentPath.clear()  // nettoyer les residus de currentPath
                         onModeChanged?.invoke(currentMode)
                         temporalEraseAvailable = true  // arme des l'entree en EDIT
                         scrubTimelinePos = 0f          // reset scrub
