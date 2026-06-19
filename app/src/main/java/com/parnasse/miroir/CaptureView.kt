@@ -873,18 +873,8 @@ class CaptureView(context: Context) : View(context) {
                 longPressDisabled = false
                 val hitIdx = hitTest(x, y)
 
-                // Tap sur espace vide → retour en mode CAPTURE (ou annuler merge)
-                if (hitIdx == null && !decomposeMode && !mergeMode) {
-                    selectedWordGroup = null
-                    dragWordGroup = null
-                    flowState = null
-                    currentMode = CaptureMode.CAPTURE
-                    onModeChanged?.invoke(currentMode)
-                    Log.d(TAG, "ÉDITION → CAPTURE (tap espace vide)")
-                    invalidate()
-                    return
-                }
-                // Tap espace vide en mode merge → annuler
+                // Tap espace vide : defer au ACTION_UP (un vrai tap = retour CAPTURE,
+                // un MOVE = ecriture ou long-press temporel)
                 if (hitIdx == null && mergeMode) {
                     mergeSourceGroup = null
                     mergeMode = false
@@ -932,19 +922,17 @@ class CaptureView(context: Context) : View(context) {
                 if (hitIdx != null) {
                     selectedWordGroup = findWordGroup(hitIdx)
                     initReflow(hitIdx)
-                    // Sauvegarder l'offset Y du mot par rapport à l'interligne
+                    // Sauvegarder l'offset Y du mot par rapport a l'interligne
                     dragWordYOffset = computeGroupCenterY(selectedWordGroup!!) - snapToLine(computeGroupCenterY(selectedWordGroup!!))
                     dragWordGroup = selectedWordGroup
                 } else {
-                    // Touche le vide = ecriture d'une correction (absorbe par le groupe SELECTED)
+                    // Touche le vide — attendre MOVE pour decider :
+                    //   mouvement = ecriture, immobile 500ms = long-press temporel, UP sec = tap → CAPTURE
                     selectedWordGroup = null
                     flowState = null
                     dragWordYOffset = 0f
                     dragWordGroup = null
-                    isWritingInEdit = true
-                    handleCaptureEvent(event)  // pipeline d'ecriture, reste en EDIT
-                    Log.d(TAG, "EDIT DOWN — ecriture (hit vide, reste en EDIT)")
-                    return
+                    Log.d(TAG, "EDIT DOWN — vide, attente MOVE/UP pour decider")
                 }
                 selectedStrokeIndex = hitIdx
                 val wgMsg = if (selectedWordGroup != null) " (mot: [${selectedWordGroup!!.joinToString(",")}])" else ""
@@ -995,10 +983,31 @@ class CaptureView(context: Context) : View(context) {
                         return  // ce MOVE ne produit pas de drag
                     }
                 }
+                // ═══ Pas de groupe selectionne + mouvement → debut d'ecriture ═══
+                if (dragWordGroup == null && !temporalMode) {
+                    val moveDx = Math.abs(x - longPressStartX)
+                    val moveDy = Math.abs(y - longPressStartY)
+                    if (moveDx > 8f || moveDy > 8f) {
+                        // L'utilisateur ecrit dans le vide → forward au pipeline capture
+                        isWritingInEdit = true
+                        // Rejouer le DOWN pour initialiser le stroke dans handleCaptureEvent
+                        val downEvent = MotionEvent.obtain(
+                            event.downTime, event.eventTime,
+                            MotionEvent.ACTION_DOWN, longPressStartX, longPressStartY, 0
+                        )
+                        downEvent.setSource(event.source)
+                        handleCaptureEvent(downEvent)
+                        downEvent.recycle()
+                        // Puis forward les MOVE accumules
+                        handleCaptureEvent(event)
+                        Log.d(TAG, "EDIT — ecriture declenchee (mouvement detecte)")
+                        return
+                    }
+                }
                 // ═══ Déplacement spatial (drag normal) ═══
                 // Comparer avec la position d'origine (longPressStart), pas editStart
                 // car les MOVE consécutifs ont des deltas <1px à 100Hz
-                if (Math.abs(x - longPressStartX) > 8 || Math.abs(y - longPressStartY) > 8) {
+                if (dragWordGroup != null && (Math.abs(x - longPressStartX) > 8 || Math.abs(y - longPressStartY) > 8)) {
                     wasDrag = true
                 }
                 val group = dragWordGroup
@@ -1027,6 +1036,16 @@ class CaptureView(context: Context) : View(context) {
                 editStartY = y
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // ═══ Tap sur espace vide (pas de drag, pas d'ecriture, pas de long-press) → CAPTURE ═══
+                if (!wasDrag && dragWordGroup == null && !temporalMode && !isWritingInEdit && !longPressTriggered) {
+                    currentMode = CaptureMode.CAPTURE
+                    onModeChanged?.invoke(currentMode)
+                    deselectAllGroups()
+                    temporalEraseAvailable = false
+                    Log.d(TAG, "EDIT → CAPTURE (tap vide, pas de drag)")
+                    invalidate()
+                    return
+                }
                 // ═══ Fin d'écriture depuis EDIT → forward + rester en EDIT ═══
                 if (isWritingInEdit) {
                     isWritingInEdit = false
