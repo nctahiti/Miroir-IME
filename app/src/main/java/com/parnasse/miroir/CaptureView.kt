@@ -289,7 +289,7 @@ class CaptureView(context: Context) : View(context) {
             groupLevel = GroupLevel.WORD,
             captureAnchor = CaptureAnchor.BOTTOM
         )
-        Log.i(TAG, "GroupManager params sync: calX=${calSpatialX}px → wordSpatial=$wordSpatial, temporal=$calTemporal, timeout=${groupManager.params.transcriptionTimeoutMs}ms")
+        Log.i(TAG, "GroupManager params sync: calX=${calSpatialX}px → blobDistX=$blobDistX, temporal=$calTemporal, timeout=${groupManager.params.transcriptionTimeoutMs}ms")
     }
 
     // -- Reflux de texte
