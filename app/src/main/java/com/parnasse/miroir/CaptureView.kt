@@ -768,8 +768,8 @@ class CaptureView(context: Context) : View(context) {
         if (System.currentTimeMillis() - longHoverStartMs < delayMs) return
 
         // Déclencher ! (one-shot)
-        longHoverStartMs = System.currentTimeMillis()  // reset timer pour éviter boucle
-        longHoverFirstStroke = -1  // forcer re-détection au prochain survol
+        longHoverStartMs = Long.MAX_VALUE  // empêche de re-déclencher sur le même groupe
+        longHoverFirstStroke = -1  // forcer re-détection si le stylet change de groupe
         Log.d(TAG, "Survol long — déclenché après ${delayMs}ms")
 
         // Désélectionner l'ancien
