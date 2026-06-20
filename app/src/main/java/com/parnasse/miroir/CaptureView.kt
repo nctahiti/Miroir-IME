@@ -277,11 +277,12 @@ class CaptureView(context: Context) : View(context) {
         // Lecture depuis la calibration (SharedPreferences) — source unique
         val calSpatialX = CalibrationActivity.getSpatialDistanceX(ctx)  // ~40-50px pour les lignes
         val calTemporal = CalibrationActivity.getTemporalDistance(ctx)  // ~800ms
-        // Pour les MOTS, on utilise une fraction du seuil des lignes
-        val wordSpatial = (calSpatialX * 0.5f).coerceIn(15f, 40f)  // 50% du seuil ligne, entre 15-40px
+        // Absorption calibrée sur le blob : blobDistX = calX * 0.75
+        // isStrokeNearGroup utilise spatialDistancePx * 0.7 = blobRadiusX
+        val blobDistX = (calSpatialX * 0.75f).coerceIn(15f, 300f)
         
         groupManager.params = BlobParams(
-            spatialDistancePx = wordSpatial,  // utilise par isStrokeNearGroup (marge = spatial*2, 30-100px)
+            spatialDistancePx = blobDistX,  // blobRadiusX ≈ spatial*0.7, blobRadiusY ≈ spatial*0.35
             minOverlapPercent = 100,  // plus utilise (absorption simplifiee)
             temporalDistanceMs = 0L,  // plus utilise
             transcriptionTimeoutMs = Long.MAX_VALUE,  // deseactive : inference via registerCompletedStroke
@@ -3389,13 +3390,14 @@ class CaptureView(context: Context) : View(context) {
         if (currentMode != CaptureMode.CAPTURE) return
         if (!isBlocnoteMode) return
 
-        // Blob UNIQUEMENT sur le groupe SELECTED (phare)
-        val selectedIndices = groupManager.groupsInState(GroupState.SELECTED)
-            .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
-        if (selectedIndices.isEmpty()) return
+        // Blob sur le dernier groupe (zone d'écriture active) + groupe SELECTED
         val groups = getSpatialGroups()
         if (groups.isEmpty()) return
-        val groupsToDraw = groups.filter { it.any { idx -> idx in selectedIndices } }
+        val lastGroup = groups.last()
+        val selectedIndices = groupManager.groupsInState(GroupState.SELECTED)
+            .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
+        val groupsToDraw = if (lastGroup.any { it in selectedIndices }) listOf(lastGroup)
+                          else listOf(lastGroup) + groups.filter { it.any { idx -> idx in selectedIndices } }
 
         val blobDistX = (CalibrationActivity.getSpatialDistanceX(context) * 0.75f).coerceIn(15f, 300f)
         val blobDistY = CalibrationActivity.getSpatialDistanceY(context)
