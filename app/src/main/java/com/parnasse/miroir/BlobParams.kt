@@ -27,6 +27,7 @@ data class BlobParams(
     companion object {
         // Valeurs par défaut — calibrées pour écriture latine standard
         const val DEFAULT_SPATIAL_DISTANCE_PX    = 20f  // écart entre lettres ~20px, entre mots >40px
+        const val DEFAULT_SPATIAL_DISTANCE_Y    = 40f  // écart vertical entre lignes
         const val DEFAULT_MIN_OVERLAP_PERCENT     = 30
         const val DEFAULT_TEMPORAL_DISTANCE_MS    = 800L
         const val DEFAULT_TRANSCRIPTION_TIMEOUT_MS = 2000L
@@ -34,6 +35,8 @@ data class BlobParams(
         // Limites des curseurs
         const val MIN_SPATIAL_PX  = 2f
         const val MAX_SPATIAL_PX  = 80f
+        const val MIN_SPATIAL_Y   = 2f
+        const val MAX_SPATIAL_Y   = 120f
         const val MIN_OVERLAP     = 0
         const val MAX_OVERLAP     = 100
         const val MIN_TEMPORAL_MS = 100L
@@ -44,6 +47,7 @@ data class BlobParams(
         /** Charge les paramètres depuis SharedPreferences */
         fun load(prefs: SharedPreferences): BlobParams = BlobParams(
             spatialDistancePx       = prefs.getFloat(KEY_SPATIAL, DEFAULT_SPATIAL_DISTANCE_PX),
+            spatialDistanceY       = prefs.getFloat(KEY_SPATIAL_Y, DEFAULT_SPATIAL_DISTANCE_Y),
             minOverlapPercent       = prefs.getInt(KEY_OVERLAP, DEFAULT_MIN_OVERLAP_PERCENT),
             temporalDistanceMs      = prefs.getLong(KEY_TEMPORAL, DEFAULT_TEMPORAL_DISTANCE_MS),
             transcriptionTimeoutMs  = prefs.getLong(KEY_TIMEOUT, DEFAULT_TRANSCRIPTION_TIMEOUT_MS),
@@ -59,6 +63,7 @@ data class BlobParams(
         fun save(prefs: SharedPreferences, params: BlobParams) {
             prefs.edit()
                 .putFloat(KEY_SPATIAL, params.spatialDistancePx)
+                .putFloat(KEY_SPATIAL_Y, params.spatialDistanceY)
                 .putInt(KEY_OVERLAP, params.minOverlapPercent)
                 .putLong(KEY_TEMPORAL, params.temporalDistanceMs)
                 .putLong(KEY_TIMEOUT, params.transcriptionTimeoutMs)
@@ -70,6 +75,7 @@ data class BlobParams(
         // Clés SharedPreferences
         private const val PREFS_NAME = "miroir_blob_params"
         private const val KEY_SPATIAL  = "spatial_distance_px"
+        private const val KEY_SPATIAL_Y = "spatial_distance_y"
         private const val KEY_OVERLAP  = "min_overlap_pct"
         private const val KEY_TEMPORAL = "temporal_distance_ms"
         private const val KEY_TIMEOUT  = "transcription_timeout_ms"

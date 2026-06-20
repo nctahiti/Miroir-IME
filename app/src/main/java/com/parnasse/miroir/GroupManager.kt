@@ -70,17 +70,38 @@ class GroupManager(
 
     /** Test spatial simple : le stroke est-il dans le perimetre du groupe ? */
     /** Teste si le stroke est dans le blob du groupe (mêmes règles que computeSpatialGroupsRaw). */
+    /**
+     * Teste si le stroke touche le blob du groupe.
+     * Blob = union des ellipses (rx, ry) autour de chaque point du groupe.
+     * Approximé par distance elliptique point-stroke → rectangle-bounds du groupe.
+     * rx = spatialDistancePx DIRECT (calibration X), ry = spatialDistanceY DIRECT (calibration Y).
+     * Plus de coefficients cachés — le blob visuel (canvas.scale) utilise les mêmes rx, ry.
+     */
     private fun isStrokeNearGroup(stroke: InkStroke, group: InkGroup): Boolean {
         if (group.bounds.isEmpty) return false
-        val strokeBounds = BlobAbsorber.computeBounds(stroke)
-        if (strokeBounds.isEmpty) return false
-        // Marges calibrées sur le blob elliptique (blobRadiusX, blobRadiusY)
-        // spatialDistancePx = blobDistX = calX * 0.75 (pas wordSpatial)
-        val marginX = (params.spatialDistancePx * 0.7f).coerceIn(20f, 200f)
-        val marginY = (params.spatialDistancePx * 0.35f).coerceIn(10f, 70f)
-        val expanded = RectF(group.bounds)
-        expanded.inset(-marginX, -marginY)
-        return RectF.intersects(expanded, strokeBounds)
+        if (stroke.points.isEmpty()) return false
+
+        val rx = params.spatialDistancePx  // DIRECT — calibration X
+        val ry = params.spatialDistanceY   // DIRECT — calibration Y
+
+        // Pour chaque point du stroke, distance elliptique au rectangle du groupe
+        for (p in stroke.points) {
+            // Distance horizontale signée au rectangle du groupe (normalisée par rx)
+            val dx = when {
+                p.x < group.bounds.left  -> (group.bounds.left - p.x) / rx
+                p.x > group.bounds.right -> (p.x - group.bounds.right) / rx
+                else -> 0f  // point à l'intérieur horizontalement
+            }
+            // Distance verticale signée au rectangle du groupe (normalisée par ry)
+            val dy = when {
+                p.y < group.bounds.top    -> (group.bounds.top - p.y) / ry
+                p.y > group.bounds.bottom -> (p.y - group.bounds.bottom) / ry
+                else -> 0f  // point à l'intérieur verticalement
+            }
+
+            if (dx * dx + dy * dy <= 1.0f) return true  // point dans l'ellipse
+        }
+        return false
     }
     fun getOrCreateActiveGroup(): InkGroup {
         val selectedId = machine.pendingGroupId

@@ -259,6 +259,7 @@ class CaptureView(context: Context) : View(context) {
         it.onGroupAutoDeselected = {
             it.params = it.params.copy(
                 spatialDistancePx = 1f,
+                spatialDistanceY = 1f,
                 temporalDistanceMs = 0L,
                 minOverlapPercent = 100
             )
@@ -275,21 +276,23 @@ class CaptureView(context: Context) : View(context) {
     fun syncGroupManagerParams() {
         val ctx = context
         // Lecture depuis la calibration (SharedPreferences) — source unique
-        val calSpatialX = CalibrationActivity.getSpatialDistanceX(ctx)  // ~40-50px pour les lignes
+        val calSpatialX = CalibrationActivity.getSpatialDistanceX(ctx)  // rayon horizontal du blob
+        val calSpatialY = CalibrationActivity.getSpatialDistanceY(ctx)  // rayon vertical du blob
         val calTemporal = CalibrationActivity.getTemporalDistance(ctx)  // ~800ms
-        // Absorption calibrée sur le blob : blobDistX = calX * 0.75
-        // isStrokeNearGroup utilise spatialDistancePx * 0.7 = blobRadiusX
-        val blobDistX = (calSpatialX * 0.75f).coerceIn(15f, 300f)
+        // Blob = absorption : les valeurs de calibration SONT les rayons du blob.
+        // Plus de coefficients cachés (*0.75, *0.7, *0.35).
+        // isStrokeNearGroup et drawActiveGroupBlob utilisent les mêmes rx, ry.
         
         groupManager.params = BlobParams(
-            spatialDistancePx = blobDistX,  // blobRadiusX ≈ spatial*0.7, blobRadiusY ≈ spatial*0.35
-            minOverlapPercent = 100,  // plus utilise (absorption simplifiee)
-            temporalDistanceMs = 0L,  // plus utilise
-            transcriptionTimeoutMs = Long.MAX_VALUE,  // deseactive : inference via registerCompletedStroke
+            spatialDistancePx = calSpatialX,  // DIRECT — rayon blob horizontal
+            spatialDistanceY = calSpatialY,   // DIRECT — rayon blob vertical
+            minOverlapPercent = 100,  // plus utilisé (absorption par blob elliptique)
+            temporalDistanceMs = 0L,  // plus utilisé
+            transcriptionTimeoutMs = Long.MAX_VALUE,  // désactivé : inférence via registerCompletedStroke
             groupLevel = GroupLevel.WORD,
             captureAnchor = CaptureAnchor.BOTTOM
         )
-        Log.i(TAG, "GroupManager params sync: calX=${calSpatialX}px → blobDistX=$blobDistX, temporal=$calTemporal, timeout=${groupManager.params.transcriptionTimeoutMs}ms")
+        Log.i(TAG, "GroupManager params sync: blobRx=$calSpatialX, blobRy=$calSpatialY, temporal=$calTemporal")
     }
 
     // -- Reflux de texte
@@ -805,6 +808,7 @@ class CaptureView(context: Context) : View(context) {
         // laisse des params permissifs orphelins qui aspirent les strokes suivants
         groupManager.params = groupManager.params.copy(
             spatialDistancePx = 1f,
+            spatialDistanceY = 1f,
             temporalDistanceMs = 0L,
             minOverlapPercent = 100
         )
@@ -3390,19 +3394,19 @@ class CaptureView(context: Context) : View(context) {
         if (currentMode != CaptureMode.CAPTURE) return
         if (!isBlocnoteMode) return
 
-        // Blob sur le dernier groupe (zone d'écriture active) + groupe SELECTED
-        val groups = getSpatialGroups()
-        if (groups.isEmpty()) return
-        val lastGroup = groups.last()
+        // Blob UNIQUEMENT sur le groupe SELECTED (phare)
+        // L'absorption et l'affichage utilisent les MÊMES paramètres : rx, ry = calibration directe
         val selectedIndices = groupManager.groupsInState(GroupState.SELECTED)
             .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
-        val groupsToDraw = if (lastGroup.any { it in selectedIndices }) listOf(lastGroup)
-                          else listOf(lastGroup) + groups.filter { it.any { idx -> idx in selectedIndices } }
+        if (selectedIndices.isEmpty()) return
+        val groups = getSpatialGroups()
+        if (groups.isEmpty()) return
+        val groupsToDraw = groups.filter { it.any { idx -> idx in selectedIndices } }
+        if (groupsToDraw.isEmpty()) return
 
-        val blobDistX = (CalibrationActivity.getSpatialDistanceX(context) * 0.75f).coerceIn(15f, 300f)
-        val blobDistY = CalibrationActivity.getSpatialDistanceY(context)
-        blobRadiusX = blobDistX * 0.7f
-        blobRadiusY = blobDistY * 0.35f
+        // Rayons DIRECTS — pas de coefficients cachés. Ce que tu règles = ce que tu vois = ce qui absorbe.
+        blobRadiusX = CalibrationActivity.getSpatialDistanceX(context)
+        blobRadiusY = CalibrationActivity.getSpatialDistanceY(context)
         // Épaisseur du tube = somme des rayons → même couverture que les anciens ovales
         val baseR = minOf(blobRadiusX, blobRadiusY)
         val scaleX = blobRadiusX / baseR  // >1 si blobRadiusX dominant
