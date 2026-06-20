@@ -803,6 +803,8 @@ class CaptureView(context: Context) : View(context) {
     /** Désélectionne tous les groupes SELECTED → STORED (appelé au HOVER_EXIT) */
     private fun deselectAllGroups() {
         val selected = groupManager.groupsInState(GroupState.SELECTED)
+        val allGroups = groupManager.allGroups()
+        Log.d(TAG, "deselectAllGroups: ${selected.size} SELECTED / ${allGroups.size} total en cache")
         for (g in selected) {
             groupManager.deselectGroup(g.id)
             Log.d(TAG, "Déselection — groupe ${g.id} SELECTED → STORED")
