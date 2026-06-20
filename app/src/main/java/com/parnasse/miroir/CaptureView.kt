@@ -792,8 +792,9 @@ class CaptureView(context: Context) : View(context) {
             return
         }
         if (groupManager.selectGroup(g.id)) {
-            // Sélection visuelle uniquement — absorption gérée par isStrokeNearGroup()
-            Log.i(TAG, "Survol long — groupe ${g.id} SELECTED")
+            // Synchroniser selectedWordGroup — la SURCOUCHE ÉDITION en a besoin pour le VERT
+            selectedWordGroup = targetIndices
+            Log.i(TAG, "Survol long — groupe ${g.id} SELECTED (${targetIndices.size} strokes)" )
             onActiveGroupChanged?.invoke()
             invalidate()
         }
@@ -1164,6 +1165,11 @@ class CaptureView(context: Context) : View(context) {
                         Log.i(TAG, "Tap mot -> EDIT_TEMPORAL")
                     } else if (currentMode == CaptureMode.EDIT_TEMPORAL) {
                         currentMode = CaptureMode.EDIT
+                        // Rafraîchir selectedWordGroup depuis le mot sous le stylet
+                        val hitIdx = hitTest(x, y)
+                        if (hitIdx != null) {
+                            selectedWordGroup = findWordGroup(hitIdx)
+                        }
                         Log.i(TAG, "Tap mot -> EDIT_SPATIAL")
                     }
                     onModeChanged?.invoke(currentMode)
