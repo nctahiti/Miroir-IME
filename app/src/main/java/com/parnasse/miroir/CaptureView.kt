@@ -1372,6 +1372,12 @@ class CaptureView(context: Context) : View(context) {
             MotionEvent.ACTION_DOWN -> {
                 // cancelAutoInferTimeout (GroupManager gere)
 
+                // ═══ Nouveau stroke → fermer le groupe sélectionné par hover ═══
+                // Le survol long automatique sélectionne le dernier groupe.
+                // Un nouveau PENDOWN = nouvelle intention d'écriture → désélectionner.
+                // Les corrections se font via long-press → EDIT, pas en CAPTURE.
+                deselectAllGroups()
+
                 // Enregistrer la position pour détection d'appui long
                 longPressStartX = event.x
                 longPressStartY = event.y
