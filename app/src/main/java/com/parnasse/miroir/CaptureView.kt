@@ -2797,10 +2797,9 @@ class CaptureView(context: Context) : View(context) {
     private fun computeSpatialGroupsFor(indices: List<Int>): List<MutableList<Int>> {
         if (indices.isEmpty()) return emptyList()
         if (indices.size == 1) return mutableListOf(mutableListOf(indices[0]))
-        val distX = CalibrationActivity.getSpatialDistanceX(context) * 0.5f
-        val distY = CalibrationActivity.getSpatialDistanceY(context)
-        val marginX = maxOf(distX, 5f)
-        val marginY = maxOf(distY * 0.3f, 5f)
+        // Rayons DIRECTS du blob — identiques à l'absorption et au groupement
+        val rx = CalibrationActivity.getSpatialDistanceX(context)
+        val ry = CalibrationActivity.getSpatialDistanceY(context)
         val idxToBounds = mutableMapOf<Int, android.graphics.RectF>()
         for (i in indices) {
             val s = strokeRegistry[i]
@@ -2812,6 +2811,21 @@ class CaptureView(context: Context) : View(context) {
             }
             idxToBounds[i] = android.graphics.RectF(l, t, r, b)
         }
+        // Test point-contre-point avec le blob (rx, ry)
+        fun isNear(idx: Int, groupIndices: List<Int>): Boolean {
+            val sp = strokeRegistry.getOrNull(idx) ?: return false
+            for ((sx, sy) in sp.points.take(sp.activePoints)) {
+                for (gi in groupIndices) {
+                    val gs = strokeRegistry.getOrNull(gi) ?: continue
+                    for ((gx, gy) in gs.points.take(gs.activePoints)) {
+                        val dx = (sx - gx) / rx
+                        val dy = (sy - gy) / ry
+                        if (dx * dx + dy * dy <= 1.0f) return true
+                    }
+                }
+            }
+            return false
+        }
         val sorted = indices.toList()
         var current = mutableListOf(sorted[0])
         var gLeft = idxToBounds[sorted[0]]!!.left; var gTop = idxToBounds[sorted[0]]!!.top
@@ -2819,8 +2833,7 @@ class CaptureView(context: Context) : View(context) {
         val groups = mutableListOf<MutableList<Int>>()
         for (k in 1 until sorted.size) {
             val idx = sorted[k]
-            val expRect = android.graphics.RectF(gLeft - marginX, gTop - marginY, gRight + marginX, gBottom + marginY)
-            if (android.graphics.RectF.intersects(expRect, idxToBounds[idx]!!)) {
+            if (isNear(idx, current)) {
                 current.add(idx)
                 if (idxToBounds[idx]!!.left < gLeft) gLeft = idxToBounds[idx]!!.left
                 if (idxToBounds[idx]!!.right > gRight) gRight = idxToBounds[idx]!!.right
@@ -2847,12 +2860,11 @@ class CaptureView(context: Context) : View(context) {
         if (strokeRegistry.isEmpty()) return emptyList()
         if (strokeRegistry.size == 1) return mutableListOf(mutableListOf(0))
 
-        val distX = CalibrationActivity.getSpatialDistanceX(context) * 0.5f
-        val distY = CalibrationActivity.getSpatialDistanceY(context)
-        val marginX = maxOf(distX, 5f)
-        val marginY = maxOf(distY * 0.3f, 5f)
+        // Rayons DIRECTS du blob — mêmes rx, ry que l'absorption (isStrokeNearGroup)
+        val rx = CalibrationActivity.getSpatialDistanceX(context)
+        val ry = CalibrationActivity.getSpatialDistanceY(context)
 
-        // Précalculer les bounds de chaque stroke
+        // Précalculer les bounds et points de chaque stroke
         val bounds = Array(strokeRegistry.size) { i ->
             val s = strokeRegistry[i]
             var l = Float.MAX_VALUE; var t = Float.MAX_VALUE
@@ -2862,6 +2874,23 @@ class CaptureView(context: Context) : View(context) {
                 if (py < t) t = py; if (py > b) b = py
             }
             android.graphics.RectF(l, t, r, b)
+        }
+
+        // Test point-contre-point : le nouveau stroke touche-t-il le blob du groupe courant ?
+        fun isNearGroup(strokeIdx: Int, groupIndices: List<Int>): Boolean {
+            if (strokeIdx >= strokeRegistry.size) return false
+            val sp = strokeRegistry[strokeIdx]
+            for ((sx, sy) in sp.points.take(sp.activePoints)) {
+                for (gi in groupIndices) {
+                    val gs = strokeRegistry.getOrNull(gi) ?: continue
+                    for ((gx, gy) in gs.points.take(gs.activePoints)) {
+                        val dx = (sx - gx) / rx
+                        val dy = (sy - gy) / ry
+                        if (dx * dx + dy * dy <= 1.0f) return true
+                    }
+                }
+            }
+            return false
         }
 
         // Ordre d.écriture (chronologique) — les strokes d.une même ligne
@@ -2876,11 +2905,7 @@ class CaptureView(context: Context) : View(context) {
         val groups = mutableListOf<MutableList<Int>>()
         for (k in 1 until sortedIndices.size) {
             val idx = sortedIndices[k]
-            val expRect = android.graphics.RectF(
-                gLeft - marginX, gTop - marginY,
-                gRight + marginX, gBottom + marginY
-            )
-            if (android.graphics.RectF.intersects(expRect, bounds[idx])) {
+            if (isNearGroup(idx, current)) {
                 current.add(idx)
                 if (bounds[idx].left < gLeft) gLeft = bounds[idx].left
                 if (bounds[idx].right > gRight) gRight = bounds[idx].right
@@ -2895,7 +2920,7 @@ class CaptureView(context: Context) : View(context) {
         }
         groups.add(current)
 
-        Log.d(TAG, "computeSpatialGroupsRaw (2D blob, ordre écriture): ${groups.size} groupes, marginX=$marginX, marginY=$marginY")
+        Log.d(TAG, "computeSpatialGroupsRaw (blob point-contre-point, rx=$rx ry=$ry): ${groups.size} groupes")
         return groups
     }
     /** Fusionne les groupes spatiaux proches du groupe SELECTED (correction/absorption). */
