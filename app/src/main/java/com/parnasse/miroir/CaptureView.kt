@@ -2101,6 +2101,9 @@ class CaptureView(context: Context) : View(context) {
         groupManager.onStrokeSealed(inkStroke)
         Log.d(TAG, "GroupManager: stroke #$inkStrokeId → ${groupManager.allGroups().size} groupes actifs")
 
+        // ═══ Nettoyer le cache : évincer les groupes STORED et les LOADED non-actifs ═══
+        groupManager.evictInactive()
+
         throttledInvalidate()
 
         // ═══ Timers par groupe ═══

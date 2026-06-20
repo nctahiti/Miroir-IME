@@ -217,6 +217,23 @@ class GroupManager(
         if (storedIds.isNotEmpty()) Log.i(TAG, "Eviction massive: " + storedIds.size + " groupes")
     }
 
+    /** Évince tous les groupes STORED + les LOADED qui ne sont pas le groupe actif.
+     *  Appelé après chaque stroke pour garder le cache propre. */
+    fun evictInactive() {
+        evictAllStored()
+        val activeId = machine.activeGroupId
+        val toEvict = groups.filter { (id, g) ->
+            g.state == GroupState.LOADED && id != activeId
+        }.keys.toList()
+        for (id in toEvict) {
+            val g = groups[id]!!
+            machine.transition(g, GroupState.STORED)
+            evictGroup(id)
+            Log.d(TAG, "Eviction LOADED inactif: " + id + " -> .groups")
+        }
+        if (toEvict.isNotEmpty()) Log.i(TAG, "Eviction LOADED inactifs: " + toEvict.size + " groupes")
+    }
+
     private fun resetTranscriptionTimeout(group: InkGroup) {
         timeoutFuture?.cancel(false)
         timeoutGroupId = group.id
