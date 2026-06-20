@@ -3425,15 +3425,13 @@ class CaptureView(context: Context) : View(context) {
         if (currentMode != CaptureMode.CAPTURE) return
         if (!isBlocnoteMode) return
 
-        // Blob uniquement sur le dernier groupe (actif) + le groupe SELECTED (phare)
-        val groups = getSpatialGroups()
-        if (groups.isEmpty()) return
-        val lastGroup = groups.last()
+        // Blob UNIQUEMENT sur le groupe SELECTED (phare)
         val selectedIndices = groupManager.groupsInState(GroupState.SELECTED)
             .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
-        // Ne dessiner que le dernier groupe + le groupe sélectionné
-        val groupsToDraw = if (lastGroup.any { it in selectedIndices }) listOf(lastGroup)
-                          else listOf(lastGroup) + groups.filter { it.any { idx -> idx in selectedIndices } }
+        if (selectedIndices.isEmpty()) return
+        val groups = getSpatialGroups()
+        if (groups.isEmpty()) return
+        val groupsToDraw = groups.filter { it.any { idx -> idx in selectedIndices } }
 
         val blobDistX = (CalibrationActivity.getSpatialDistanceX(context) * 0.75f).coerceIn(15f, 300f)
         val blobDistY = CalibrationActivity.getSpatialDistanceY(context)

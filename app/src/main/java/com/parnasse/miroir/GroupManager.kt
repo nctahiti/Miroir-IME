@@ -45,6 +45,7 @@ class GroupManager(
         // Simplifie : seul le groupe SELECTED peut absorber
         // L'intention est spatiale — stylet dans le blob → ajout, sinon → nouvelle session
         val selected = machine.pendingGroupId?.let { groups[it] }
+        Log.d(TAG, "onStrokeSealed: pendingGroupId=${machine.pendingGroupId}, selected=${selected?.id} state=${selected?.state}, near=${if (selected != null) isStrokeNearGroup(stroke, selected) else "N/A"}")
         val group = if (selected != null && selected.state == GroupState.SELECTED
                         && isStrokeNearGroup(stroke, selected)) {
             Log.i(TAG, "Absorption SELECTED " + selected.id + " (stroke proche)")
