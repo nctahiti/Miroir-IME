@@ -141,6 +141,15 @@ class GroupManager(
     }
 
     fun selectGroup(groupId: String): Boolean {
+        // ═══ Garantir UN SEUL groupe SELECTED à la fois ═══
+        // La machine à états n'enforce pas cet invariant — pendingGroupId
+        // est juste écrasé, l'ancien groupe garde son état SELECTED.
+        groupsInState(GroupState.SELECTED).forEach { g ->
+            if (g.id != groupId) {
+                Log.i(TAG, "Auto-deselection: groupe " + g.id + " (double SELECTED detecte)")
+                deselectGroup(g.id)
+            }
+        }
         val group = groups[groupId] ?: return false
         if (group.state != GroupState.LOADED) return false
         if (machine.transition(group, GroupState.SELECTED)) {
