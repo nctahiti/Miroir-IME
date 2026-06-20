@@ -55,7 +55,6 @@ class CaptureActivity : Activity() {
 
     // ── Vues ──────────────────────────────────────────────────────────
     private var captureView: CaptureView? = null
-    private var poemText: TextView? = null
     private var modeBtn: TextView? = null
     private var editModeIndicator: TextView? = null  // 🚢🔦⏳
 
@@ -140,7 +139,6 @@ class CaptureActivity : Activity() {
             cv.syncGroupManagerParams()
             // ═══ Mettre à jour la transcription quand le groupe actif change ═══
             cv.onActiveGroupChanged = {
-                runOnUiThread { updatePoemText() }
             }
             // Persistance des groupes pour eviction du cache
             // ⚠️ DOIT être hors du callback — sinon jamais initialisée avant
@@ -190,10 +188,24 @@ class CaptureActivity : Activity() {
         editModeIndicator = TextView(this).apply {
             text = "🚢"
             textSize = 22f
-            setTextColor(android.graphics.Color.WHITE)
+            setTextColor(android.graphics.Color.argb(220, 40, 40, 40))  // texte fonce
             setPadding(14, 8, 14, 8)
-            setBackgroundColor(android.graphics.Color.argb(180, 60, 60, 60))
+            setBackgroundColor(android.graphics.Color.argb(220, 255, 255, 255))  // fond blanc
             gravity = Gravity.CENTER
+            // Clic long → copier tout le texte transcrit dans le presse-papier
+            setOnLongClickListener {
+                val tw = transcriptionWriter
+                val words = tw?.getOrderedWords()?.filter { it.isNotBlank() } ?: emptyList()
+                if (words.isEmpty()) {
+                    Toast.makeText(this@CaptureActivity, "Aucun texte à copier", Toast.LENGTH_SHORT).show()
+                } else {
+                    val text = words.joinToString(" ")
+                    val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("miroir", text))
+                    Toast.makeText(this@CaptureActivity, "📋 ${words.size} mots copiés", Toast.LENGTH_SHORT).show()
+                }
+                true
+            }
         }
         topBar.addView(editModeIndicator!!)
 
@@ -337,22 +349,6 @@ class CaptureActivity : Activity() {
 
         overlay.addView(topBar)
 
-        // ── Texte affiché — ligne unique défilante avec \\n pour sauts de ligne ──
-        poemText = TextView(this).apply {
-            text = "📝 Bloc-notes"
-            textSize = 28f
-            setTextColor(android.graphics.Color.rgb(40, 40, 40))
-            setPadding(40, 14, 40, 14)
-            setBackgroundColor(android.graphics.Color.rgb(255, 255, 235))
-            maxLines = 1
-            setHorizontallyScrolling(true)
-        }
-        val textHeight = (28f * 2.8f + 32).toInt()  // hauteur confortable pour 1 ligne
-        overlay.addView(poemText, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            textHeight
-        ))
-
         // Espace capture
         overlay.addView(View(this), LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
@@ -385,9 +381,6 @@ class CaptureActivity : Activity() {
             modeBtn?.text = "📝"
             modeBtn?.setTextColor(android.graphics.Color.argb(255, 100, 200, 255))
             captureView?.isBlocnoteMode = true
-            poemText?.text = if (accumulatedText.isNotEmpty()) accumulatedText else "📝 Bloc-notes"
-            poemText?.textSize = 28f
-            poemText?.setTextColor(android.graphics.Color.rgb(60, 60, 60))
             Log.i(TAG, "Mode: Bloc-notes")
         } else {
             modeBtn?.text = "✎"
@@ -400,9 +393,6 @@ class CaptureActivity : Activity() {
 
     private fun pickWord() {
         currentWord = DICTEE_WORDS.random()
-        poemText?.text = currentWord
-        poemText?.textSize = 48f
-        poemText?.setTextColor(android.graphics.Color.argb(200, 0, 0, 0))
     }
 
     // ── Reconnaissance ─────────────────────────────────────────────────
@@ -413,16 +403,11 @@ class CaptureActivity : Activity() {
         // On recharge simplement depuis le fichier pour afficher.
         if (isBlocNote) {
             reloadFromTranscription()
-            poemText?.setTextColor(android.graphics.Color.argb(220, 40, 120, 200))
         } else {
             // Mode Dictée : comparer au mot cible
             val match = text.equals(currentWord, ignoreCase = true)
             if (match) {
-                poemText?.text = "✓ $text"
-                poemText?.setTextColor(android.graphics.Color.argb(220, 40, 160, 60))
             } else {
-                poemText?.text = "$text ≠ $currentWord"
-                poemText?.setTextColor(android.graphics.Color.argb(220, 200, 50, 50))
             }
         }
         Log.i(TAG, "Reconnu: '$text'")
@@ -434,10 +419,8 @@ class CaptureActivity : Activity() {
      */
     private fun reloadFromTranscription() {
         val tw = transcriptionWriter ?: return
-        accumulatedText = tw.getOrderedText()
         wordTranscriptions.clear()
         wordTranscriptions.addAll(tw.getOrderedWords())
-        updatePoemText()
     }
 
     // ── Actions ────────────────────────────────────────────────────────
@@ -465,9 +448,6 @@ class CaptureActivity : Activity() {
             wordTranscriptions.clear()
             currentPageIndex = -1  // nouvelle page
             scanBlocnoteFiles()
-            poemText?.text = "📝 Bloc-notes"
-            poemText?.textSize = 28f
-            poemText?.setTextColor(android.graphics.Color.rgb(60, 60, 60))
         } else {
             // Mot suivant
             captureView?.clear()
@@ -481,9 +461,6 @@ class CaptureActivity : Activity() {
         if (isBlocNote) {
             accumulatedText = ""
             wordTranscriptions.clear()
-            poemText?.text = "📝 Bloc-notes"
-            poemText?.textSize = 28f
-            poemText?.setTextColor(android.graphics.Color.rgb(60, 60, 60))
         } else {
             pickWord()
         }
@@ -568,15 +545,11 @@ class CaptureActivity : Activity() {
                 // Migrer vers .transcription
                 accumulatedText = tx.joinToString(" ")
                 wordTranscriptions.clear(); wordTranscriptions.addAll(tx)
-                poemText?.text = accumulatedText
             } else {
                 accumulatedText = ""
                 wordTranscriptions.clear()
-                poemText?.text = "📝 Note ${index + 1}/${blocNoteFiles.size}"
             }
         }
-        poemText?.textSize = 28f
-        poemText?.setTextColor(android.graphics.Color.argb(220, 40, 120, 200))
         Log.i(TAG, "Page ${index + 1}/${blocNoteFiles.size}: ${file.name} (transcription: ${tw.exists()})")
     }
 
@@ -619,7 +592,6 @@ class CaptureActivity : Activity() {
             }
             runOnUiThread {
                 reloadFromTranscription()
-                poemText?.setTextColor(android.graphics.Color.argb(220, 40, 120, 200))
                 Log.i(TAG, "🔄 Transcriptions rafraîchies: $accumulatedText")
                 // Peupler les labels d'interligne
                 for ((idx, group) in groups.withIndex()) {
@@ -642,64 +614,8 @@ class CaptureActivity : Activity() {
 
     // ── UI helpers ─────────────────────────────────────────────────────
 
-    /** Affiche le texte accumulé avec le mot du groupe actif encadré.
-     *  Les sauts de ligne sont marqués par \\n visible.
-     *  Le défilement horizontal est centré sur le mot actif. */
-    private fun updatePoemText() {
-        val text = accumulatedText
-        if (text.isBlank()) {
-            poemText?.text = "📝 Bloc-notes"
-            poemText?.textSize = 28f
-            return
-        }
-        // Remplacer les vrais \n par " \n " visible dans la ligne unique
-        val displayText = text.replace("\n", " \\n ")
-
-        // Trouver le mot actif via GroupManager (SELECTED > LOADED)
-        val cv = captureView ?: return
-        val gm = cv.groupManager
-        val activeGroup = gm.groupsInState(GroupState.SELECTED).firstOrNull()
-            ?: gm.groupsInState(GroupState.LOADED).firstOrNull()
-
-        var activeWord: String? = null
-        if (activeGroup != null) {
-            val tw = transcriptionWriter
-            val targetSeq = cv.getActiveGroupSeq()
-            if (tw != null && tw.exists() && targetSeq != null) {
-                val entries = tw.readAll()  // (snapY, orderIndex, text)
-                activeWord = entries.find { it.second == targetSeq }?.third
-            }
-        }
-
-        if (activeWord != null && activeWord.isNotBlank()) {
-            val spannable = android.text.SpannableString(displayText)
-            val wordIdx = displayText.indexOf(activeWord, ignoreCase = true)
-            if (wordIdx >= 0) {
-                spannable.setSpan(
-                    android.text.style.BackgroundColorSpan(android.graphics.Color.argb(80, 0, 0, 0)),
-                    wordIdx, wordIdx + activeWord.length,
-                    android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-                )
-                // Centrer horizontalement sur le mot surligné
-                val targetIdx = wordIdx
-                poemText?.text = spannable
-                poemText?.post {
-                    try {
-                        val layout = poemText?.layout ?: return@post
-                        val viewWidth = poemText?.width ?: return@post
-                        if (viewWidth <= 0 || layout.lineCount == 0) return@post
-                        val horiz = layout.getPrimaryHorizontal(targetIdx)
-                        val scrollX = (horiz - viewWidth / 2f).toInt().coerceAtLeast(0)
-                            .coerceAtMost(layout.width - viewWidth)
-                        poemText?.scrollTo(scrollX.coerceAtLeast(0), 0)
-                    } catch (_: Exception) {}
-                }
-            }
-            poemText?.text = spannable
-        } else {
-            poemText?.text = displayText
-        }
-        poemText?.textSize = 28f
+    /** Rafraîchit l'interface après un changement de groupe actif. */
+    private fun onActiveGroupChanged() {
     }
 
     private fun makeToolbarButton(
