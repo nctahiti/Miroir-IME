@@ -37,7 +37,7 @@ class CalibrationActivity : Activity() {
         const val DEFAULT_TEMPORAL_DISTANCE = 800L
         const val DEFAULT_LONG_HOVER_DELAY = 1000L
         const val DEFAULT_ABSORB_CONTACTS = 1  // 1 = binaire, 10 = amorti
-        const val DEFAULT_BLOB_COLOR = 0x503C3C3C.toInt()  // gris fonce alpha 80
+        const val DEFAULT_BLOB_COLOR = 0xFFC0C0C0.toInt()  // gris clair opaque (derriere les strokes)
 
         fun prefs(ctx: Context): SharedPreferences =
             ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

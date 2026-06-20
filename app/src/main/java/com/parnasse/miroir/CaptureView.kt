@@ -2280,7 +2280,9 @@ class CaptureView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        // ═══ ARRIÈRE-PLAN : guides + blob (derrière les strokes) ═══
+        // ═══ ARRIÈRE-PLAN : blob (derrière les strokes) + guides ═══
+        // Blob — derrière les strokes pour ne pas les cacher
+        if (showVisualOverlays) drawActiveGroupBlob(canvas)
         // Lignes guides (cahier)
         val spacing = height.toFloat() / (guideLines + 1)
         for (i in 1..guideLines) {
@@ -2326,9 +2328,6 @@ class CaptureView(context: Context) : View(context) {
             val lineY = snapToLine((r.top + r.bottom) / 2f)
             canvas.drawLine(r.left, lineY, r.right, lineY, handlePaint)
         }
-
-        // Blob visuel — sur le bitmap, derrière le stroke courant
-        if (showVisualOverlays) drawActiveGroupBlob(canvas)
 
         // Stroke en cours de dessin — au premier plan
         // Supporte les sentinelles NaN pour séparer les strokes (drag multi-stroke)
