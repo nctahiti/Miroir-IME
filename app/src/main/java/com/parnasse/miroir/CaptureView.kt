@@ -3413,7 +3413,8 @@ class CaptureView(context: Context) : View(context) {
         val sampleStep = ((rx + ry) / 10f).toInt().coerceIn(1, 6)
 
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = CalibrationActivity.getBlobColor(context)
+            // Forcer alpha=255 — pas de transparence, pas d'accumulation par superposition
+            color = CalibrationActivity.getBlobColor(context) or 0xFF000000.toInt()
         }
 
         for (groupIndices in groupsToDraw) {
