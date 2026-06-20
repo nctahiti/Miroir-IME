@@ -1223,6 +1223,7 @@ class CaptureView(context: Context) : View(context) {
                         if (inkId != null) {
                             val gmGroup = groupManager.reactivateGroup(inkId)
                             if (gmGroup != null) {
+                                deselectAllGroups()  // une seule session SELECTED
                                 groupManager.selectGroup(gmGroup.id)
                                 val wordSpatial = (CalibrationActivity.getSpatialDistanceX(context) * 0.5f).coerceIn(15f, 40f)
                                 groupManager.params = groupManager.params.copy(spatialDistancePx = wordSpatial)
