@@ -1394,12 +1394,36 @@ class CaptureView(context: Context) : View(context) {
             MotionEvent.ACTION_DOWN -> {
                 // cancelAutoInferTimeout (GroupManager gere)
 
-                // ═══ Nouveau stroke en CAPTURE → fermer le groupe sélectionné par hover ═══
-                // Le survol long automatique sélectionne le dernier groupe.
-                // Un nouveau PENDOWN en CAPTURE = nouvelle intention d'écriture → désélectionner.
-                // En EDIT (correction), on garde la sélection pour l'absorption.
+                // ═══ Nouveau stroke en CAPTURE → vérifier si correction ou nouveau mot ═══
+                // Si un groupe est SELECTED et le PENDOWN est proche → correction → garder.
+                // Si le PENDOWN est loin → nouveau mot → désélectionner.
                 if (currentMode == CaptureMode.CAPTURE) {
-                    deselectAllGroups()
+                    val sel = groupManager.groupsInState(GroupState.SELECTED).firstOrNull()
+                    if (sel != null) {
+                        // Vérifier si le PENDOWN est dans le blob du groupe sélectionné
+                        val selIndices = sel.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+                        var nearSelected = false
+                        if (selIndices.isNotEmpty()) {
+                            val selBounds = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
+                            for (idx in selIndices) {
+                                if (idx >= strokeRegistry.size) continue
+                                for ((px, py) in strokeRegistry[idx].points) {
+                                    if (px < selBounds.left) selBounds.left = px
+                                    if (px > selBounds.right) selBounds.right = px
+                                    if (py < selBounds.top) selBounds.top = py
+                                    if (py > selBounds.bottom) selBounds.bottom = py
+                                }
+                            }
+                            val margin = 80f  // marge généreuse pour les corrections
+                            selBounds.inset(-margin, -margin)
+                            nearSelected = selBounds.contains(x, y)
+                        }
+                        if (!nearSelected) {
+                            deselectAllGroups()  // nouveau mot → désélectionner
+                        } else {
+                            Log.d(TAG, "Correction proche groupe ${sel.id} → sélection conservée")
+                        }
+                    }
                 }
 
                 // Enregistrer la position pour détection d'appui long
