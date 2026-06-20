@@ -1419,9 +1419,10 @@ class CaptureView(context: Context) : View(context) {
                             nearSelected = selBounds.contains(x, y)
                         }
                         if (!nearSelected) {
+                            Log.d(TAG, "DOWN loin du groupe SELECTED — deselectAllGroups (x=$x y=$y, selBounds=[${selBounds.left.toInt()},${selBounds.top.toInt()},${selBounds.right.toInt()},${selBounds.bottom.toInt()}], selIndices=${selIndices})")
                             deselectAllGroups()  // nouveau mot → désélectionner
                         } else {
-                            Log.d(TAG, "Correction proche groupe ${sel.id} → sélection conservée")
+                            Log.d(TAG, "Correction proche groupe ${sel.id} → sélection conservée (x=$x y=$y, selBounds=[${selBounds.left.toInt()},${selBounds.top.toInt()},${selBounds.right.toInt()},${selBounds.bottom.toInt()}])")
                         }
                     }
                 }
