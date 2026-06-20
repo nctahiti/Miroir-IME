@@ -783,18 +783,8 @@ class CaptureView(context: Context) : View(context) {
             return
         }
         if (groupManager.selectGroup(g.id)) {
-            // Réactiver l'absorption : les strokes suivants iront dans ce groupe
-            // ═══ Seuil de correction : 75% du seuil ligne (entre mot et correction) ═══
-            // Plus large que le seuil stroke↔stroke (50%) mais pas autant que le seuil
-            // entre deux mots (100%) pour éviter d'absorber le mot suivant.
-            val calX = CalibrationActivity.getSpatialDistanceX(context)
-            val correctionSpatial = (calX * 0.75f).coerceIn(15f, 200f)
-            groupManager.params = groupManager.params.copy(
-                spatialDistancePx = correctionSpatial,
-                temporalDistanceMs = Long.MAX_VALUE,  // neutralisé
-                minOverlapPercent = 0                  // aucun chevauchement requis
-            )
-            Log.i(TAG, "Survol long — groupe ${g.id} SELECTED, absorption réactivée (seuil correction=$correctionSpatial, calX=$calX)")
+            // Sélection visuelle uniquement — absorption gérée par isStrokeNearGroup()
+            Log.i(TAG, "Survol long — groupe ${g.id} SELECTED")
             onActiveGroupChanged?.invoke()
             invalidate()
         }
@@ -1394,38 +1384,8 @@ class CaptureView(context: Context) : View(context) {
             MotionEvent.ACTION_DOWN -> {
                 // cancelAutoInferTimeout (GroupManager gere)
 
-                // ═══ Nouveau stroke en CAPTURE → vérifier si correction ou nouveau mot ═══
-                // Si un groupe est SELECTED et le PENDOWN est proche → correction → garder.
-                // Si le PENDOWN est loin → nouveau mot → désélectionner.
-                if (currentMode == CaptureMode.CAPTURE) {
-                    val sel = groupManager.groupsInState(GroupState.SELECTED).firstOrNull()
-                    if (sel != null) {
-                        // Vérifier si le PENDOWN est dans le blob du groupe sélectionné
-                        val selIndices = sel.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
-                        var nearSelected = false
-                        if (selIndices.isNotEmpty()) {
-                            val selBounds = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
-                            for (idx in selIndices) {
-                                if (idx >= strokeRegistry.size) continue
-                                for ((px, py) in strokeRegistry[idx].points) {
-                                    if (px < selBounds.left) selBounds.left = px
-                                    if (px > selBounds.right) selBounds.right = px
-                                    if (py < selBounds.top) selBounds.top = py
-                                    if (py > selBounds.bottom) selBounds.bottom = py
-                                }
-                            }
-                            val margin = 80f  // marge généreuse pour les corrections
-                            selBounds.inset(-margin, -margin)
-                            nearSelected = selBounds.contains(x, y)
-                        }
-                        if (!nearSelected) {
-                            Log.d(TAG, "DOWN loin du groupe SELECTED — deselectAllGroups (x=$x, y=$y)")
-                            deselectAllGroups()  // nouveau mot → désélectionner
-                        } else {
-                            Log.d(TAG, "Correction proche groupe ${sel.id} → sélection conservée")
-                        }
-                    }
-                }
+                // Absorption gérée par GroupManager.onStrokeSealed() avec
+                // les params par défaut. Le survol est purement visuel.
 
                 // Enregistrer la position pour détection d'appui long
                 longPressStartX = event.x
