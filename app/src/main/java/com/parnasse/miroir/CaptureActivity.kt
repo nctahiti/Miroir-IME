@@ -57,6 +57,7 @@ class CaptureActivity : Activity() {
     private var captureView: CaptureView? = null
     private var poemText: TextView? = null
     private var modeBtn: TextView? = null
+    private var editModeIndicator: TextView? = null  // 🚢🔦⏳
 
     // ── Reconnaissance ─────────────────────────────────────────────────
     private var wordRecognizer: DigitalInkWrapper? = null
@@ -143,6 +144,17 @@ class CaptureActivity : Activity() {
             // Persistance des groupes pour eviction du cache
             cv.groupManager.persistence = GroupPersistence(GroupPersistence.groupsFile(noteDir, baseName))
             }
+            // Indicateur de mode 🚢🔦⏳
+            cv.onModeChanged = { mode ->
+                runOnUiThread {
+                    editModeIndicator?.text = when {
+                        cv.currentMode == CaptureMode.EDIT_TEMPORAL -> "⏳"
+                        mode == CaptureMode.CAPTURE -> "🚢"
+                        mode == CaptureMode.EDIT -> "🔦"
+                        else -> "🚢"
+                    }
+                }
+            }
         }
 
         // ── Layout ─────────────────────────────────────────────────────
@@ -171,6 +183,17 @@ class CaptureActivity : Activity() {
             setOnClickListener { toggleMode() }
         }
         topBar.addView(modeBtn!!)
+
+        // Indicateur mode édition (🚢 CAPTURE / 🔦 EDIT_SPATIAL / ⏳ EDIT_TEMPORAL)
+        editModeIndicator = TextView(this).apply {
+            text = "🚢"
+            textSize = 22f
+            setTextColor(android.graphics.Color.WHITE)
+            setPadding(14, 8, 14, 8)
+            setBackgroundColor(android.graphics.Color.argb(180, 60, 60, 60))
+            gravity = Gravity.CENTER
+        }
+        topBar.addView(editModeIndicator!!)
 
         // ⚙ Paramètres
         topBar.addView(makeToolbarButton("⚙", android.graphics.Color.argb(180, 80, 80, 80)) {

@@ -830,6 +830,7 @@ class CaptureView(context: Context) : View(context) {
     private var scrubStartX = 0f                 // X au debut du scrub (repere absolu)
     private var scrubInitialPos = 0f             // timelinePos au debut du scrub
     private var scrubGroupIndices: List<Int>? = null  // groupe en cours de scrub
+    private var scrubHappened = false              // true si un scrub a eu lieu pendant ce gesture
     private var isWritingInEdit = false          // ecriture en cours depuis le mode EDIT
 
     /**
@@ -892,6 +893,7 @@ class CaptureView(context: Context) : View(context) {
                         return
                     }
                     scrubInitialPos = scrubTimelinePos
+                    scrubHappened = false  // reset pour ce gesture
                     // Garder le meme groupe cible
                     longPressStartX = x; longPressStartY = y
                     longPressStartTime = System.currentTimeMillis()
@@ -904,6 +906,7 @@ class CaptureView(context: Context) : View(context) {
                 longPressStartY = y
                 longPressStartTime = System.currentTimeMillis()
                 longPressDisabled = false
+                scrubHappened = false  // reset pour ce gesture
                 val hitIdx = hitTest(x, y)
 
                 // Tap espace vide : defer au ACTION_UP (un vrai tap = retour CAPTURE,
@@ -1039,6 +1042,7 @@ class CaptureView(context: Context) : View(context) {
                     val prevPos = scrubTimelinePos
                     scrubTimelinePos = (scrubInitialPos + deltaX / scrubScale).coerceIn(0f, 1f)
                     if (Math.abs(scrubTimelinePos - prevPos) > 0.01f) {
+                        scrubHappened = true  // un scrub a eu lieu
                         Log.d(TAG, "⏳ scrub: pos=$scrubTimelinePos deltaX=$deltaX groupe=${scrubGroupIndices?.size}s")
                     }
                     // Appliquer au rendu : rebuildBitmap avec filtre temporel
@@ -1129,7 +1133,7 @@ class CaptureView(context: Context) : View(context) {
                     }
                 }
                 // Tap sur un mot -> toggle EDIT_SPATIAL / EDIT_TEMPORAL
-                if (!wasDrag && dragWordGroup != null && !isWritingInEdit && !longPressTriggered) {
+                if (!wasDrag && dragWordGroup != null && !isWritingInEdit && !longPressTriggered && !scrubHappened) {
                     if (currentMode == CaptureMode.EDIT) {
                         currentMode = CaptureMode.EDIT_TEMPORAL
                         scrubStartX = x
