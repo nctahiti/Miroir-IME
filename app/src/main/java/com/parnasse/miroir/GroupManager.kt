@@ -52,9 +52,14 @@ class GroupManager(
         // Simplifie : seul le groupe SELECTED peut absorber
         // L'intention est spatiale — stylet dans le blob → ajout, sinon → nouvelle session
         val selected = machine.pendingGroupId?.let { groups[it] }
-        Log.d(TAG, "onStrokeSealed: pendingGroupId=${machine.pendingGroupId}, selected=${selected?.id} state=${selected?.state}, near=${if (selected != null) isStrokeNearGroup(stroke, selected) else "N/A"}")
-        val group = if (selected != null && selected.state == GroupState.SELECTED
-                        && isStrokeNearGroup(stroke, selected)) {
+        // Fast-reject rectangulaire : le stroke est-il dans la zone du groupe SELECTED ?
+        val nearSelected = selected != null && selected.state == GroupState.SELECTED && run {
+            val expanded = RectF(selected.bounds)
+            expanded.inset(-params.spatialDistancePx, -params.spatialDistanceY)
+            RectF.intersects(expanded, strokeBounds)
+        }
+        Log.d(TAG, "onStrokeSealed: pendingGroupId=${machine.pendingGroupId}, selected=${selected?.id} state=${selected?.state}, fastReject=${if (selected != null) nearSelected else "N/A"}")
+        val group = if (nearSelected && isStrokeNearGroup(stroke, selected!!)) {
             Log.i(TAG, "Absorption SELECTED " + selected.id + " (stroke proche)")
             selected
         } else {
@@ -75,21 +80,10 @@ class GroupManager(
         resetTranscriptionTimeout(group)
     }
 
-    /** Test spatial simple : le stroke est-il dans le perimetre du groupe ? */
-    /** Teste si le stroke est dans le blob du groupe (mêmes règles que computeSpatialGroupsRaw). */
     /**
-     * Teste si le stroke touche le blob du groupe.
-     * Blob = union des ellipses (rx, ry) autour de chaque point du groupe.
-     * Approximé par distance elliptique point-stroke → rectangle-bounds du groupe.
-     * rx = spatialDistancePx DIRECT (calibration X), ry = spatialDistanceY DIRECT (calibration Y).
-     * Plus de coefficients cachés — le blob visuel (canvas.scale) utilise les mêmes rx, ry.
-     */
-    /**
-     * Teste si le stroke touche le blob du groupe.
-     * Blob = union des ellipses (rx, ry) centrees sur CHAQUE POINT du groupe.
-     * Chaque point du stroke est teste contre chaque point du groupe.
-     * rx = spatialDistancePx (calibration X), ry = spatialDistanceY (calibration Y).
-     * AUCUN coefficient cache, AUCUN rectangle englobant, AUCUNE deformation image.
+     * Teste si le stroke touche le blob du groupe (après fast-reject dans onStrokeSealed).
+     * Blob = union des ellipses (rx, ry) centrées sur chaque point du groupe.
+     * Chaque point du stroke est testé contre chaque point du groupe.
      */
     private fun isStrokeNearGroup(stroke: InkStroke, group: InkGroup): Boolean {
         if (stroke.points.isEmpty()) return false

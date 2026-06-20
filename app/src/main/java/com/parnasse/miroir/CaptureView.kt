@@ -2833,7 +2833,14 @@ class CaptureView(context: Context) : View(context) {
         val groups = mutableListOf<MutableList<Int>>()
         for (k in 1 until sorted.size) {
             val idx = sorted[k]
-            if (isNear(idx, current)) {
+            // Fast-reject rectangulaire : les bounds gonflees (rx, ry) se touchent-elles ?
+            val expanded = android.graphics.RectF(gLeft - rx, gTop - ry, gRight + rx, gBottom + ry)
+            if (!android.graphics.RectF.intersects(expanded, idxToBounds[idx]!!)) {
+                groups.add(current)
+                current = mutableListOf(idx)
+                gLeft = idxToBounds[idx]!!.left; gRight = idxToBounds[idx]!!.right
+                gTop = idxToBounds[idx]!!.top; gBottom = idxToBounds[idx]!!.bottom
+            } else if (isNear(idx, current)) {
                 current.add(idx)
                 if (idxToBounds[idx]!!.left < gLeft) gLeft = idxToBounds[idx]!!.left
                 if (idxToBounds[idx]!!.right > gRight) gRight = idxToBounds[idx]!!.right
@@ -2905,7 +2912,15 @@ class CaptureView(context: Context) : View(context) {
         val groups = mutableListOf<MutableList<Int>>()
         for (k in 1 until sortedIndices.size) {
             val idx = sortedIndices[k]
-            if (isNearGroup(idx, current)) {
+            // Fast-reject rectangulaire : les bounds gonflees (rx, ry) se touchent-elles ?
+            val expanded = android.graphics.RectF(gLeft - rx, gTop - ry, gRight + rx, gBottom + ry)
+            if (!android.graphics.RectF.intersects(expanded, bounds[idx])) {
+                // Trop loin → nouveau groupe, sans test point-contre-point
+                groups.add(current)
+                current = mutableListOf(idx)
+                gLeft = bounds[idx].left; gRight = bounds[idx].right
+                gTop = bounds[idx].top; gBottom = bounds[idx].bottom
+            } else if (isNearGroup(idx, current)) {
                 current.add(idx)
                 if (bounds[idx].left < gLeft) gLeft = bounds[idx].left
                 if (bounds[idx].right > gRight) gRight = bounds[idx].right
