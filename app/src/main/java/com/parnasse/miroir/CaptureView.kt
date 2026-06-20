@@ -281,17 +281,15 @@ class CaptureView(context: Context) : View(context) {
         // isStrokeNearGroup utilise spatialDistancePx * 0.7 = blobRadiusX
         val blobDistX = (calSpatialX * 0.75f).coerceIn(15f, 300f)
         
-        val blobDistY = calSpatialY  // interligne verticale
         groupManager.params = BlobParams(
-            spatialDistancePx = blobDistX,  // blobRadiusX ≈ spatial*0.7
-            spatialDistanceY = blobDistY,   // blobRadiusY ≈ spatial*0.35
+            spatialDistancePx = blobDistX,  // blobRadiusX ≈ spatial*0.7, blobRadiusY ≈ spatial*0.35
             minOverlapPercent = 100,  // plus utilise (absorption simplifiee)
             temporalDistanceMs = 0L,  // plus utilise
             transcriptionTimeoutMs = Long.MAX_VALUE,  // deseactive : inference via registerCompletedStroke
             groupLevel = GroupLevel.WORD,
             captureAnchor = CaptureAnchor.BOTTOM
         )
-        Log.i(TAG, "GroupManager params sync: calX=${calSpatialX}px → blobDistX=$blobDistX, temporal=$calTemporal, timeout=${groupManager.params.transcriptionTimeoutMs}ms")
+        Log.i(TAG, "GroupManager params sync: calX=${calSpatialX}px → wordSpatial=$wordSpatial, temporal=$calTemporal, timeout=${groupManager.params.transcriptionTimeoutMs}ms")
     }
 
     // -- Reflux de texte

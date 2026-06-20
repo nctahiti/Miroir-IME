@@ -18,7 +18,6 @@ import android.content.SharedPreferences
  */
 data class BlobParams(
     val spatialDistancePx: Float = DEFAULT_SPATIAL_DISTANCE_PX,
-    val spatialDistanceY: Float = DEFAULT_SPATIAL_DISTANCE_Y,
     val minOverlapPercent: Int = DEFAULT_MIN_OVERLAP_PERCENT,
     val temporalDistanceMs: Long = DEFAULT_TEMPORAL_DISTANCE_MS,
     val transcriptionTimeoutMs: Long = DEFAULT_TRANSCRIPTION_TIMEOUT_MS,
@@ -28,7 +27,6 @@ data class BlobParams(
     companion object {
         // Valeurs par défaut — calibrées pour écriture latine standard
         const val DEFAULT_SPATIAL_DISTANCE_PX    = 20f  // écart entre lettres ~20px, entre mots >40px
-        const val DEFAULT_SPATIAL_DISTANCE_Y    = 80f  // écart vertical ~80px (interligne)
         const val DEFAULT_MIN_OVERLAP_PERCENT     = 30
         const val DEFAULT_TEMPORAL_DISTANCE_MS    = 800L
         const val DEFAULT_TRANSCRIPTION_TIMEOUT_MS = 2000L
