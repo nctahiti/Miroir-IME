@@ -77,7 +77,7 @@ class GroupManager(
         // Marges calibrées sur le blob elliptique (blobRadiusX, blobRadiusY)
         // spatialDistancePx = blobDistX = calX * 0.75 (pas wordSpatial)
         val marginX = (params.spatialDistancePx * 0.7f).coerceIn(20f, 200f)
-        val marginY = (params.spatialDistancePx * 0.35f).coerceIn(10f, 70f)
+        val marginY = (params.spatialDistanceY * 0.35f).coerceIn(10f, 70f)
         val expanded = RectF(group.bounds)
         expanded.inset(-marginX, -marginY)
         return RectF.intersects(expanded, strokeBounds)
