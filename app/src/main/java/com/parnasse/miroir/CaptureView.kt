@@ -769,7 +769,6 @@ class CaptureView(context: Context) : View(context) {
 
         // Déclencher ! (one-shot)
         longHoverStartMs = Long.MAX_VALUE  // empêche de re-déclencher sur le même groupe
-        longHoverFirstStroke = -1  // forcer re-détection si le stylet change de groupe
         Log.d(TAG, "Survol long — déclenché après ${delayMs}ms")
 
         // Désélectionner l'ancien
