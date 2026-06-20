@@ -37,6 +37,13 @@ class GroupManager(
     private val strokeToGroup = mutableMapOf<Long, String>()
     var persistence: GroupPersistence? = null
 
+    /**
+     * Résout un strokeId → liste de points (x, y).
+     * Branché par CaptureView pour que isStrokeNearGroup puisse tester
+     * point-contre-point sans passer par le rectangle englobant.
+     */
+    var pointProvider: ((Long) -> List<Pair<Float, Float>>?)? = null
+
     fun onStrokeSealed(stroke: InkStroke) {
         if (stroke.wasCanceled || stroke.points.isEmpty()) return
         val strokeBounds = BlobAbsorber.computeBounds(stroke)
@@ -77,29 +84,34 @@ class GroupManager(
      * rx = spatialDistancePx DIRECT (calibration X), ry = spatialDistanceY DIRECT (calibration Y).
      * Plus de coefficients cachés — le blob visuel (canvas.scale) utilise les mêmes rx, ry.
      */
+    /**
+     * Teste si le stroke touche le blob du groupe.
+     * Blob = union des ellipses (rx, ry) centrees sur CHAQUE POINT du groupe.
+     * Chaque point du stroke est teste contre chaque point du groupe.
+     * rx = spatialDistancePx (calibration X), ry = spatialDistanceY (calibration Y).
+     * AUCUN coefficient cache, AUCUN rectangle englobant, AUCUNE deformation image.
+     */
     private fun isStrokeNearGroup(stroke: InkStroke, group: InkGroup): Boolean {
-        if (group.bounds.isEmpty) return false
         if (stroke.points.isEmpty()) return false
+        val provider = pointProvider ?: return false
 
-        val rx = params.spatialDistancePx  // DIRECT — calibration X
-        val ry = params.spatialDistanceY   // DIRECT — calibration Y
+        val rx = params.spatialDistancePx  // DIRECT — rayon horizontal de l'ellipse
+        val ry = params.spatialDistanceY   // DIRECT — rayon vertical de l'ellipse
 
-        // Pour chaque point du stroke, distance elliptique au rectangle du groupe
-        for (p in stroke.points) {
-            // Distance horizontale signée au rectangle du groupe (normalisée par rx)
-            val dx = when {
-                p.x < group.bounds.left  -> (group.bounds.left - p.x) / rx
-                p.x > group.bounds.right -> (p.x - group.bounds.right) / rx
-                else -> 0f  // point à l'intérieur horizontalement
+        // Collecter les points du groupe (via le provider branche sur strokeRegistry)
+        val groupPoints = mutableListOf<Pair<Float, Float>>()
+        for (sid in group.strokeIds) {
+            provider(sid)?.let { groupPoints.addAll(it) }
+        }
+        if (groupPoints.isEmpty()) return false
+
+        // Test point-contre-point : chaque point du stroke contre chaque point du groupe
+        for (sp in stroke.points) {
+            for (gp in groupPoints) {
+                val dx = (sp.x - gp.first) / rx
+                val dy = (sp.y - gp.second) / ry
+                if (dx * dx + dy * dy <= 1.0f) return true  // dans l'ellipse du point du groupe
             }
-            // Distance verticale signée au rectangle du groupe (normalisée par ry)
-            val dy = when {
-                p.y < group.bounds.top    -> (group.bounds.top - p.y) / ry
-                p.y > group.bounds.bottom -> (p.y - group.bounds.bottom) / ry
-                else -> 0f  // point à l'intérieur verticalement
-            }
-
-            if (dx * dx + dy * dy <= 1.0f) return true  // point dans l'ellipse
         }
         return false
     }

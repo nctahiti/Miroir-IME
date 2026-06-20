@@ -255,6 +255,11 @@ class CaptureView(context: Context) : View(context) {
         onWordGroupCompleted?.invoke(snapshot, indices, seq)
         vstarWriter?.writeGroupSep()
     }).also {
+        // ═══ Brancher le fournisseur de points pour isStrokeNearGroup point-contre-point ═══
+        it.pointProvider = { strokeId ->
+            inkStrokeIdToRegistryIndex[strokeId]
+                ?.let { registryIdx -> strokeRegistry.getOrNull(registryIdx)?.points }
+        }
         // ═══ Quand un groupe SELECTED est auto-désélectionné, réinitialiser les params ═══
         it.onGroupAutoDeselected = {
             it.params = it.params.copy(
@@ -3384,18 +3389,15 @@ class CaptureView(context: Context) : View(context) {
 
     /**
      * 🔦 PHARE + BLOB — affichés ensemble pour le groupe SELECTED.
-     * Utilise GroupManager pour trouver le groupe sélectionné (hover maintenu).
-     * Contour extérieur par tracé épais (tube autour de chaque stroke) —
-     * remplace les centaines d'ovales individuels (O(n_points) → O(n_strokes)).
-     * L'union naturelle des tubes aux caps ronds crée l'aura du mot.
-     * Phare : point noir sur l'interligne (dessiné dans drawActiveGroupCursor).
+     * Chaque point du groupe est le centre de son ellipse (rx, ry).
+     * L'union de toutes ces ellipses = le blob du groupe.
+     * rx, ry = valeurs DIRECTES de la calibration. Aucune déformation image.
      */
     private fun drawActiveGroupBlob(canvas: Canvas) {
         if (currentMode != CaptureMode.CAPTURE) return
         if (!isBlocnoteMode) return
 
-        // Blob UNIQUEMENT sur le groupe SELECTED (phare)
-        // L'absorption et l'affichage utilisent les MÊMES paramètres : rx, ry = calibration directe
+        // Blob UNIQUEMENT sur le groupe SELECTED
         val selectedIndices = groupManager.groupsInState(GroupState.SELECTED)
             .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
         if (selectedIndices.isEmpty()) return
@@ -3404,51 +3406,30 @@ class CaptureView(context: Context) : View(context) {
         val groupsToDraw = groups.filter { it.any { idx -> idx in selectedIndices } }
         if (groupsToDraw.isEmpty()) return
 
-        // Rayons DIRECTS — pas de coefficients cachés. Ce que tu règles = ce que tu vois = ce qui absorbe.
+        // Rayons DIRECTS — chaque point du groupe est le centre de son ellipse (rx, ry)
         blobRadiusX = CalibrationActivity.getSpatialDistanceX(context)
         blobRadiusY = CalibrationActivity.getSpatialDistanceY(context)
-        // Épaisseur du tube = somme des rayons → même couverture que les anciens ovales
-        val baseR = minOf(blobRadiusX, blobRadiusY)
-        val scaleX = blobRadiusX / baseR  // >1 si blobRadiusX dominant
-        val scaleY = blobRadiusY / baseR  // >1 si blobRadiusY dominant
-        val paintStrokeW = (baseR * 2f).coerceIn(15f, 100f)
+        val rx = blobRadiusX; val ry = blobRadiusY
+        val sampleStep = ((rx + ry) / 10f).toInt().coerceIn(1, 6)
 
-        // Tracé épais à caps ronds → tube continu autour de chaque stroke
-        // canvas.scale() autour du centre → le tube circulaire devient elliptique
-        // (blobRadiusX en horizontal, blobRadiusY en vertical)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-            this.strokeWidth = paintStrokeW
             color = CalibrationActivity.getBlobColor(context)
         }
 
         for (groupIndices in groupsToDraw) {
-            // Tous les strokes du groupe combinés en UN SEUL Path
-            // -> un seul drawPath par groupe -> pas d'accumulation d'alpha
-            val combinedPath = Path()
-            var sumX = 0f; var sumY = 0f; var nPts = 0
             for (idx in groupIndices) {
                 if (idx >= strokeRegistry.size) continue
                 val s = strokeRegistry[idx]
-                if (s.points.size < 2) continue
-                combinedPath.moveTo(s.points[0].first, s.points[0].second)
-                for (i in 1 until s.points.size) {
-                    combinedPath.lineTo(s.points[i].first, s.points[i].second)
+                var pi = 0
+                for ((x, y) in s.points) {
+                    if (pi % sampleStep == 0) {
+                        // Chaque point est le centre de son ellipse (rx, ry)
+                        // L'union de toutes ces ellipses = le blob du groupe
+                        canvas.drawOval(x - rx, y - ry, x + rx, y + ry, paint)
+                    }
+                    pi++
                 }
-                sumX += s.points[0].first; sumY += s.points[0].second; nPts++
             }
-            if (nPts == 0) continue
-            val cx = sumX / nPts; val cy = sumY / nPts
-
-            // Scale autour du centre → tube circulaire devient elliptique
-            canvas.save()
-            canvas.translate(cx, cy)
-            canvas.scale(scaleX, scaleY)
-            canvas.translate(-cx, -cy)
-            canvas.drawPath(combinedPath, paint)
-            canvas.restore()
         }
     }
 
