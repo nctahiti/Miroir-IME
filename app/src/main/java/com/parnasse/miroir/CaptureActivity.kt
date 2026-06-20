@@ -184,31 +184,6 @@ class CaptureActivity : Activity() {
         }
         topBar.addView(modeBtn!!)
 
-        // Indicateur mode édition (🚢 CAPTURE / 🔦 EDIT_SPATIAL / ⏳ EDIT_TEMPORAL)
-        editModeIndicator = TextView(this).apply {
-            text = "🚢"
-            textSize = 22f
-            setTextColor(android.graphics.Color.argb(220, 40, 40, 40))  // texte fonce
-            setPadding(14, 8, 14, 8)
-            setBackgroundColor(android.graphics.Color.argb(220, 255, 255, 255))  // fond blanc
-            gravity = Gravity.CENTER
-            // Clic long → copier tout le texte transcrit dans le presse-papier
-            setOnLongClickListener {
-                val tw = transcriptionWriter
-                val words = tw?.getOrderedWords()?.filter { it.isNotBlank() } ?: emptyList()
-                if (words.isEmpty()) {
-                    Toast.makeText(this@CaptureActivity, "Aucun texte à copier", Toast.LENGTH_SHORT).show()
-                } else {
-                    val text = words.joinToString(" ")
-                    val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("miroir", text))
-                    Toast.makeText(this@CaptureActivity, "📋 ${words.size} mots copiés", Toast.LENGTH_SHORT).show()
-                }
-                true
-            }
-        }
-        topBar.addView(editModeIndicator!!)
-
         // ⚙ Paramètres
         topBar.addView(makeToolbarButton("⚙", android.graphics.Color.argb(180, 80, 80, 80)) {
             val intent = Intent(this@CaptureActivity, CalibrationActivity::class.java)
@@ -348,6 +323,34 @@ class CaptureActivity : Activity() {
         })
 
         overlay.addView(topBar)
+
+        // Indicateur mode édition (🚢 CAPTURE / 🔦 EDIT_SPATIAL / ⏳ EDIT_TEMPORAL)
+        // Placé sous le bouton 📝, aligné à gauche
+        editModeIndicator = TextView(this).apply {
+            text = "🚢"
+            textSize = 22f
+            setTextColor(android.graphics.Color.argb(220, 40, 40, 40))
+            setPadding(14, 8, 14, 8)
+            setBackgroundColor(android.graphics.Color.argb(220, 255, 255, 255))
+            gravity = Gravity.CENTER
+            setOnLongClickListener {
+                val tw = transcriptionWriter
+                val words = tw?.getOrderedWords()?.filter { it.isNotBlank() } ?: emptyList()
+                if (words.isEmpty()) {
+                    Toast.makeText(this@CaptureActivity, "Aucun texte à copier", Toast.LENGTH_SHORT).show()
+                } else {
+                    val text = words.joinToString(" ")
+                    val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("miroir", text))
+                    Toast.makeText(this@CaptureActivity, "📋 ${words.size} mots copiés", Toast.LENGTH_SHORT).show()
+                }
+                true
+            }
+        }
+        overlay.addView(editModeIndicator!!, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { gravity = Gravity.START; leftMargin = 16 })
 
         // Espace capture
         overlay.addView(View(this), LinearLayout.LayoutParams(

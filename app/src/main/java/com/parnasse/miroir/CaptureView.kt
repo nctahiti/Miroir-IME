@@ -3589,58 +3589,54 @@ class CaptureView(context: Context) : View(context) {
             Log.i(TAG, "drawModeIndicator: width=$width height=$height mode=$currentMode temporal=$temporalMode")
             modeIndicatorLogged = true
         }
-        // Position sous la barre d'outils (~180px du haut de la CaptureView)
+        // Position sous la barre d'outils (~380px du haut — descendu de 200px)
         val margin = 52f
         val cx = width - margin
-        val cy = 180f
+        val cy = 380f
+        // Taille doublée pour visibilité
+        val logoScale = 2f
         val p = modeIndicatorPaint
         val pf = modeIndicatorFill
 
         when {
             currentMode == CaptureMode.EDIT_TEMPORAL -> {
-                // MONTRE — cadran circulaire + 2 aiguilles (~28px)
-                val r = 18f
-                p.strokeWidth = 3f
+                // MONTRE — cadran circulaire + 2 aiguilles (×logoScale)
+                val r = 18f * logoScale
+                p.strokeWidth = 3f * logoScale
                 canvas.drawCircle(cx, cy, r, p)
-                // Aiguille heures (10h)
                 canvas.drawLine(cx, cy, cx - r * 0.4f, cy - r * 0.55f, p)
-                // Aiguille minutes (2h)
                 canvas.drawLine(cx, cy, cx + r * 0.55f, cy - r * 0.6f, p)
-                canvas.drawCircle(cx, cy, 4f, pf)
-                p.strokeWidth = 2.5f
+                canvas.drawCircle(cx, cy, 4f * logoScale, pf)
+                p.strokeWidth = 2.5f * logoScale
             }
             currentMode == CaptureMode.EDIT -> {
-                // PHARE — tour + toit + lumiere (~28px haut)
-                val bw = 12f; val bh = 22f
+                // PHARE — tour + toit + lumiere (×logoScale)
+                val bw = 12f * logoScale; val bh = 22f * logoScale
                 val tx = cx - bw; val ty = cy - bh / 2
-                canvas.drawRect(tx, ty + 5f, cx + bw, cy + bh / 2, p)
-                // Toit triangulaire
+                canvas.drawRect(tx, ty + 5f * logoScale, cx + bw, cy + bh / 2, p)
                 val roofPath = Path()
-                roofPath.moveTo(tx - 4f, ty + 5f)
-                roofPath.lineTo(cx, ty - 8f)
-                roofPath.lineTo(cx + bw + 4f, ty + 5f)
+                roofPath.moveTo(tx - 4f * logoScale, ty + 5f * logoScale)
+                roofPath.lineTo(cx, ty - 8f * logoScale)
+                roofPath.lineTo(cx + bw + 4f * logoScale, ty + 5f * logoScale)
                 roofPath.close()
                 canvas.drawPath(roofPath, pf)
                 canvas.drawPath(roofPath, p)
-                // Lumiere (point au sommet)
-                canvas.drawCircle(cx, ty - 3f, 5f, pf)
-                canvas.drawCircle(cx, ty - 3f, 5f, p)
+                canvas.drawCircle(cx, ty - 3f * logoScale, 5f * logoScale, pf)
+                canvas.drawCircle(cx, ty - 3f * logoScale, 5f * logoScale, p)
             }
             else -> {
-                // BATEAU — coque + mat + voile (~28px haut)
-                val boatY = cy + 10f
+                // BATEAU — coque + mat + voile (×logoScale)
+                val boatY = cy + 10f * logoScale
                 val hullPath = Path()
-                hullPath.moveTo(cx - 20f, boatY)
-                hullPath.quadTo(cx - 12f, boatY + 9f, cx, boatY + 10f)
-                hullPath.quadTo(cx + 12f, boatY + 9f, cx + 20f, boatY)
+                hullPath.moveTo(cx - 20f * logoScale, boatY)
+                hullPath.quadTo(cx - 12f * logoScale, boatY + 9f * logoScale, cx, boatY + 10f * logoScale)
+                hullPath.quadTo(cx + 12f * logoScale, boatY + 9f * logoScale, cx + 20f * logoScale, boatY)
                 canvas.drawPath(hullPath, p)
-                // Mat
-                canvas.drawLine(cx, boatY - 24f, cx, boatY, p)
-                // Voile triangulaire
+                canvas.drawLine(cx, boatY - 24f * logoScale, cx, boatY, p)
                 val sailPath = Path()
-                sailPath.moveTo(cx + 2f, boatY - 22f)
-                sailPath.lineTo(cx + 17f, boatY - 3f)
-                sailPath.lineTo(cx + 2f, boatY - 3f)
+                sailPath.moveTo(cx + 2f * logoScale, boatY - 22f * logoScale)
+                sailPath.lineTo(cx + 17f * logoScale, boatY - 3f * logoScale)
+                sailPath.lineTo(cx + 2f * logoScale, boatY - 3f * logoScale)
                 sailPath.close()
                 canvas.drawPath(sailPath, pf)
                 canvas.drawPath(sailPath, p)
