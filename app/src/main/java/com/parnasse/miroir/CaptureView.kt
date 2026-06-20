@@ -807,13 +807,15 @@ class CaptureView(context: Context) : View(context) {
             groupManager.deselectGroup(g.id)
             Log.d(TAG, "Déselection — groupe ${g.id} SELECTED → STORED")
         }
+        // Désactiver l'absorption : revenir au mode "chaque stroke = un groupe"
+        // ⚠️ TOUJOURS reset, même si selected est vide — un groupe évincé
+        // laisse des params permissifs orphelins qui aspirent les strokes suivants
+        groupManager.params = groupManager.params.copy(
+            spatialDistancePx = 1f,
+            temporalDistanceMs = 0L,
+            minOverlapPercent = 100
+        )
         if (selected.isNotEmpty()) {
-            // Désactiver l'absorption : revenir au mode "chaque stroke = un groupe"
-            groupManager.params = groupManager.params.copy(
-                spatialDistancePx = 1f,
-                temporalDistanceMs = 0L,
-                minOverlapPercent = 100
-            )
             onActiveGroupChanged?.invoke()
             postInvalidate()
         }
