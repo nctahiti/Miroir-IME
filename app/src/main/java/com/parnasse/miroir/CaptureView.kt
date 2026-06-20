@@ -654,9 +654,10 @@ class CaptureView(context: Context) : View(context) {
                 }
                 Log.d(TAG, "Hover: AUCUN groupe — x=$x y=$y, ${sg.size} groupes, " +
                     "candidats(valides)=${nearby.size}, " +
-                    "bounds=[${nearby.take(3).joinToString(",") { gi ->
+                    "snapLines=[${nearby.take(3).joinToString(",") { gi ->
                         val r = sb[gi]
-                        "G$gi:L${r.left.toInt()}R${r.right.toInt()}T${r.top.toInt()}B${r.bottom.toInt()}"
+                        val sl = snapToLine((r.top + r.bottom) / 2f).toInt()
+                        "G$gi:Y${sl}r${r.left.toInt()}-${r.right.toInt()} dY=${(y - sl).toInt()}"
                     }}]")
             }
             invalidate()
@@ -1917,8 +1918,8 @@ class CaptureView(context: Context) : View(context) {
 
             currentNotePath = file.absolutePath
             rebuildBitmap()
-            currentMode = CaptureMode.EDIT
-            onModeChanged?.invoke(currentMode)
+            // Rester en CAPTURE (le mode était forcé à EDIT — bug)
+            // L'utilisateur choisit son mode via l'interface
             Log.i(TAG, "Note chargee: ${file.name} — ${strokeRegistry.size} strokes, ${loadedGroups.size} groupes")
             throttledInvalidate(); true
         } catch (e: Exception) {
