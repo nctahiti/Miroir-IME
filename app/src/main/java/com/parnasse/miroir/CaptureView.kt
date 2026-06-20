@@ -991,12 +991,13 @@ class CaptureView(context: Context) : View(context) {
                     if (dt > 200 && dt < 220) {
                         Log.d(TAG, "⏳ LP check: dt=${dt}ms dx=${dx} dy=${dy} trig=${longPressTriggered} dis=${longPressDisabled} avail=${temporalEraseAvailable}")
                     }
-                    // Seuils assouplis pour e-ink (jitter + MOVE rares si stylet immobile)
-                    if (dt > 350 && dx < 40f && dy < 40f) {
-                        longPressTriggered = true
+                    // Désactiver le long-press si mouvement (avant le timer 350ms)
                     if (dt > 100 && (dx > 15f || dy > 15f)) {
                         longPressDisabled = true
                     }
+                    // Seuils assouplis pour e-ink (jitter + MOVE rares si stylet immobile)
+                    if (!longPressDisabled && dt > 350 && dx < 40f && dy < 40f) {
+                        longPressTriggered = true
                         if (currentMode == CaptureMode.EDIT) {
                             // Entrer en EDIT_TEMPORAL : initialiser le scrub
                             currentMode = CaptureMode.EDIT_TEMPORAL
@@ -1214,7 +1215,7 @@ class CaptureView(context: Context) : View(context) {
                     dragWordGroup = null
                     flowState = null
                     flowBackup = null
-                    selectedWordGroup = null
+                    // selectedWordGroup conservé — le groupe déplacé garde sa surbrillance verte
                     // Rester en ÉDITION — le PENDOWN ou HOVER_EXIT ramènera en CAPTURE
                     // (isHovering est false pendant le drag, le hover arrive après UP)
                     Log.d(TAG, "ÉDITION maintenu (hover actif, re-drag possible)")
