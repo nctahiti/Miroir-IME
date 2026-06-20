@@ -642,7 +642,23 @@ class CaptureView(context: Context) : View(context) {
         if (newStrokeIdx != hoverStrokeIndex || newWordGroup != hoverWordGroup) {
             hoverStrokeIndex = newStrokeIdx
             hoverWordGroup = newWordGroup
-            Log.d(TAG, "Hover stroke: $newStrokeIdx (${strokeRegistry.size} total)")
+            if (newStrokeIdx != null) {
+                Log.d(TAG, "Hover stroke: $newStrokeIdx (${strokeRegistry.size} total)")
+            } else {
+                // Diagnostic : pourquoi aucun groupe trouvé ?
+                val sg = spatialGroups; val sb = spatialBounds
+                val nearby = sg.indices.filter { gi ->
+                    val r = sb[gi]
+                    val gl = snapToLine((r.top + r.bottom) / 2f)
+                    r.left < Float.MAX_VALUE
+                }
+                Log.d(TAG, "Hover: AUCUN groupe — x=$x y=$y, ${sg.size} groupes, " +
+                    "candidats(valides)=${nearby.size}, " +
+                    "bounds=[${nearby.take(3).joinToString(",") { gi ->
+                        val r = sb[gi]
+                        "G$gi:L${r.left.toInt()}R${r.right.toInt()}T${r.top.toInt()}B${r.bottom.toInt()}"
+                    }}]")
+            }
             invalidate()
         }
         // Survol long → sélection via GroupManager
@@ -752,7 +768,8 @@ class CaptureView(context: Context) : View(context) {
         if (System.currentTimeMillis() - longHoverStartMs < delayMs) return
 
         // Déclencher ! (one-shot)
-        longHoverStartMs = 0
+        longHoverStartMs = System.currentTimeMillis()  // reset timer pour éviter boucle
+        longHoverFirstStroke = -1  // forcer re-détection au prochain survol
         Log.d(TAG, "Survol long — déclenché après ${delayMs}ms")
 
         // Désélectionner l'ancien
