@@ -141,9 +141,11 @@ class CaptureActivity : Activity() {
             // ═══ Mettre à jour la transcription quand le groupe actif change ═══
             cv.onActiveGroupChanged = {
                 runOnUiThread { updatePoemText() }
-            // Persistance des groupes pour eviction du cache
-            cv.groupManager.persistence = GroupPersistence(GroupPersistence.groupsFile(noteDir, baseName))
             }
+            // Persistance des groupes pour eviction du cache
+            // ⚠️ DOIT être hors du callback — sinon jamais initialisée avant
+            // le premier changement de groupe actif → groupes évincés irrécupérables
+            cv.groupManager.persistence = GroupPersistence(GroupPersistence.groupsFile(noteDir, baseName))
             // Indicateur de mode 🚢🔦⏳
             cv.onModeChanged = { mode ->
                 runOnUiThread {
