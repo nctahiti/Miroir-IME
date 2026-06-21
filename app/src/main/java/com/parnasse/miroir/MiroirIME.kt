@@ -805,6 +805,9 @@ class MiroirIME : InputMethodService() {
 
             // ═══ Réarmer : chaque nouveau trait dans le groupe reset le compte à rebours ═══
             // Le timer ne tire qu'après inferDelay d'inactivité DANS CE GROUPE.
+            val hadTimer = groupTimers.containsKey(firstIdx)
+            val countChanged = timerArmedStrokeCount[firstIdx] != strokeCount
+            if (hadTimer && !countChanged) continue  // groupe inchangé → ne pas réarmer
             groupTimers.remove(firstIdx)?.cancel(false)
             // Ancrer le groupe si nouveau (premier timer)
             if (groupAnchor[group.id] == null) {
