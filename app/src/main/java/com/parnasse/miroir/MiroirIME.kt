@@ -927,6 +927,12 @@ class MiroirIME : InputMethodService() {
                         computeBlobPath(group)?.let { blob ->
                             groupBlobs[group.id] = blob
                         }
+                        // Sélectionner pour afficher le blob
+                        val gm2 = groupManager
+                        if (gm2 != null) {
+                            gm2.groupsInState(GroupState.SELECTED).forEach { gm2.deselectGroup(it.id) }
+                            gm2.selectGroup(group.id)
+                        }
                     }
                     // Correction (même mot) → setComposingText (remplace)
                     // Nouveau mot → commitText (ajoute)
