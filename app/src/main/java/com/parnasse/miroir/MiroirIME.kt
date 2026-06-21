@@ -672,6 +672,7 @@ class MiroirIME : InputMethodService() {
                 uiHandler.post {
                     val firstIdx = indices.firstOrNull() ?: return@post
                     groupLabels[firstIdx] = result
+                    cachedGMCacheSize = -1  // invalider cache spatial
                     commitText(result)
                     throttledInvalidate()
                 }
@@ -743,12 +744,13 @@ class MiroirIME : InputMethodService() {
         val groups = getSpatialGroups()
         val bounds = getSpatialBounds()
         for ((firstIdx, label) in groupLabels) {
-            // Trouver le groupe spatial contenant ce firstIdx
             val gi = groups.indexOfFirst { it.firstOrNull() == firstIdx }
             if (gi < 0 || gi >= bounds.size) continue
             val r = bounds[gi]
             if (r.left >= Float.MAX_VALUE) continue
-            val y = snapToLine((r.top + r.bottom) / 2f) + 6f
+            val lineY = snapToLine((r.top + r.bottom) / 2f)
+            // 70% au-dessus de la ligne → baseline = lineY + textSize*0.3
+            val y = lineY + labelPaint.textSize * 0.3f
             canvas.drawText(label, r.left, y, labelPaint)
         }
     }
