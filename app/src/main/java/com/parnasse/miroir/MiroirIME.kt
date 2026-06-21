@@ -979,17 +979,35 @@ class MiroirIME : InputMethodService() {
     // ── Note synchronisée ─────────────────────────────────────────────
     private var syncedNoteText: String = ""  // copie de ce qui est dans le champ texte
 
-    /** Injecte tous les labels dans l'ordre de lecture. Ne transmet que si changé. */
+    /** Injecte tous les labels dans l'ordre de lecture. Ne transmet que si changé.
+     *  Les groupes sans label recoivent le placeholder \"…\" pour diagnostic. */
     private fun injectReadingOrder() {
         val ic = currentInputConnection
         if (ic == null) { Log.w(TAG, "injectReadingOrder: pas d'InputConnection"); return }
-        if (groupLabels.isEmpty()) return
-        // Collecter (ligne, x, texte) pour chaque label
+        val gm = groupManager ?: return
+        // Collecter (ligne, x, texte) pour chaque mot (label ou placeholder)
         data class Word(val line: Float, val x: Float, val text: String)
         val words = mutableListOf<Word>()
+        val seenFirstIdx = mutableSetOf<Int>()
+        // 1. Groupes avec label
         for ((firstIdx, text) in groupLabels) {
+            seenFirstIdx.add(firstIdx)
             val anchor = groupAnchor[firstIdx] ?: continue
             words.add(Word(snapToLine(anchor.second), anchor.first, text))
+        }
+        // 2. Groupes sans label → placeholder \"…\" (diagnostic : blocage groupe ou inference ?)
+        for (group in gm.allGroupsFull()) {
+            val firstIdx = group.strokeIds.firstOrNull()
+                ?.let { inkStrokeIdToRegistryIndex[it] } ?: continue
+            if (firstIdx in seenFirstIdx) continue  // deja traite avec label
+            val anchor = groupAnchor[firstIdx]
+            val (x, y) = if (anchor != null) {
+                Pair(anchor.first, snapToLine(anchor.second))
+            } else if (!group.bounds.isEmpty) {
+                Pair(group.bounds.centerX(), snapToLine(group.bounds.centerY()))
+            } else continue
+            words.add(Word(y, x, "\u2026"))  // … = U+2026
+            Log.d(TAG, "injectReadingOrder: placeholder pour firstIdx=$firstIdx (groupe ${group.id.take(8)}, ${group.strokeCount}s, state=${group.state})")
         }
         if (words.isEmpty()) return
         // Trier par ligne (Y) puis par position horizontale (X)
@@ -1013,7 +1031,7 @@ class MiroirIME : InputMethodService() {
         syncedNoteText = newText
         ic.finishComposingText()
         ic.commitText(newText, 1)
-        Log.i(TAG, "injectReadingOrder: transmit \"$newText\"")
+        Log.i(TAG, "injectReadingOrder: transmit \"$newText\" (${words.size} mots, ${groupLabels.size} labels, ${words.size - groupLabels.size} placeholders)")
     }
 
     /** Réinitialise la copie synchronisée (après clearPage ou ✕). */

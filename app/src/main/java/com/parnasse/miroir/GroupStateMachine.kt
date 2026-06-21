@@ -68,10 +68,13 @@ class GroupStateMachine {
     fun makeActive(newActiveId: String, oldGroup: InkGroup?): Boolean {
         if (activeGroupId == newActiveId) return true  // déjà actif
 
-        // Clôturer l'ancien groupe actif
-        if (oldGroup != null && activeGroupId == oldGroup.id) {
-            transition(oldGroup, GroupState.STORED)
-        }
+        // ═══ NE PAS transitionner l'ancien groupe à STORED ═══
+        // Dans l'IME, les groupes doivent rester LOADED pour que :
+        //   - scheduleGroupInference() les trouve (cherche LOADED)
+        //   - leur timer d'inférence puisse tirer
+        //   - l'absorption reste active (transcriptionTimeoutMs = Long.MAX_VALUE)
+        // Un groupe LOADED inactif sera nettoyé par evictInactive() si nécessaire,
+        // mais jamais pendant la session d'écriture active.
 
         activeGroupId = newActiveId
         return true
