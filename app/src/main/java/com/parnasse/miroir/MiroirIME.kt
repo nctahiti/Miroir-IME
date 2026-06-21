@@ -1,5 +1,28 @@
 package com.parnasse.miroir
 
+/**
+ * Miroir IME — portail d'écriture manuscrite universel.
+ *
+ * Architecture : voir ARCHITECTURE.md
+ *
+ * Points d'entrée pour le lecteur :
+ *   1. onCreateInputView() — initialisation (TouchHelper, GroupManager, ML Kit)
+ *   2. onTouchEvent()       — boucle d'événements stylet
+ *   3. onStylusUp()         — fin d'un trait : rastérisation, groupement, timer
+ *   4. scheduleGroupInference() — timers par groupe
+ *   5. recognizeGroup()     — inférence ML Kit → label + blob + injection
+ *   6. injectReadingOrder() — tri spatial → texte dans le champ cible
+ *   7. onDraw()             — rendu : bitmap, template, labels, blob
+ *
+ * Principes :
+ *   - Blob = zone d'absorption (visuel). Label = témoin d'inférence.
+ *   - Sélection purement visuelle (activeBlobGroupId), pas selectGroup().
+ *   - Chaque groupe a son timer indépendant.
+ *   - Ordre de lecture = tri spatial (interligne, x). Poésie binaire.
+ *   - Pas d'éviction (transcriptionTimeoutMs = Long.MAX_VALUE).
+ *   - EPD : refreshRect (pixellaire), pas invalidate() global.
+ */
+
 import android.graphics.*
 import android.inputmethodservice.InputMethodService
 import android.os.Handler
