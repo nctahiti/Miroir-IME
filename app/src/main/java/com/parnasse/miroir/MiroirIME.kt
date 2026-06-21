@@ -535,8 +535,6 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
 
     private fun onStylusDown(x: Float, y: Float) {
-        // ═══ Invalider tous les timers d'inférence (nouveau stroke) ═══
-        cancelAllGroupTimers()
         currentPath.reset()
         currentPath.moveTo(x, y)
         currentStroke = StrokeRecord(
@@ -650,6 +648,7 @@ class MiroirIME : InputMethodService() {
         val inferDelay = CalibrationActivity.getAutoInferDelay(this)
         val now = System.currentTimeMillis()
 
+        // Trouver les groupes LOADED (actifs)
         val loadedGroups = gm.groupsInState(GroupState.LOADED)
         for (group in loadedGroups) {
             if (group.strokeIds.isEmpty()) continue
@@ -663,6 +662,10 @@ class MiroirIME : InputMethodService() {
                 continue
             }
 
+            // ═══ Ne réarmer que si le groupe a changé (évite de reset les autres timers) ═══
+            val lastStored = timerArmedStrokeCount[firstIdx]
+            if (lastStored != null && lastStored == strokeCount) continue  // inchangé
+
             // Annuler l'ancien timer et armer le nouveau
             groupTimers.remove(firstIdx)?.cancel(false)
             timerArmedAt[firstIdx] = now
@@ -671,6 +674,7 @@ class MiroirIME : InputMethodService() {
                 armGroupInference(firstIdx)
             }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
             groupTimers[firstIdx] = timer
+            Log.d(TAG, "⏱️ Timer firstIdx=$firstIdx → ${inferDelay}ms (${strokeCount}s)")
         }
     }
 
