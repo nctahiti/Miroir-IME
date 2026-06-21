@@ -179,11 +179,16 @@ class MiroirIME : InputMethodService() {
             cachedGMCacheSize = -1
             scheduleInferenceForGroup(indices)
         }).also {
-            it.params = it.params.copy(transcriptionTimeoutMs = 3000L)  // 3s sans stroke → groupe fermé
+            it.params = it.params.copy(transcriptionTimeoutMs = 3000L)
             it.pointProvider = { strokeId ->
                 inkStrokeIdToRegistryIndex[strokeId]
                     ?.let { idx -> strokeRegistry.getOrNull(idx)?.points }
             }
+            // ═══ Persistance en mémoire (fichier temporaire) ═══
+            // Sans persistance, evictGroup() supprime définitivement les groupes.
+            val tmpDir = java.io.File(cacheDir, "ime-groups")
+            tmpDir.mkdirs()
+            it.persistence = GroupPersistence(java.io.File(tmpDir, "current.groups"))
         }
     }
 
@@ -749,8 +754,8 @@ class MiroirIME : InputMethodService() {
             val r = bounds[gi]
             if (r.left >= Float.MAX_VALUE) continue
             val lineY = snapToLine((r.top + r.bottom) / 2f)
-            // 70% au-dessus de la ligne → baseline = lineY + textSize*0.3
-            val y = lineY + labelPaint.textSize * 0.3f
+            // Label juste sous l'interligne (là où le phare se pose)
+            val y = lineY + labelPaint.textSize + 4f
             canvas.drawText(label, r.left, y, labelPaint)
         }
     }
