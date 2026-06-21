@@ -718,6 +718,17 @@ class CaptureView(context: Context) : View(context) {
         return cachedSpatialGroups!!
     }
 
+    /** [PHASE 0] Groupes spatiaux depuis GroupManager (source unique).
+     *  Convertit les groupes GroupManager (inkStrokeIds) → indices strokeRegistry.
+     *  Pas encore branché — cohabite avec getSpatialGroups() pour validation. */
+    internal fun getSpatialGroupsFromGM(): List<List<Int>> {
+        val gmGroups = groupManager.allGroups()
+        return gmGroups.mapNotNull { group ->
+            val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+            if (indices.isEmpty()) null else indices
+        }
+    }
+
     /** Retourne les bounds précalculées des groupes spatiaux. */
     private fun getSpatialBounds(): List<android.graphics.RectF> {
         getSpatialGroups()  // assure le cache
