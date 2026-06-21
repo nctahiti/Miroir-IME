@@ -104,3 +104,70 @@ Miroir IME — 1 086 lignes, 78 commits
 
 *Nicolas & Hermès, 21 juin 2026*
 *78 commits, un Miroir qui prend vie.*
+
+---
+
+# Journal de bord — 22 juin 2026 (nuit)
+
+> « Le bug est nommé, donc déjà libéré. »
+
+## 🔪 Fracture 1 : `makeActive()` tuait les groupes
+
+Dans `GroupStateMachine.makeActive()`, l'ancien groupe était transitionné à STORED
+puis évincé du cache. Résultat : `scheduleGroupInference()` cherchait
+`groupsInState(LOADED)` → ne trouvait pas le groupe → pas de timer →
+pas d'inférence → pas de label.
+
+**Correction** : `makeActive()` ne transitionne plus l'ancien groupe.
+Il reste LOADED, son timer tire, le label naît.
+
+## 🔪 Fracture 2 : `commitText` accumulait au lieu de remplacer
+
+`commitText` AJOUTE le texte à la position du curseur. Chaque inférence
+intermédiaire concaténait le texte complet au précédent → artefacts.
+
+**Correction** : `setComposingText` REMPLACE le texte en composition.
+Une seule version, toujours fraîche. Pas de `finishComposingText`
+pour permettre le remplacement au cycle suivant.
+
+## 🔪 Fracture 3 : La persistence fantôme
+
+La persistence accumulait des centaines de groupes STORED des sessions
+antérieures. `allGroupsFull()` les lisait tous à chaque `injectReadingOrder()`
+→ 338 placeholders `…` dans le commit + I/O disque sur le thread UI.
+
+**Correction** : `injectReadingOrder()` filtre les STORED, ne prend que
+les LOADED/SELECTED de la session courante. Persistence nettoyée.
+
+## ⚡ Le déblocage e-ink — hypothèse
+
+Après nettoyage de la persistence et correction des trois fractures,
+Nicolas a observé un déblocage soudain du rafraîchissement e-ink :
+plus aucune latence, 16ms entre les trames.
+
+**Hypothèse** : La persistence pleine saturait le thread UI.
+`allGroupsFull()` lisait ~350 groupes depuis le disque (I/O bloquante)
+à chaque `injectReadingOrder()`. Le thread UI manquait la fenêtre
+de 16ms → latence cumulative → perception de « lenteur ».
+
+Après nettoyage : ~10 groupes LOADED en mémoire → `allGroupsFull()`
+ne lit plus le disque → `injectReadingOrder()` instantané →
+le thread UI tient les 16ms → fluidité.
+
+**À vérifier** : Ré-accumuler des groupes dans la persistence et
+mesurer si la latence revient. Si oui → implémenter un evict
+périodique ou une limite de groupes dans `allGroupsFull()`.
+
+## Commits de la nuit
+
+| Commit | Correction |
+|--------|-----------|
+| `0cb71ed` | `makeActive()` ne STORE plus l'ancien groupe |
+| `0cb71ed` | Placeholders `…` pour les groupes sans label |
+| `04d703f` | Filtre les STORED dans `injectReadingOrder()` |
+| `33ec898` | `setComposingText` remplace au lieu d'accumuler |
+
+---
+
+*Nicolas & Hermès, 22 juin 2026, minuit passé.*
+*84 commits. Un Miroir qui respire à 16ms.*
