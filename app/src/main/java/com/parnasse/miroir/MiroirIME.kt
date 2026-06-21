@@ -68,10 +68,12 @@ class MiroirIME : InputMethodService() {
     // Map firstIdx → texte reconnu (labels)
     private val groupLabels = mutableMapOf<Int, String>()
     private val labelPaint = Paint().apply {
-        color = Color.argb(180, 80, 80, 80)
+        color = Color.BLACK  // noir pour visibilité e-ink
         textSize = 28f
         isAntiAlias = true
         typeface = Typeface.DEFAULT_BOLD
+        // Fond blanc léger derrière le texte pour lisibilité
+        setShadowLayer(3f, 1f, 1f, Color.argb(200, 255, 255, 255))
     }
     // Timer d'inactivité stylet global (pour différer l'inférence)
     private var lastStylusActivity = 0L
@@ -82,6 +84,19 @@ class MiroirIME : InputMethodService() {
 
     // ── Barre d'outils ─────────────────────────────────────────────────
     private var showOverlays = true  // 👁 toggle
+
+    // ── Blob ───────────────────────────────────────────────────────────
+    private val blobPaint = Paint().apply {
+        color = Color.argb(60, 100, 100, 100)
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+    private val blobStrokePaint = Paint().apply {
+        color = Color.argb(120, 60, 60, 60)
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        isAntiAlias = true
+    }
 
     // ── Template (partition) ───────────────────────────────────────────
     // L'espacement est calculé dynamiquement selon la hauteur du canvas
@@ -169,9 +184,13 @@ class MiroirIME : InputMethodService() {
         })
 
         toolbar.addView(makeButton("⚙") {
-            val intent = android.content.Intent(this@MiroirIME, CalibrationActivity::class.java)
-            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
+            // Masquer l'IME avant d'ouvrir la calibration (sinon cachée derrière)
+            requestHideSelf(0)
+            uiHandler.postDelayed({
+                val intent = android.content.Intent(this@MiroirIME, CalibrationActivity::class.java)
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+            }, 200)  // délai pour laisser l'IME se fermer
         })
 
         toolbar.addView(makeButton("👁") {
@@ -239,6 +258,8 @@ class MiroirIME : InputMethodService() {
             super.onDraw(canvas)
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             if (showOverlays) {
+                // Dessiner le blob du groupe actif
+                drawActiveGroupBlob(canvas)
                 // Dessiner la partition (template delta)
                 val t = template
                 if (t is Template.HorizontalStaff) {
@@ -513,6 +534,42 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
     // UTILITAIRES
     // ═══════════════════════════════════════════════════════════════════
+
+    /** Dessine le blob (zone d'absorption) autour du groupe actif */
+    private fun drawActiveGroupBlob(canvas: Canvas) {
+        val gm = groupManager ?: return
+        val groups = gm.allGroups()
+        if (groups.isEmpty()) return
+        // Prendre le dernier groupe (le plus récent = actif)
+        val group = groups.lastOrNull() ?: return
+        if (group.strokeIds.isEmpty()) return
+
+        // Calculer la boîte englobante de tous les strokes du groupe
+        var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
+        var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
+        for (sid in group.strokeIds) {
+            val idx = inkStrokeIdToRegistryIndex[sid] ?: continue
+            val sr = strokeRegistry.getOrNull(idx) ?: continue
+            for ((x, y) in sr.points) {
+                if (x < minX) minX = x; if (x > maxX) maxX = x
+                if (y < minY) minY = y; if (y > maxY) maxY = y
+            }
+        }
+        if (minX == Float.MAX_VALUE) return
+
+        val blobRx = gm.params.spatialDistancePx
+        val blobRy = gm.params.spatialDistanceY
+
+        // Rectangle englobant gonflé du blob
+        val left = minX - blobRx
+        val top = minY - blobRy
+        val right = maxX + blobRx
+        val bottom = maxY + blobRy
+
+        val blobRect = android.graphics.RectF(left, top, right, bottom)
+        canvas.drawRoundRect(blobRect, blobRx, blobRy, blobPaint)
+        canvas.drawRoundRect(blobRect, blobRx, blobRy, blobStrokePaint)
+    }
 
     private fun clearCanvas() {
         bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
