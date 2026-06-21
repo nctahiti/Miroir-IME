@@ -421,8 +421,10 @@ class MiroirIME : InputMethodService() {
         // ═══ GroupManager : groupement spatial ═══
         val inkStroke = strokeRecordToInkStroke(stroke, inkId)
         groupManager?.onStrokeSealed(inkStroke)
+        // ═══ Nettoyer le cache GroupManager (comme CaptureView) ═══
+        groupManager?.evictInactive()
 
-        // Mettre à jour le cache du blob (nouveau stroke → groupe changé)
+        // Mettre à jour le cache du blob
         updateBlobCache()
 
         imeView?.invalidate()
