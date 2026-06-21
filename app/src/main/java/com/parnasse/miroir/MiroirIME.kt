@@ -674,8 +674,6 @@ class MiroirIME : InputMethodService() {
 
     private var lastPointRefresh = 0L
     private var isStylusDown = false
-    private var lastInjectedGroupFirstIdx: Int? = null
-    private var lastInjectedLineY: Float? = null  // pour détecter les changements d'interligne
 
     private fun onStylusDown(x: Float, y: Float) {
         isStylusDown = true
@@ -939,28 +937,8 @@ class MiroirIME : InputMethodService() {
                         // ═══ PAS de sélection auto — le blob est la vue de sélection,
                         // pas le témoin d'inférence. Le label EST le témoin. ═══
                     }
-                    // Correction (même mot) → setComposingText (remplace)
-                    // Nouveau mot → commitText (ajoute)
-                    // Changement d'interligne → retour à la ligne
-                    val ic = currentInputConnection
-                    if (ic != null) {
-                        // Calculer l'interligne de ce mot
-                        val anchor = groupAnchor[firstIdx]
-                        val lineY = if (anchor != null) snapToLine(anchor.second) else null
-
-                        if (firstIdx == lastInjectedGroupFirstIdx) {
-                            ic.setComposingText("$result ", 1)
-                        } else {
-                            lastInjectedGroupFirstIdx = firstIdx
-                            ic.finishComposingText()
-                            // Retour à la ligne si changement d'interligne
-                            if (lineY != null && lastInjectedLineY != null && Math.abs(lineY - lastInjectedLineY!!) > 10f) {
-                                ic.commitText("\n", 1)
-                            }
-                            ic.commitText("$result ", 1)
-                            lastInjectedLineY = lineY
-                        }
-                    }
+                    // ═══ Injection en ordre de lecture (tri spatial) ═══
+                    injectReadingOrder()
                     Log.i(TAG, "Texte injecté: \"$result\"")
                     refreshAll()
                 }
@@ -978,6 +956,33 @@ class MiroirIME : InputMethodService() {
         val ic = currentInputConnection ?: return
         ic.setComposingText("$text ", 1)
         Log.i(TAG, "Texte injecté (composing): \"$text\"")
+    }
+
+    /** Injecte tous les labels dans l'ordre de lecture (tri spatial). */
+    private fun injectReadingOrder() {
+        val ic = currentInputConnection ?: return
+        if (groupLabels.isEmpty()) return
+        // Collecter (ligne, x, texte) pour chaque label
+        data class Word(val line: Float, val x: Float, val text: String)
+        val words = mutableListOf<Word>()
+        for ((firstIdx, text) in groupLabels) {
+            val anchor = groupAnchor[firstIdx] ?: continue
+            words.add(Word(snapToLine(anchor.second), anchor.first, text))
+        }
+        if (words.isEmpty()) return
+        // Trier par ligne (Y) puis par position horizontale (X)
+        words.sortWith(compareBy<Word> { it.line }.thenBy { it.x })
+        // Construire le texte avec retours à la ligne entre interlignes
+        val sb = StringBuilder()
+        var currentLine = words.first().line
+        for (w in words) {
+            if (Math.abs(w.line - currentLine) > 10f) {
+                sb.append("\n")
+                currentLine = w.line
+            }
+            sb.append(w.text).append(" ")
+        }
+        ic.setComposingText(sb.toString(), 1)
     }
 
     // ═══════════════════════════════════════════════════════════════════
