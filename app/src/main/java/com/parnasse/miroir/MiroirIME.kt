@@ -655,10 +655,12 @@ class MiroirIME : InputMethodService() {
             val strokeCount = group.strokeIds.size
             groupLastModifiedMs[firstIdx] = now
 
-            // Déjà inféré et inchangé → skip
+            // Déjà inféré mais modifié → permettre la ré-inférence
             val infCount = groupStrokeCountAtInference[firstIdx]
-            if (firstIdx in inferredGroupFirstIdxs && infCount != null && strokeCount == infCount) {
-                continue
+            if (firstIdx in inferredGroupFirstIdxs) {
+                if (infCount != null && strokeCount == infCount) continue  // vraiment inchangé
+                // Modifié depuis l'inférence → ré-ouvrir pour ré-inférence
+                inferredGroupFirstIdxs.remove(firstIdx)
             }
 
             // ═══ Réarmer : chaque nouveau trait dans le groupe reset le compte à rebours ═══
