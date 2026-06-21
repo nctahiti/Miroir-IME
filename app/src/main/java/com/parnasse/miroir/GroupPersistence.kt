@@ -46,6 +46,11 @@ class GroupPersistence(private val file: File) {
         }
     }
 
+    /** Supprime le fichier .groups (pour repartir à zéro au chargement). */
+    fun deleteAll() {
+        try { file.delete() } catch (_: Exception) {}
+    }
+
     fun writeAllGroups(groups: List<InkGroup>) {
         val all = JSONObject()
         for (group in groups) {

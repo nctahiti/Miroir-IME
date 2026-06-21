@@ -1953,6 +1953,10 @@ class CaptureView(context: Context) : View(context) {
                     loadedGroups.add(groupIndices.toList())
                 }
             }
+            // ═══ Nettoyer l'ancienne persistance .groups (sinon accumulation) ═══
+            groupManager.persistence?.deleteAll()
+            Log.i(TAG, "Ancienne persistance .groups nettoyée")
+
             // ═══ Enregistrer les groupes dans GroupManager (survol, reactivation) ═══
             for (groupIndices in loadedGroups) {
                 val inkGroup = InkGroup.create()
