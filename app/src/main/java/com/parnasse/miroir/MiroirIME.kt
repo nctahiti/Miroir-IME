@@ -539,6 +539,8 @@ class MiroirIME : InputMethodService() {
     // GESTION DES POINTS STYLET
     // ═══════════════════════════════════════════════════════════════════
 
+    private var lastPointRefresh = 0L
+
     private fun onStylusDown(x: Float, y: Float) {
         currentPath.reset()
         currentPath.moveTo(x, y)
@@ -557,6 +559,13 @@ class MiroirIME : InputMethodService() {
             stroke.points.add(Pair(x, y))
             stroke.timestamps.add(System.currentTimeMillis())
             stroke.pressures.add(pressure.coerceIn(0f, 1f))
+        }
+        // Rafraîchir pendant le glissé (throttlé 16ms = ~60fps max)
+        val now = System.currentTimeMillis()
+        if (now - lastPointRefresh >= 16) {
+            lastPointRefresh = now
+            val r = 10
+            refreshRect(x.toInt() - r, y.toInt() - r, x.toInt() + r, y.toInt() + r)
         }
     }
 
