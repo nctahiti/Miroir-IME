@@ -673,17 +673,30 @@ class MiroirIME : InputMethodService() {
     private fun drawGroupLabels(canvas: Canvas) {
         if (groupLabels.isEmpty()) return
         for ((firstIdx, label) in groupLabels) {
-            // Utiliser la position cachée, ou la calculer une fois
             val pos = cachedLabelPositions.getOrPut(firstIdx) {
                 val sr = strokeRegistry.getOrNull(firstIdx) ?: return@getOrPut Pair(0f, 0f)
                 if (sr.points.isEmpty()) return@getOrPut Pair(0f, 0f)
                 var sumY = 0f
                 for (pt in sr.points) sumY += pt.second
                 val centerY = sumY / sr.points.size
-                Pair(sr.points.first().first, centerY + 30f)
+                // ═══ Accrocher à la ligne de template la plus proche ═══
+                val snappedY = snapToTemplate(centerY)
+                Pair(sr.points.first().first, snappedY)
             }
             if (pos.first == 0f && pos.second == 0f) continue
             canvas.drawText(label, pos.first, pos.second, labelPaint)
         }
+    }
+
+    /** Cale une position Y sur la ligne de portée la plus proche. */
+    private fun snapToTemplate(y: Float): Float {
+        if (cachedTemplateLines.isEmpty()) return y + 20f
+        var best = cachedTemplateLines.first()
+        var bestDist = Math.abs(y - best)
+        for (line in cachedTemplateLines) {
+            val dist = Math.abs(y - line)
+            if (dist < bestDist) { bestDist = dist; best = line }
+        }
+        return best + 6f  // léger décalage sous la ligne pour lisibilité
     }
 }
