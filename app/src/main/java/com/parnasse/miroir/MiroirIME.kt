@@ -86,16 +86,9 @@ class MiroirIME : InputMethodService() {
     private var showOverlays = true  // 👁 toggle
 
     // ── Blob ───────────────────────────────────────────────────────────
-    private val blobPaint = Paint().apply {
-        color = Color.argb(60, 100, 100, 100)
+    private val blobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFA0A0A0.toInt()  // gris opaque, visible e-ink
         style = Paint.Style.FILL
-        isAntiAlias = true
-    }
-    private val blobStrokePaint = Paint().apply {
-        color = Color.argb(120, 60, 60, 60)
-        style = Paint.Style.STROKE
-        strokeWidth = 2f
-        isAntiAlias = true
     }
 
     // ── Template (partition) ───────────────────────────────────────────
@@ -256,10 +249,12 @@ class MiroirIME : InputMethodService() {
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
+            if (showOverlays) {
+                // ⚠️ Blob DERRIÈRE les strokes (dessiné avant le bitmap)
+                drawActiveGroupBlob(canvas)
+            }
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             if (showOverlays) {
-                // Dessiner le blob du groupe actif
-                drawActiveGroupBlob(canvas)
                 // Dessiner la partition (template delta)
                 val t = template
                 if (t is Template.HorizontalStaff) {
@@ -535,40 +530,40 @@ class MiroirIME : InputMethodService() {
     // UTILITAIRES
     // ═══════════════════════════════════════════════════════════════════
 
-    /** Dessine le blob (zone d'absorption) autour du groupe actif */
+    /** 
+     * Blob elliptique point par point — comme dans le Miroir V4.
+     * Chaque point du groupe = centre d'une ellipse (rx, ry).
+     * L'union des ellipses = le blob. rx, ry = valeurs calibrées.
+     * Dessiné AVANT le bitmap (derrière les strokes).
+     */
     private fun drawActiveGroupBlob(canvas: Canvas) {
         val gm = groupManager ?: return
         val groups = gm.allGroups()
         if (groups.isEmpty()) return
-        // Prendre le dernier groupe (le plus récent = actif)
+        // Dernier groupe = le plus récent (actif)
         val group = groups.lastOrNull() ?: return
         if (group.strokeIds.isEmpty()) return
 
-        // Calculer la boîte englobante de tous les strokes du groupe
-        var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
-        var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
+        val rx = gm.params.spatialDistancePx
+        val ry = gm.params.spatialDistanceY
+        if (rx <= 0f && ry <= 0f) return
+
+        // Échantillonnage : un point sur N (performance)
+        val sampleStep = ((rx + ry) / 10f).toInt().coerceIn(1, 6)
+
+        val paint = blobPaint  // déjà configuré (gris semi-transparent)
+
+        var pi = 0
         for (sid in group.strokeIds) {
             val idx = inkStrokeIdToRegistryIndex[sid] ?: continue
             val sr = strokeRegistry.getOrNull(idx) ?: continue
             for ((x, y) in sr.points) {
-                if (x < minX) minX = x; if (x > maxX) maxX = x
-                if (y < minY) minY = y; if (y > maxY) maxY = y
+                if (pi % sampleStep == 0) {
+                    canvas.drawOval(x - rx, y - ry, x + rx, y + ry, paint)
+                }
+                pi++
             }
         }
-        if (minX == Float.MAX_VALUE) return
-
-        val blobRx = gm.params.spatialDistancePx
-        val blobRy = gm.params.spatialDistanceY
-
-        // Rectangle englobant gonflé du blob
-        val left = minX - blobRx
-        val top = minY - blobRy
-        val right = maxX + blobRx
-        val bottom = maxY + blobRy
-
-        val blobRect = android.graphics.RectF(left, top, right, bottom)
-        canvas.drawRoundRect(blobRect, blobRx, blobRy, blobPaint)
-        canvas.drawRoundRect(blobRect, blobRx, blobRy, blobStrokePaint)
     }
 
     private fun clearCanvas() {
