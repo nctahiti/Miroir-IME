@@ -2024,3 +2024,4 @@ int styleable ViewStubCompat_android_layout 1
 int styleable ViewStubCompat_android_inflatedId 2
 int[] styleable WifiEncryptionState { 0x7f0400e8 }
 int styleable WifiEncryptionState_state_encrypted 0
+int xml method 0x7f110000

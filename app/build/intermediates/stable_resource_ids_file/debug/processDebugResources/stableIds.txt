@@ -1295,6 +1295,7 @@ com.parnasse.miroir.v4:dimen/tooltip_y_offset_touch = 0x7f070086
 com.parnasse.miroir.v4:attr/colorBackgroundFloating = 0x7f040054
 com.parnasse.miroir.v4:string/wifi_security_dpp = 0x7f0e00a2
 com.parnasse.miroir.v4:anim/abc_slide_out_bottom = 0x7f010008
+com.parnasse.miroir.v4:xml/method = 0x7f110000
 com.parnasse.miroir.v4:attr/indeterminateProgressStyle = 0x7f04009e
 com.parnasse.miroir.v4:integer/wave_line_min_turning_point_count = 0x7f0b000d
 com.parnasse.miroir.v4:attr/actionDropDownStyle = 0x7f04000c

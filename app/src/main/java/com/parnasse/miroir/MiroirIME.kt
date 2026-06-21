@@ -71,7 +71,19 @@ class MiroirIME : InputMethodService() {
     private var imeView: CaptureSurfaceView? = null
 
     // ── Template (partition) ───────────────────────────────────────────
-    private val template: Template = Template.HorizontalStaff(spacingPx = 500f)
+    // L'espacement est calculé dynamiquement selon la hauteur du canvas
+    // pour garantir ~4-6 lignes visibles quelle que soit la densité d'écran.
+    private var template: Template = Template.HorizontalStaff(spacingPx = 120f) // sera recalculé
+
+    /** Recalcule l'espacement du template selon la hauteur réelle du canvas. */
+    private fun updateTemplateSpacing(canvasHeight: Int) {
+        if (canvasHeight <= 0) return
+        // ~5 lignes dans la hauteur disponible
+        val targetLines = 5f
+        val spacing = (canvasHeight / targetLines).coerceIn(60f, 200f)
+        template = Template.HorizontalStaff(spacingPx = spacing)
+        Log.d(TAG, "Template: ${spacing.toInt()}px entre lignes (hauteur=$canvasHeight)")
+    }
 
     // ═══════════════════════════════════════════════════════════════════
     // LIFECYCLE IME
@@ -109,6 +121,7 @@ class MiroirIME : InputMethodService() {
                 bitmap = Bitmap.createBitmap(surface.width, surface.height, Bitmap.Config.ARGB_8888)
                 bitmapCanvas = Canvas(bitmap!!)
                 bitmapCanvas?.drawColor(Color.WHITE)
+                updateTemplateSpacing(surface.height)
             }
         }
 
@@ -155,8 +168,9 @@ class MiroirIME : InputMethodService() {
             super.onDraw(canvas)
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             // Dessiner la partition (template delta)
-            if (template is Template.HorizontalStaff) {
-                template.draw(canvas, width, height)
+            val t = template
+            if (t is Template.HorizontalStaff) {
+                t.draw(canvas, width, height)
             }
             canvas.drawPath(currentPath, strokePaint)
         }

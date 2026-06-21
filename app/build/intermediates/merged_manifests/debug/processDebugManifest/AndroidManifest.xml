@@ -62,6 +62,21 @@
             android:name="com.parnasse.miroir.MiroirService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- ═══ IME — Portail d'écriture manuscrite universel ═══ -->
+        <service
+            android:name="com.parnasse.miroir.MiroirIME"
+            android:exported="true"
+            android:label="Miroir manuscrit"
+            android:permission="android.permission.BIND_INPUT_METHOD" >
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
         <service
             android:name="com.google.mlkit.common.internal.MlKitComponentDiscoveryService"
             android:directBootAware="true"

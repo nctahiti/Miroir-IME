@@ -17,8 +17,8 @@ sealed class Template {
     /** Peinture pour les lignes de guide */
     companion object {
         val GUIDE_PAINT = Paint().apply {
-            color = Color.argb(80, 180, 180, 180) // gris discret
-            strokeWidth = 1f
+            color = Color.argb(160, 100, 100, 100) // gris soutenu, visible e-ink
+            strokeWidth = 1.5f
             style = Paint.Style.STROKE
             isAntiAlias = true
         }
