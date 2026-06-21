@@ -49,27 +49,44 @@ class GroupManager(
         val strokeBounds = BlobAbsorber.computeBounds(stroke)
         if (strokeBounds.isEmpty) return
 
-        // Simplifie : seul le groupe SELECTED peut absorber
-        // L'intention est spatiale — stylet dans le blob → ajout, sinon → nouvelle session
+        // ═══ 1. Priorité au groupe SELECTED ═══
         val selected = machine.pendingGroupId?.let { groups[it] }
-        // Fast-reject rectangulaire : le stroke est-il dans la zone du groupe SELECTED ?
         val nearSelected = selected != null && selected.state == GroupState.SELECTED && run {
             val expanded = RectF(selected.bounds)
             expanded.inset(-params.spatialDistancePx, -params.spatialDistanceY)
             RectF.intersects(expanded, strokeBounds)
         }
         Log.i(TAG, "onStrokeSealed: pendingGroupId=${machine.pendingGroupId}, selected=${selected?.id} state=${selected?.state} strokes=${selected?.strokeCount}, bounds=${selected?.bounds?.toShortString()}, fastReject=${if (selected != null) nearSelected else "N/A"}, params(rx=${params.spatialDistancePx}, ry=${params.spatialDistanceY})")
+        
         val group = if (nearSelected && isStrokeNearGroup(stroke, selected!!)) {
             Log.i(TAG, "Absorption SELECTED " + selected.id + " (stroke proche)")
             selected
         } else {
-            // Fermer l'ancien SELECTED avant d'ouvrir une nouvelle session
-            if (selected != null) {
-                machine.transition(selected, GroupState.STORED)
-                onGroupAutoDeselected?.invoke()
-                evictGroup(selected.id)
+            // ═══ 2. Blob contre TOUS les groupes LOADED (pas seulement SELECTED) ═══
+            var found: InkGroup? = null
+            for ((id, g) in groups) {
+                if (g.state != GroupState.LOADED) continue
+                if (g.id == selected?.id) continue  // déjà testé
+                val expanded = RectF(g.bounds)
+                expanded.inset(-params.spatialDistancePx, -params.spatialDistanceY)
+                if (RectF.intersects(expanded, strokeBounds) && isStrokeNearGroup(stroke, g)) {
+                    found = g
+                    Log.i(TAG, "Absorption LOADED " + g.id + " (stroke proche)")
+                    break
+                }
             }
-            getOrCreateActiveGroup()
+            if (found != null) {
+                // Absorbé par un groupe LOADED — le SELECTED reste SELECTED
+                found
+            } else {
+                // ═══ 3. Aucun blob ne touche → nouveau groupe ═══
+                if (selected != null) {
+                    machine.transition(selected, GroupState.STORED)
+                    onGroupAutoDeselected?.invoke()
+                    evictGroup(selected.id)
+                }
+                getOrCreateActiveGroup()
+            }
         }
 
         group.strokeIds.add(stroke.id)
