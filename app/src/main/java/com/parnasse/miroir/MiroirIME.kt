@@ -364,11 +364,13 @@ class MiroirIME : InputMethodService() {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // INFÉRENCE DIFFÉRÉE (attend 1.5s d'inactivité stylet)
+    // INFÉRENCE DIFFÉRÉE — flux asynchrone séquencé
     // ═══════════════════════════════════════════════════════════════════
 
-    /** Groupes en attente de reconnaissance. */
-    private val pendingGroups = mutableListOf<List<Int>>()
+    /** File d'attente FIFO de groupes à reconnaître. */
+    private val inferenceQueue = java.util.concurrent.ConcurrentLinkedQueue<List<Int>>()
+    /** true si une inférence est en cours (évite les chevauchements). */
+    private var isInferring = false
 
     /** Appelé à chaque stroke — enregistre l'activité stylet. */
     private fun markStylusActive() {
@@ -383,11 +385,9 @@ class MiroirIME : InputMethodService() {
         uiHandler.postDelayed({
             inactivityCheckScheduled = false
             val idle = System.currentTimeMillis() - lastStylusActivity
-            if (idle >= 1500 && pendingGroups.isNotEmpty()) {
-                // Assez d'inactivité → lancer les reconnaissances
-                flushPendingGroups()
-            } else if (pendingGroups.isNotEmpty()) {
-                // Pas encore assez d'inactivité → reprogrammer
+            if (idle >= 1500 && inferenceQueue.isNotEmpty()) {
+                startInferencePipeline()
+            } else if (inferenceQueue.isNotEmpty()) {
                 scheduleInactivityCheck()
             }
         }, 1500)
@@ -395,20 +395,33 @@ class MiroirIME : InputMethodService() {
 
     /** Ajoute un groupe à la file d'attente d'inférence. */
     private fun scheduleInferenceForGroup(indices: List<Int>) {
-        pendingGroups.add(indices)
+        inferenceQueue.add(indices)
         scheduleInactivityCheck()
     }
 
-    /** Vide la file d'attente : reconnaît tous les groupes en attente. */
-    private fun flushPendingGroups() {
-        if (pendingGroups.isEmpty()) return
-        val groups = pendingGroups.toList()
-        pendingGroups.clear()
-        Log.i(TAG, "Inférence différée: ${groups.size} groupe(s) après inactivité stylet")
-        for (indices in groups) {
-            inferExecutor.submit {
-                recognizeGroup(indices)
-            }
+    /** Démarre le pipeline d'inférence séquentielle (si pas déjà en cours). */
+    private fun startInferencePipeline() {
+        if (isInferring) return
+        if (inferenceQueue.isEmpty()) return
+        isInferring = true
+        Log.i(TAG, "Pipeline inférence: ${inferenceQueue.size} groupe(s) en file")
+        processNextInference()
+    }
+
+    /** Traite un groupe, puis enchaîne sur le suivant. */
+    private fun processNextInference() {
+        val indices = inferenceQueue.poll() ?: run {
+            // File vide → pipeline terminé
+            isInferring = false
+            Log.i(TAG, "Pipeline inférence: terminé")
+            return
+        }
+        inferExecutor.submit {
+            recognizeGroup(indices)
+            // Respiration entre deux inférences (évite de surcharger le modèle)
+            try { Thread.sleep(80) } catch (_: InterruptedException) {}
+            // Enchaîner sur le groupe suivant (sur le même thread background)
+            processNextInference()
         }
     }
 
