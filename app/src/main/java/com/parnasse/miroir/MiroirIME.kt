@@ -66,6 +66,7 @@ class MiroirIME : InputMethodService() {
         }
     }
     private var pendingRecognition = false
+    private var accumulatedText = ""  // texte déjà commité
 
     // ── Vue IME ────────────────────────────────────────────────────────
     private var imeView: CaptureSurfaceView? = null
@@ -134,9 +135,10 @@ class MiroirIME : InputMethodService() {
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         Log.i(TAG, "onStartInputView — champ: ${info?.fieldName ?: "inconnu"}")
+        // Nouveau champ : réinitialiser le texte accumulé
+        accumulatedText = ""
         clearCanvas()
     }
-
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
         if (finishingInput) {
@@ -350,18 +352,22 @@ class MiroirIME : InputMethodService() {
         if (strokeRegistry.isEmpty()) return
 
         try {
-            // Copie défensive pour le thread background
             val strokesCopy = strokeRegistry.toList()
             val indices = strokesCopy.indices.toList()
             val result = recognizer.recognize(strokesCopy, indices)
             if (!result.isNullOrBlank()) {
-                Log.i(TAG, "Reconnaissance: \"$result\" (${strokesCopy.size} strokes)")
-                // Commit sur le thread UI
-                uiHandler.post {
-                    commitText(result)
-                    clearCanvas()
-                    strokeRegistry.clear()
+                Log.i(TAG, "Reconnaissance: \"$result\"")
+                // Commit seulement le texte nouveau (delta textuel)
+                val newText = result.removePrefix(accumulatedText).trim()
+                if (newText.isNotEmpty()) {
+                    uiHandler.post {
+                        commitText(newText)
+                        accumulatedText = if (accumulatedText.isEmpty()) result
+                            else "$accumulatedText $newText"
+                    }
                 }
+                // ⚠️ NE PAS effacer les strokes — ils restent visibles
+                // Les groupes se forment naturellement par accumulation
             }
         } catch (e: Exception) {
             Log.e(TAG, "Erreur reconnaissance: ${e.message}")
