@@ -112,25 +112,22 @@ class MiroirIME : InputMethodService() {
     private var cachedTemplateHeight: Int = -1
     private val cachedLabelPositions = mutableMapOf<Int, Pair<Float, Float>>()
 
-    // ═══ Throttled invalidate (comme CaptureView) ═══
-    private var lastInvalidate = 0L
-    private var pendingInvalidate = false
+    // ═══ Rafraîchissement EPD ciblé (remplace throttledInvalidate global) ═══
 
-    /** Invalide avec un throttle de 30ms minimum entre redraws. */
-    private fun throttledInvalidate() {
-        if (pendingInvalidate) return
-        val now = System.currentTimeMillis()
-        val elapsed = now - lastInvalidate
-        if (elapsed >= 30) {
-            lastInvalidate = now
-            imeView?.postInvalidate()
-        } else {
-            pendingInvalidate = true
-            uiHandler.postDelayed({
-                pendingInvalidate = false
-                lastInvalidate = System.currentTimeMillis()
-                imeView?.postInvalidate()
-            }, 30 - elapsed)
+    /** Rafraîchit une zone précise (EVITE le redraw complet). */
+    private fun refreshRect(left: Int, top: Int, right: Int, bottom: Int) {
+        imeView?.apply {
+            invalidate(left, top, right, bottom)
+            try { EpdController.handwritingRepaint(this, left, top, right, bottom) } catch (_: Exception) {}
+        }
+    }
+
+    /** Rafraîchit toute la surface (UNIQUEMENT pour changements globaux). */
+    private fun refreshAll() {
+        imeView?.apply {
+            // Rafraîchir d'abord en DU (rapide) puis planifier un GU pour nettoyer
+            invalidate()
+            try { EpdController.handwritingRepaint(this, 0, 0, width, height) } catch (_: Exception) {}
         }
     }
 
@@ -233,7 +230,7 @@ class MiroirIME : InputMethodService() {
 
         toolbar.addView(makeButton("👁") {
             showOverlays = !showOverlays
-            throttledInvalidate()
+            refreshAll()
         })
 
         root.addView(toolbar)  // barre EN HAUT
@@ -287,7 +284,7 @@ class MiroirIME : InputMethodService() {
                 canvas.drawPath(path, strokePaint.apply { style = Paint.Style.STROKE })
             }
         }
-        throttledInvalidate()
+        refreshAll()
         // Invalider les caches pour refléter les groupes chargés
         cachedGMCacheSize = -1
         updateBlobCache()
@@ -469,7 +466,15 @@ class MiroirIME : InputMethodService() {
         if (gm.selectGroup(g.id)) {
             selectedGroupId = g.id
             updateBlobCache()
-            throttledInvalidate()
+            // Rafraichir uniquement la zone du blob
+            val oval = cachedBlobOvals.firstOrNull()
+            if (oval != null) {
+                val (cx, cy, r) = oval
+                val pad = 10
+                refreshRect(
+                    (cx - r - pad).toInt(), (cy - r - pad).toInt(),
+                    (cx + r + pad).toInt(), (cy + r + pad).toInt())
+            } else { refreshAll() }
             Log.i(TAG, "Survol long — groupe ${g.id} SELECTED")
         }
     }
@@ -588,23 +593,18 @@ class MiroirIME : InputMethodService() {
         // Armer le timer d'inférence pour les groupes modifiés
         scheduleGroupInference()
 
-        // ═══ EPD : rafraîchir uniquement la zone modifiée ═══
-        val sr = stroke
-        if (sr.points.size >= 2) {
+        // ═══ Rafraîchir uniquement la zone du stroke ═══
+        if (stroke.points.size >= 2) {
             var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
             var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
-            for ((x, y) in sr.points) {
+            for ((x, y) in stroke.points) {
                 if (x < minX) minX = x; if (x > maxX) maxX = x
                 if (y < minY) minY = y; if (y > maxY) maxY = y
             }
-            try {
-                EpdController.handwritingRepaint(imeView!!,
-                    (minX - 10).toInt(), (minY - 10).toInt(),
-                    (maxX + 10).toInt(), (maxY + 10).toInt())
-            } catch (_: Exception) {}
+            refreshRect(
+                (minX - 10).toInt(), (minY - 10).toInt(),
+                (maxX + 10).toInt(), (maxY + 10).toInt())
         }
-
-        throttledInvalidate()
     }
 
     /** Convertit un StrokeRecord en InkStroke (format GroupManager) */
@@ -765,7 +765,7 @@ class MiroirIME : InputMethodService() {
                     groupLabels[firstIdx] = result
                     cachedGMCacheSize = -1  // invalider cache spatial
                     commitText(result)
-                    throttledInvalidate()
+                    refreshAll()  // le label change → besoin du redraw complet (template+labels)
                 }
             }
         } catch (e: Exception) {
@@ -826,7 +826,7 @@ class MiroirIME : InputMethodService() {
         bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         currentPath.reset()
         currentStroke = null
-        throttledInvalidate()
+        refreshAll()
     }
 
     /** Dessine les labels de groupe à leur position d'interligne */
