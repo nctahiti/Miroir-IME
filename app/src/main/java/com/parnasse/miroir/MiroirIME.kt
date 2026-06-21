@@ -657,23 +657,10 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
 
     private var lastPointRefresh = 0L
+    private var isStylusDown = false
 
     private fun onStylusDown(x: Float, y: Float) {
-        // ═══ Trouver le groupe qui va absorber (via bounds spatiales) et annuler son timer ═══
-        val gm = groupManager
-        if (gm != null) {
-            val groups = getSpatialGroups()
-            val bounds = getSpatialBounds()
-            for ((gi, g) in groups.withIndex()) {
-                val r = bounds.getOrNull(gi) ?: continue
-                if (r.left < Float.MAX_VALUE && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
-                    val firstIdx = g.firstOrNull() ?: continue
-                    groupTimers.remove(firstIdx)?.cancel(false)
-                    Log.d(TAG, "⬇️ Pen-down → timer annulé firstIdx=$firstIdx (bounds spatiales)")
-                    break
-                }
-            }
-        }
+        isStylusDown = true
         currentPath.reset()
         currentPath.moveTo(x, y)
         currentStroke = StrokeRecord(
@@ -703,6 +690,7 @@ class MiroirIME : InputMethodService() {
     }
 
     private fun onStylusUp() {
+        isStylusDown = false
         val stroke = currentStroke
         currentStroke = null
         if (stroke == null || stroke.points.isEmpty()) return
@@ -834,8 +822,13 @@ class MiroirIME : InputMethodService() {
         }
     }
 
-    /** Appelé par le timer — vérifie que le groupe n'a pas changé depuis l'armement. */
+    /** Appelé par le timer — vérifie que le stylet n'est pas en train d'écrire. */
     private fun armGroupInference(firstIdx: Int) {
+        // ═══ Ne pas inférer si le stylet est encore posé (écriture en cours) ═══
+        if (isStylusDown) {
+            Log.d(TAG, "⏭️ Timer ignoré firstIdx=$firstIdx — stylet encore posé")
+            return
+        }
         // ═══ Garde-fou : groupe modifié depuis l'armement du timer → ignorer ═══
         val armedAt = timerArmedAt[firstIdx] ?: return
         val lastMod = groupLastModifiedMs[firstIdx] ?: return
