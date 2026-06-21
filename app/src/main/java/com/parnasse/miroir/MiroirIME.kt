@@ -124,7 +124,8 @@ class MiroirIME : InputMethodService() {
         timerArmedAt.clear()
         timerArmedStrokeCount.clear()
         cachedGMCacheSize = -1
-        cachedBlobOvals.clear()
+        cachedBlobPath.reset()
+        cachedBlobBounds = null
         cachedSpatialGroups = null
         cachedSpatialBounds = null
     }
@@ -242,9 +243,10 @@ class MiroirIME : InputMethodService() {
     }
 
     // ── Cache performance ──────────────────────────────────────────────
-    // Évite de recalculer le blob/partition à chaque frame onDraw()
+    // Blob: enveloppe convexe du groupe, expansée (plus léger que N ovales)
     private var cachedBlobGroupId: String? = null
-    private val cachedBlobOvals = mutableListOf<Triple<Float, Float, Float>>()
+    private val cachedBlobPath = Path()  // chemin de l'enveloppe
+    private var cachedBlobBounds: android.graphics.RectF? = null  // pour refreshRect
     private var cachedBlobRx = 0f
     private var cachedBlobRy = 0f
     private var cachedTemplateLines: List<Float> = emptyList()
@@ -482,11 +484,9 @@ class MiroirIME : InputMethodService() {
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             if (showOverlays) {
-                // Blob depuis le cache (recalculé seulement si groupe changé)
-                for ((x, y, _) in cachedBlobOvals) {
-                    canvas.drawOval(
-                        x - cachedBlobRx, y - cachedBlobRy,
-                        x + cachedBlobRx, y + cachedBlobRy, blobPaint)
+                // Blob: enveloppe convexe (chemin pré-calculé)
+                if (!cachedBlobPath.isEmpty) {
+                    canvas.drawPath(cachedBlobPath, blobPaint)
                 }
             }
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
@@ -617,13 +617,12 @@ class MiroirIME : InputMethodService() {
             selectedGroupId = g.id
             updateBlobCache()
             // Rafraichir uniquement la zone du blob
-            val oval = cachedBlobOvals.firstOrNull()
-            if (oval != null) {
-                val (cx, cy, r) = oval
+            val bounds = cachedBlobBounds
+            if (bounds != null) {
                 val pad = 10
                 refreshRect(
-                    (cx - r - pad).toInt(), (cy - r - pad).toInt(),
-                    (cx + r + pad).toInt(), (cy + r + pad).toInt())
+                    bounds.left.toInt() - pad, bounds.top.toInt() - pad,
+                    bounds.right.toInt() + pad, bounds.bottom.toInt() + pad)
             } else { refreshAll() }
             Log.i(TAG, "Survol long — groupe ${g.id} SELECTED")
         }
@@ -948,13 +947,13 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
 
     /** 
-     * Met à jour le cache du blob (appelé après stroke/groupement, PAS dans onDraw).
-     * Parcourt les points du dernier groupe et pré-calcule les ovales.
+     * Calcule l'enveloppe convexe du groupe et crée le chemin blob.
+     * Appelé après stroke/groupement, PAS dans onDraw.
      */
     private fun updateBlobCache() {
-        cachedBlobOvals.clear()
+        cachedBlobPath.reset()
+        cachedBlobBounds = null
         val gm = groupManager ?: return
-        // Priorité: groupe SELECTED, sinon dernier groupe
         val selectedGroups = gm.groupsInState(GroupState.SELECTED)
         val group = if (selectedGroups.isNotEmpty()) selectedGroups.first()
                      else gm.allGroups().lastOrNull() ?: return
@@ -968,18 +967,67 @@ class MiroirIME : InputMethodService() {
         cachedBlobRy = ry
         cachedBlobGroupId = group.id
 
-        val sampleStep = ((rx + ry) / 10f).toInt().coerceIn(1, 6)
-        var pi = 0
+        // Collecter tous les points du groupe
+        val pts = mutableListOf<Pair<Float, Float>>()
         for (sid in group.strokeIds) {
             val idx = inkStrokeIdToRegistryIndex[sid] ?: continue
             val sr = strokeRegistry.getOrNull(idx) ?: continue
-            for ((x, y) in sr.points) {
-                if (pi % sampleStep == 0) {
-                    cachedBlobOvals.add(Triple(x, y, rx + ry))
-                }
-                pi++
-            }
+            for ((x, y) in sr.points) pts.add(Pair(x, y))
         }
+        if (pts.size < 3) return  // pas assez de points pour une enveloppe
+
+        // Convex hull (Andrew's monotone chain)
+        val sorted = pts.sortedWith(compareBy({ it.first }, { it.second }))
+        val hull = mutableListOf<Pair<Float, Float>>()
+        // Lower hull
+        for (p in sorted) {
+            while (hull.size >= 2) {
+                val a = hull[hull.size - 2]; val b = hull.last()
+                if ((b.first - a.first) * (p.second - a.second) - (b.second - a.second) * (p.first - a.first) <= 0)
+                    hull.removeAt(hull.size - 1) else break
+            }
+            hull.add(p)
+        }
+        // Upper hull
+        val lowerSize = hull.size
+        for (i in sorted.size - 2 downTo 0) {
+            val p = sorted[i]
+            while (hull.size > lowerSize) {
+                val a = hull[hull.size - 2]; val b = hull.last()
+                if ((b.first - a.first) * (p.second - a.second) - (b.second - a.second) * (p.first - a.first) <= 0)
+                    hull.removeAt(hull.size - 1) else break
+            }
+            hull.add(p)
+        }
+        hull.removeAt(hull.size - 1)  // dernier = premier
+        if (hull.size < 3) return
+
+        // Centroid
+        var cx = 0f; var cy = 0f
+        for ((hx, hy) in hull) { cx += hx; cy += hy }
+        cx /= hull.size; cy /= hull.size
+
+        // Expansion : pousser chaque sommet vers l'extérieur
+        val expand = (rx + ry) / 2f
+        val expanded = hull.map { (hx, hy) ->
+            val dx = hx - cx; val dy = hy - cy
+            val dist = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+            if (dist < 1f) Pair(hx, hy)
+            else Pair(hx + dx / dist * expand, hy + dy / dist * expand)
+        }
+
+        // Créer le chemin
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
+        var maxX = Float.MIN_VALUE; var maxY = Float.MIN_VALUE
+        cachedBlobPath.moveTo(expanded[0].first, expanded[0].second)
+        for (i in 1 until expanded.size) {
+            val (ex, ey) = expanded[i]
+            cachedBlobPath.lineTo(ex, ey)
+            if (ex < minX) minX = ex; if (ex > maxX) maxX = ex
+            if (ey < minY) minY = ey; if (ey > maxY) maxY = ey
+        }
+        cachedBlobPath.close()
+        cachedBlobBounds = android.graphics.RectF(minX, minY, maxX, maxY)
     }
 
     private fun clearCanvas() {
