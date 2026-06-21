@@ -274,6 +274,15 @@ class GroupManager(
     }
 
     fun allGroups(): List<InkGroup> = groups.values.toList()
+    
+    /** Tous les groupes (cache + persistance). Pour getSpatialGroupsFromGM. */
+    fun allGroupsFull(): List<InkGroup> {
+        val cached = groups.values.toList()
+        val cachedIds = cached.map { it.id }.toSet()
+        val persisted = persistence?.readAllGroups()?.filter { it.id !in cachedIds } ?: emptyList()
+        return cached + persisted
+    }
+    
     fun groupsInState(state: GroupState): List<InkGroup> = groups.values.filter { it.state == state }
     fun cacheSize(): Int = groups.size
 

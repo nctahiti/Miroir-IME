@@ -692,15 +692,16 @@ class CaptureView(context: Context) : View(context) {
     // ── Cache spatial (évite de recalculer computeWordGroups à chaque frame) ──
     private var cachedSpatialGroups: List<List<Int>>? = null
     private var cachedSpatialBounds: List<android.graphics.RectF>? = null
-    private var cachedStrokeRegistrySize: Int = -1
+    private var cachedGMCacheSize: Int = -1
     // Groupes chargés depuis .groups — si non-null, computeWordGroups() les restitue
     // sans recalcul spatial. null = mode écriture live (blob 2D normal).
     private var seedGroups: List<List<Int>>? = null
 
-    /** Retourne les groupes spatiaux avec cache, unifié (spatial + absorption SELECTED). */
+    /** Retourne les groupes spatiaux depuis GroupManager (source unique), avec cache. */
     internal fun getSpatialGroups(): List<List<Int>> {
-        if (cachedStrokeRegistrySize != strokeRegistry.size) {
-            val groups = computeWordGroups()
+        val fullSize = groupManager.allGroupsFull().size
+        if (cachedGMCacheSize != fullSize) {
+            val groups = getSpatialGroupsFromGM()
             cachedSpatialGroups = groups
             cachedSpatialBounds = groups.map { group ->
                 val r = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
@@ -713,17 +714,17 @@ class CaptureView(context: Context) : View(context) {
                 }
                 r
             }
-            cachedStrokeRegistrySize = strokeRegistry.size
+            cachedGMCacheSize = fullSize
         }
         return cachedSpatialGroups!!
     }
 
     /** [PHASE 0] Groupes spatiaux depuis GroupManager (source unique).
      *  Convertit les groupes GroupManager (inkStrokeIds) → indices strokeRegistry.
-     *  Pas encore branché — cohabite avec getSpatialGroups() pour validation. */
+     *  Lit TOUS les groupes (cache + persistance). */
     internal fun getSpatialGroupsFromGM(): List<List<Int>> {
-        val gmGroups = groupManager.allGroups()
-        return gmGroups.mapNotNull { group ->
+        val allGmGroups = groupManager.allGroupsFull()  // cache + persistance
+        return allGmGroups.mapNotNull { group ->
             val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
             if (indices.isEmpty()) null else indices
         }
@@ -737,7 +738,7 @@ class CaptureView(context: Context) : View(context) {
 
     /** Invalide le cache spatial — force un recalcul au prochain getSpatialGroups(). */
     private fun invalidateSpatialCache() {
-        cachedStrokeRegistrySize = -1
+        cachedGMCacheSize = -1
         cachedSpatialGroups = null
         cachedSpatialBounds = null
     }
