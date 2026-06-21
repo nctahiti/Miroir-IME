@@ -91,6 +91,17 @@ class MiroirIME : InputMethodService() {
         style = Paint.Style.FILL
     }
 
+    // ── Cache performance ──────────────────────────────────────────────
+    // Évite de recalculer le blob/partition à chaque frame onDraw()
+    private var cachedBlobGroupId: String? = null
+    private val cachedBlobOvals = mutableListOf<Triple<Float, Float, Float>>()  // x, y, rx+ry (pour invalidation)
+    private var cachedBlobRx = 0f
+    private var cachedBlobRy = 0f
+    private var cachedTemplateLines: List<Float> = emptyList()
+    private var cachedTemplateHeight: Int = -1
+    // Cache positions labels (firstIdx -> Pair<x, y>)
+    private val cachedLabelPositions = mutableMapOf<Int, Pair<Float, Float>>()
+
     // ── Template (partition) ───────────────────────────────────────────
     // L'espacement est calculé dynamiquement selon la hauteur du canvas
     // pour garantir ~4-6 lignes visibles quelle que soit la densité d'écran.
@@ -103,6 +114,12 @@ class MiroirIME : InputMethodService() {
         val targetLines = 5f
         val spacing = (canvasHeight / targetLines).coerceIn(60f, 200f)
         template = Template.HorizontalStaff(spacingPx = spacing)
+        // Pré-calculer les positions (cache)
+        val t = template
+        if (t is Template.HorizontalStaff) {
+            cachedTemplateLines = t.linePositions(canvasHeight)
+        }
+        cachedTemplateHeight = canvasHeight
         Log.d(TAG, "Template: ${spacing.toInt()}px entre lignes (hauteur=$canvasHeight)")
     }
 
@@ -250,17 +267,20 @@ class MiroirIME : InputMethodService() {
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             if (showOverlays) {
-                // ⚠️ Blob DERRIÈRE les strokes (dessiné avant le bitmap)
-                drawActiveGroupBlob(canvas)
+                // Blob depuis le cache (recalculé seulement si groupe changé)
+                for ((x, y, _) in cachedBlobOvals) {
+                    canvas.drawOval(
+                        x - cachedBlobRx, y - cachedBlobRy,
+                        x + cachedBlobRx, y + cachedBlobRy, blobPaint)
+                }
             }
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             if (showOverlays) {
-                // Dessiner la partition (template delta)
-                val t = template
-                if (t is Template.HorizontalStaff) {
-                    t.draw(canvas, width, height)
+                // Lignes de partition depuis le cache
+                for (y in cachedTemplateLines) {
+                    canvas.drawLine(0f, y, width.toFloat(), y, Template.GUIDE_PAINT)
                 }
-                // Dessiner les labels de groupe
+                // Labels de groupe
                 drawGroupLabels(canvas)
             }
             canvas.drawPath(currentPath, strokePaint)
@@ -402,6 +422,9 @@ class MiroirIME : InputMethodService() {
         val inkStroke = strokeRecordToInkStroke(stroke, inkId)
         groupManager?.onStrokeSealed(inkStroke)
 
+        // Mettre à jour le cache du blob (nouveau stroke → groupe changé)
+        updateBlobCache()
+
         imeView?.invalidate()
     }
 
@@ -531,16 +554,13 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
 
     /** 
-     * Blob elliptique point par point — comme dans le Miroir V4.
-     * Chaque point du groupe = centre d'une ellipse (rx, ry).
-     * L'union des ellipses = le blob. rx, ry = valeurs calibrées.
-     * Dessiné AVANT le bitmap (derrière les strokes).
+     * Met à jour le cache du blob (appelé après stroke/groupement, PAS dans onDraw).
+     * Parcourt les points du dernier groupe et pré-calcule les ovales.
      */
-    private fun drawActiveGroupBlob(canvas: Canvas) {
+    private fun updateBlobCache() {
+        cachedBlobOvals.clear()
         val gm = groupManager ?: return
         val groups = gm.allGroups()
-        if (groups.isEmpty()) return
-        // Dernier groupe = le plus récent (actif)
         val group = groups.lastOrNull() ?: return
         if (group.strokeIds.isEmpty()) return
 
@@ -548,18 +568,18 @@ class MiroirIME : InputMethodService() {
         val ry = gm.params.spatialDistanceY
         if (rx <= 0f && ry <= 0f) return
 
-        // Échantillonnage : un point sur N (performance)
+        cachedBlobRx = rx
+        cachedBlobRy = ry
+        cachedBlobGroupId = group.id
+
         val sampleStep = ((rx + ry) / 10f).toInt().coerceIn(1, 6)
-
-        val paint = blobPaint  // déjà configuré (gris semi-transparent)
-
         var pi = 0
         for (sid in group.strokeIds) {
             val idx = inkStrokeIdToRegistryIndex[sid] ?: continue
             val sr = strokeRegistry.getOrNull(idx) ?: continue
             for ((x, y) in sr.points) {
                 if (pi % sampleStep == 0) {
-                    canvas.drawOval(x - rx, y - ry, x + rx, y + ry, paint)
+                    cachedBlobOvals.add(Triple(x, y, rx + ry))
                 }
                 pi++
             }
@@ -577,14 +597,17 @@ class MiroirIME : InputMethodService() {
     private fun drawGroupLabels(canvas: Canvas) {
         if (groupLabels.isEmpty()) return
         for ((firstIdx, label) in groupLabels) {
-            val sr = strokeRegistry.getOrNull(firstIdx) ?: continue
-            if (sr.points.isEmpty()) continue
-            // Centre Y du stroke + 30px
-            var sumY = 0f
-            for (pt in sr.points) sumY += pt.second
-            val centerY = sumY / sr.points.size
-            val x = sr.points.first().first
-            canvas.drawText(label, x, centerY + 30f, labelPaint)
+            // Utiliser la position cachée, ou la calculer une fois
+            val pos = cachedLabelPositions.getOrPut(firstIdx) {
+                val sr = strokeRegistry.getOrNull(firstIdx) ?: return@getOrPut Pair(0f, 0f)
+                if (sr.points.isEmpty()) return@getOrPut Pair(0f, 0f)
+                var sumY = 0f
+                for (pt in sr.points) sumY += pt.second
+                val centerY = sumY / sr.points.size
+                Pair(sr.points.first().first, centerY + 30f)
+            }
+            if (pos.first == 0f && pos.second == 0f) continue
+            canvas.drawText(label, pos.first, pos.second, labelPaint)
         }
     }
 }
