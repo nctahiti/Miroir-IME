@@ -130,6 +130,7 @@ class MiroirIME : InputMethodService() {
         groupBlobs.clear()
         activeBlobGroupId = null
         cachedSpatialBounds = null
+        resetSyncedNote()
     }
 
     /** Sauvegarde la page active sur disque (bitmap + strokes + labels). */
@@ -958,9 +959,13 @@ class MiroirIME : InputMethodService() {
         Log.i(TAG, "Texte injecté (composing): \"$text\"")
     }
 
-    /** Injecte tous les labels dans l'ordre de lecture (tri spatial). */
+    // ── Note synchronisée ─────────────────────────────────────────────
+    private var syncedNoteText: String = ""  // copie de ce qui est dans le champ texte
+
+    /** Injecte tous les labels dans l'ordre de lecture. Ne transmet que si changé. */
     private fun injectReadingOrder() {
-        val ic = currentInputConnection ?: return
+        val ic = currentInputConnection
+        if (ic == null) { Log.w(TAG, "injectReadingOrder: pas d'InputConnection"); return }
         if (groupLabels.isEmpty()) return
         // Collecter (ligne, x, texte) pour chaque label
         data class Word(val line: Float, val x: Float, val text: String)
@@ -982,7 +987,21 @@ class MiroirIME : InputMethodService() {
             }
             sb.append(w.text).append(" ")
         }
-        ic.setComposingText(sb.toString(), 1)
+        val newText = sb.toString()
+        // ═══ Ne transmettre que si le texte a changé ═══
+        if (newText == syncedNoteText) {
+            Log.d(TAG, "injectReadingOrder: texte inchangé, skip")
+            return
+        }
+        syncedNoteText = newText
+        ic.finishComposingText()
+        ic.commitText(newText, 1)
+        Log.i(TAG, "injectReadingOrder: transmit \"$newText\"")
+    }
+
+    /** Réinitialise la copie synchronisée (après clearPage ou ✕). */
+    private fun resetSyncedNote() {
+        syncedNoteText = ""
     }
 
     // ═══════════════════════════════════════════════════════════════════
