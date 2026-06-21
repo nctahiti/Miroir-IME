@@ -1032,8 +1032,11 @@ class MiroirIME : InputMethodService() {
             return
         }
         syncedNoteText = newText
-        ic.finishComposingText()
-        ic.commitText(newText, 1)
+        // ═══ Remplacer tout le bloc : setComposingText écrase le texte en composition ═══
+        // On ne commit JAMAIS (pas de commitText, pas de finishComposingText).
+        // Le texte reste en composition → chaque nouvelle inférence le remplace entièrement.
+        // Ainsi, pas d'accumulation, pas d'artefacts. Une seule version, toujours fraîche.
+        ic.setComposingText(newText, 1)
         Log.i(TAG, "injectReadingOrder: transmit \"$newText\" (${words.size} mots, ${groupLabels.size} labels, ${words.size - groupLabels.size} placeholders)")
     }
 
