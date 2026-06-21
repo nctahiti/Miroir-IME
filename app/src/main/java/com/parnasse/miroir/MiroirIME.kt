@@ -661,16 +661,9 @@ class MiroirIME : InputMethodService() {
                 continue
             }
 
-            // ═══ Ne pas réarmer si le groupe a déjà un timer actif ═══
-            // Le timer court jusqu'au bout — les corrections ne le reset pas.
-            // Seul un nouveau groupe ou un groupe ré-ouvert après inférence démarre un timer.
-            if (groupTimers.containsKey(firstIdx)) {
-                // Mettre à jour le stroke count attendu sans reset le timer
-                timerArmedStrokeCount[firstIdx] = strokeCount
-                continue
-            }
-
-            // Armer le timer
+            // ═══ Réarmer : chaque nouveau trait dans le groupe reset le compte à rebours ═══
+            // Le timer ne tire qu'après inferDelay d'inactivité DANS CE GROUPE.
+            groupTimers.remove(firstIdx)?.cancel(false)
             timerArmedAt[firstIdx] = now
             timerArmedStrokeCount[firstIdx] = strokeCount
             val timer = inferExecutor.schedule({
