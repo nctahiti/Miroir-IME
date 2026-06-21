@@ -94,13 +94,34 @@ class MiroirIME : InputMethodService() {
     // ── Cache performance ──────────────────────────────────────────────
     // Évite de recalculer le blob/partition à chaque frame onDraw()
     private var cachedBlobGroupId: String? = null
-    private val cachedBlobOvals = mutableListOf<Triple<Float, Float, Float>>()  // x, y, rx+ry (pour invalidation)
+    private val cachedBlobOvals = mutableListOf<Triple<Float, Float, Float>>()
     private var cachedBlobRx = 0f
     private var cachedBlobRy = 0f
     private var cachedTemplateLines: List<Float> = emptyList()
     private var cachedTemplateHeight: Int = -1
-    // Cache positions labels (firstIdx -> Pair<x, y>)
     private val cachedLabelPositions = mutableMapOf<Int, Pair<Float, Float>>()
+
+    // ═══ Throttled invalidate (comme CaptureView) ═══
+    private var lastInvalidate = 0L
+    private var pendingInvalidate = false
+
+    /** Invalide avec un throttle de 30ms minimum entre redraws. */
+    private fun throttledInvalidate() {
+        if (pendingInvalidate) return
+        val now = System.currentTimeMillis()
+        val elapsed = now - lastInvalidate
+        if (elapsed >= 30) {
+            lastInvalidate = now
+            imeView?.invalidate()
+        } else {
+            pendingInvalidate = true
+            uiHandler.postDelayed({
+                pendingInvalidate = false
+                lastInvalidate = System.currentTimeMillis()
+                imeView?.invalidate()
+            }, 30 - elapsed)
+        }
+    }
 
     // ── Template (partition) ───────────────────────────────────────────
     // L'espacement est calculé dynamiquement selon la hauteur du canvas
@@ -203,7 +224,7 @@ class MiroirIME : InputMethodService() {
 
         toolbar.addView(makeButton("👁") {
             showOverlays = !showOverlays
-            imeView?.invalidate()
+            throttledInvalidate()
         })
 
         root.addView(toolbar)  // barre EN HAUT
@@ -382,7 +403,7 @@ class MiroirIME : InputMethodService() {
             stroke.timestamps.add(System.currentTimeMillis())
             stroke.pressures.add(1.0f)
         }
-        imeView?.invalidate()
+        throttledInvalidate()
     }
 
     private fun onStylusPoint(x: Float, y: Float, pressure: Float) {
@@ -392,7 +413,7 @@ class MiroirIME : InputMethodService() {
             stroke.timestamps.add(System.currentTimeMillis())
             stroke.pressures.add(pressure.coerceIn(0f, 1f))
         }
-        imeView?.invalidate()
+        throttledInvalidate()
     }
 
     private fun onStylusUp() {
@@ -425,7 +446,7 @@ class MiroirIME : InputMethodService() {
         // Mettre à jour le cache du blob
         updateBlobCache()
 
-        imeView?.invalidate()
+        throttledInvalidate()
     }
 
     /** Convertit un StrokeRecord en InkStroke (format GroupManager) */
@@ -531,7 +552,7 @@ class MiroirIME : InputMethodService() {
                     val firstIdx = indices.firstOrNull() ?: return@post
                     groupLabels[firstIdx] = result
                     commitText(result)
-                    imeView?.invalidate()
+                    throttledInvalidate()
                 }
             }
         } catch (e: Exception) {
@@ -590,7 +611,7 @@ class MiroirIME : InputMethodService() {
         bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         currentPath.reset()
         currentStroke = null
-        imeView?.invalidate()
+        throttledInvalidate()
     }
 
     /** Dessine les labels de groupe sous leur emplacement spatial */
