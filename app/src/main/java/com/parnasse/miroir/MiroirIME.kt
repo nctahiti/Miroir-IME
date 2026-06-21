@@ -278,7 +278,8 @@ class MiroirIME : InputMethodService() {
     /** Rafraîchit une zone précise (EVITE le redraw complet). */
     private fun refreshRect(left: Int, top: Int, right: Int, bottom: Int) {
         imeView?.apply {
-            invalidate(android.graphics.Rect(left, top, right, bottom))
+            // postInvalidate: non-bloquant, fiable en mode DU, pas déprécié
+            postInvalidate(left, top, right, bottom)
             try { EpdController.handwritingRepaint(this, left, top, right, bottom) } catch (_: Exception) {}
         }
     }
@@ -286,8 +287,7 @@ class MiroirIME : InputMethodService() {
     /** Rafraîchit toute la surface (UNIQUEMENT pour changements globaux). */
     private fun refreshAll() {
         imeView?.apply {
-            // Rafraîchir d'abord en DU (rapide) puis planifier un GU pour nettoyer
-            invalidate()
+            postInvalidate()  // non-bloquant, fiable en mode DU
             try { EpdController.handwritingRepaint(this, 0, 0, width, height) } catch (_: Exception) {}
         }
     }
@@ -958,7 +958,24 @@ class MiroirIME : InputMethodService() {
                     // ═══ Injection en ordre de lecture (tri spatial) ═══
                     injectReadingOrder()
                     Log.i(TAG, "Texte injecté: \"$result\"")
-                    refreshAll()
+                    // ═══ Rafraîchissement LOCALISÉ sur la zone du label ═══
+                    // Pas de refreshAll() — on rafraîchit UNIQUEMENT le label qui vient de naître.
+                    // Le mode DU (16ms) n'a besoin que de savoir quels pixels ont changé.
+                    val anchor = groupAnchor[firstIdx]
+                    if (anchor != null) {
+                        val labelY = snapToLine(anchor.second) + labelPaint.textSize + 2f
+                        // Rectangle englobant le texte (estimation : 40px par caractère)
+                        val labelW = (result.length * 32f).toInt().coerceAtLeast(80)
+                        val pad = 10
+                        refreshRect(
+                            (anchor.first - 30f).toInt() - pad,
+                            (labelY - labelPaint.textSize).toInt() - pad,
+                            (anchor.first - 30f + labelW).toInt() + pad,
+                            (labelY + pad).toInt() + pad
+                        )
+                    } else {
+                        refreshAll()  // fallback si pas d'ancre
+                    }
                 }
             }
         } catch (e: Exception) {
