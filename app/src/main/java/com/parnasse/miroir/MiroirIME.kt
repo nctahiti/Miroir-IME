@@ -85,6 +85,11 @@ class MiroirIME : InputMethodService() {
     // ── Barre d'outils ─────────────────────────────────────────────────
     private var showOverlays = true  // 👁 toggle
 
+    // ── Survol (sélection de groupe) ───────────────────────────────────
+    private var hoverStartMs = 0L
+    private var hoverFirstStrokeIdx: Int = -1
+    private var selectedGroupId: String? = null
+
     // ── Blob ───────────────────────────────────────────────────────────
     private val blobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFA0A0A0.toInt()  // gris opaque, visible e-ink
@@ -197,9 +202,10 @@ class MiroirIME : InputMethodService() {
         fun makeButton(label: String, onClick: () -> Unit): android.widget.Button {
             return android.widget.Button(this).apply {
                 text = label
-                textSize = 12f
+                textSize = 22f  // ×5 par rapport à 12f
                 setTextColor(Color.DKGRAY)
                 setBackgroundColor(Color.TRANSPARENT)
+                setPadding((16 * density).toInt(), (12 * density).toInt(), (16 * density).toInt(), (12 * density).toInt())
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
                 setOnClickListener { onClick() }
@@ -307,10 +313,15 @@ class MiroirIME : InputMethodService() {
         override fun onTouchEvent(event: MotionEvent): Boolean {
             // ═══ Capturer UNIQUEMENT le stylet — ignorer les doigts ═══
             if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) {
-                return false  // laisser passer les événements doigt
+                return false
             }
             when (event.actionMasked) {
+                MotionEvent.ACTION_HOVER_MOVE -> {
+                    checkLongHover(event.x, event.y)
+                }
                 MotionEvent.ACTION_DOWN -> {
+                    // Reset survol au contact stylet
+                    hoverStartMs = 0L; hoverFirstStrokeIdx = -1
                     onStylusDown(event.x, event.y)
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -330,6 +341,47 @@ class MiroirIME : InputMethodService() {
             }
             return true
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // SURVOL LONG — sélection de groupe (comme Miroir V4)
+    // ═══════════════════════════════════════════════════════════════════
+
+    private fun checkLongHover(x: Float, y: Float) {
+        var closestIdx = -1
+        var closestDist = Float.MAX_VALUE
+        for (i in strokeRegistry.indices) {
+            val sr = strokeRegistry[i]
+            for ((px, py) in sr.points) {
+                val dx = x - px; val dy = y - py
+                val dist = dx * dx + dy * dy
+                if (dist < closestDist) { closestDist = dist; closestIdx = i }
+            }
+        }
+        if (closestIdx < 0 || closestDist > 2500f) { hoverStartMs = 0L; hoverFirstStrokeIdx = -1; return }
+        if (closestIdx == hoverFirstStrokeIdx) {
+            if (hoverStartMs > 0 && System.currentTimeMillis() - hoverStartMs > 1000L) {
+                selectGroupContaining(closestIdx)
+                hoverStartMs = 0L
+            }
+        } else {
+            hoverFirstStrokeIdx = closestIdx
+            hoverStartMs = System.currentTimeMillis()
+        }
+    }
+
+    private fun selectGroupContaining(strokeIdx: Int) {
+        val gm = groupManager ?: return
+        val strokeId = inkStrokeIdToRegistryIndex.entries
+            .firstOrNull { it.value == strokeIdx }?.key ?: return
+        val group = gm.findGroupByStroke(strokeId) ?: return
+        if (group.id == selectedGroupId) return
+        selectedGroupId?.let { gm.deselectGroup(it) }
+        selectedGroupId = group.id
+        gm.selectGroup(group.id)
+        updateBlobCache()
+        throttledInvalidate()
+        Log.i(TAG, "Groupe sélectionné: ${group.id}")
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -581,8 +633,10 @@ class MiroirIME : InputMethodService() {
     private fun updateBlobCache() {
         cachedBlobOvals.clear()
         val gm = groupManager ?: return
-        val groups = gm.allGroups()
-        val group = groups.lastOrNull() ?: return
+        // Priorité: groupe SELECTED, sinon dernier groupe
+        val selectedGroups = gm.groupsInState(GroupState.SELECTED)
+        val group = if (selectedGroups.isNotEmpty()) selectedGroups.first()
+                     else gm.allGroups().lastOrNull() ?: return
         if (group.strokeIds.isEmpty()) return
 
         val rx = gm.params.spatialDistancePx
