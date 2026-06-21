@@ -81,15 +81,56 @@ class MiroirIME : InputMethodService() {
     // ── Barre d'outils ─────────────────────────────────────────────────
     private var showOverlays = true  // 👁 toggle
 
-    // ── Survol (sélection de groupe) — importé de CaptureView ──────────
-    private var hoverX = 0f
-    private var hoverY = 0f
-    private var isHovering = false
-    private var hoverWordGroup: List<Int>? = null
-    private var hoverStrokeIndex: Int? = null
-    private var longHoverStartMs = 0L
-    private var longHoverFirstStroke: Int = -1
+    // ── Survol → Appui long (sélection par contact maintenu) ──────────
     private var selectedGroupId: String? = null
+    private var longPressTimer: java.util.concurrent.ScheduledFuture<*>? = null
+    private var longPressArmed = false
+    private var longPressX = 0f
+    private var longPressY = 0f
+
+    /** Déclenche la sélection par appui long (appelé par le timer). */
+    private fun fireLongPress() {
+        longPressArmed = false
+        val gm = groupManager ?: return
+        val groups = getSpatialGroups()
+        val bounds = getSpatialBounds()
+        val target = groups.withIndex().firstOrNull { (gi, group) ->
+            val r = bounds[gi]
+            val groupLine = snapToLine((r.top + r.bottom) / 2f)
+            r.left < Float.MAX_VALUE && longPressX >= r.left && longPressX <= r.right 
+                && Math.abs(longPressY - groupLine) < 50f
+        } ?: return
+        val firstStroke = target.value.firstOrNull() ?: return
+        val anyStrokeId = inkStrokeIdToRegistryIndex.entries
+            .firstOrNull { it.value == firstStroke }?.key ?: return
+        val g = gm.reactivateGroup(anyStrokeId) ?: return
+        selectedGroupId?.let { gm.deselectGroup(it) }
+        if (gm.selectGroup(g.id)) {
+            selectedGroupId = g.id
+            updateBlobCache()
+            val bnds = cachedBlobBounds
+            if (bnds != null) {
+                val pad = 10
+                refreshRect(bnds.left.toInt()-pad, bnds.top.toInt()-pad, bnds.right.toInt()+pad, bnds.bottom.toInt()+pad)
+            } else refreshAll()
+            Log.i(TAG, "Appui long — groupe ${g.id} SELECTED")
+        }
+    }
+
+    /** Arme le timer d'appui long. */
+    private fun armLongPress(x: Float, y: Float) {
+        cancelLongPress()
+        longPressX = x; longPressY = y
+        longPressArmed = true
+        val delay = CalibrationActivity.getLongHoverDelay(this)
+        longPressTimer = inferExecutor.schedule({ fireLongPress() }, delay, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
+    private fun cancelLongPress() {
+        longPressArmed = false
+        longPressTimer?.cancel(false)
+        longPressTimer = null
+    }
 
     // ── Cache spatial (comme CaptureView) ──────────────────────────────
     private var cachedSpatialGroups: List<List<Int>>? = null
@@ -503,29 +544,38 @@ class MiroirIME : InputMethodService() {
         override fun onTouchEvent(event: MotionEvent): Boolean {
             if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
             when (event.actionMasked) {
-                MotionEvent.ACTION_HOVER_MOVE -> {
-                    updateHover(event.x, event.y)
-                }
+                MotionEvent.ACTION_HOVER_MOVE -> { /* ignoré — IME ne reçoit pas ces événements */ }
                 MotionEvent.ACTION_DOWN -> {
-                    isHovering = false; longHoverStartMs = 0L; longHoverFirstStroke = -1
+                    // Armer l'appui long (sera annulé si l'utilisateur bouge)
+                    armLongPress(event.x, event.y)
                     onStylusDown(event.x, event.y)
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    // Si l'utilisateur bouge significativement → écriture, pas sélection
+                    if (longPressArmed) {
+                        val dx = event.x - longPressX; val dy = event.y - longPressY
+                        if (dx*dx + dy*dy > 100f) cancelLongPress()  // >10px
+                    }
                     val historySize = event.historySize
                     for (i in 0 until historySize) {
                         onStylusPoint(event.getHistoricalX(i), event.getHistoricalY(i), event.getHistoricalPressure(i))
                     }
                     onStylusPoint(event.x, event.y, event.pressure)
                 }
-                MotionEvent.ACTION_UP -> onStylusUp()
+                MotionEvent.ACTION_UP -> {
+                    cancelLongPress()
+                    onStylusUp()
+                }
             }
             return true
         }
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // SPATIAL + SURVOL — importé de CaptureView (même mécanisme que playground)
+    // SÉLECTION — appui long (remplace le survol, inopérant dans l'IME)
     // ═══════════════════════════════════════════════════════════════════
+
+    // (fireLongPress, armLongPress, cancelLongPress définis plus haut)
 
     /** Cale Y sur la ligne de portée la plus proche. */
     private fun snapToLine(y: Float): Float {
@@ -546,10 +596,8 @@ class MiroirIME : InputMethodService() {
         if (cachedGMCacheSize != fullSize) {
             val full = gm.allGroupsFull()
             cachedSpatialGroups = full.mapNotNull { group ->
-                group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
-                    .ifEmpty { null }
+                group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }.ifEmpty { null }
             }
-            // Calculer les bounds
             cachedSpatialBounds = cachedSpatialGroups!!.map { group ->
                 val r = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
                 for (idx in group) {
@@ -566,66 +614,9 @@ class MiroirIME : InputMethodService() {
         return cachedSpatialGroups ?: emptyList()
     }
 
-    /** Bounds précalculés des groupes spatiaux. */
     private fun getSpatialBounds(): List<android.graphics.RectF> {
-        getSpatialGroups()  // assure le cache
+        getSpatialGroups()
         return cachedSpatialBounds ?: emptyList()
-    }
-
-    /** Détection du groupe sous le stylet — identique à CaptureView. */
-    private fun updateHover(x: Float, y: Float) {
-        hoverX = x; hoverY = y
-        isHovering = true
-        val spatialGroups = getSpatialGroups()
-        val spatialBounds = getSpatialBounds()
-        val found = spatialGroups.withIndex().firstOrNull { (gi, group) ->
-            val r = spatialBounds[gi]
-            val groupLine = snapToLine((r.top + r.bottom) / 2f)
-            r.left < Float.MAX_VALUE && x >= r.left && x <= r.right && Math.abs(y - groupLine) < 50f
-        }
-        hoverWordGroup = found?.value
-        hoverStrokeIndex = found?.value?.firstOrNull()
-        // Survol long → sélection
-        checkLongHoverReactivation()
-    }
-
-    /** Survol long — sélectionne le groupe après le délai. Identique à CaptureView. */
-    private fun checkLongHoverReactivation() {
-        if (!isHovering) { longHoverStartMs = 0; longHoverFirstStroke = -1; return }
-        val targetIndices = hoverWordGroup ?: run {
-            longHoverStartMs = 0; longHoverFirstStroke = -1; return
-        }
-        val firstStroke = targetIndices.firstOrNull() ?: run {
-            longHoverStartMs = 0; longHoverFirstStroke = -1; return
-        }
-        if (firstStroke != longHoverFirstStroke) {
-            longHoverFirstStroke = firstStroke
-            longHoverStartMs = System.currentTimeMillis()
-            return
-        }
-        val delayMs = CalibrationActivity.getLongHoverDelay(this)
-        if (System.currentTimeMillis() - longHoverStartMs < delayMs) return
-        // Déclencher
-        longHoverStartMs = Long.MAX_VALUE
-        val gm = groupManager ?: return
-        val anyStrokeId = inkStrokeIdToRegistryIndex.entries
-            .firstOrNull { it.value == firstStroke }?.key ?: return
-        val g = gm.reactivateGroup(anyStrokeId) ?: return
-        // Désélectionner l'ancien
-        selectedGroupId?.let { gm.deselectGroup(it) }
-        if (gm.selectGroup(g.id)) {
-            selectedGroupId = g.id
-            updateBlobCache()
-            // Rafraichir uniquement la zone du blob
-            val bounds = cachedBlobBounds
-            if (bounds != null) {
-                val pad = 10
-                refreshRect(
-                    bounds.left.toInt() - pad, bounds.top.toInt() - pad,
-                    bounds.right.toInt() + pad, bounds.bottom.toInt() + pad)
-            } else { refreshAll() }
-            Log.i(TAG, "Survol long — groupe ${g.id} SELECTED")
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════════
