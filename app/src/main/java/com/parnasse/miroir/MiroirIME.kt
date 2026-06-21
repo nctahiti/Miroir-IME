@@ -81,58 +81,14 @@ class MiroirIME : InputMethodService() {
     // ── Barre d'outils ─────────────────────────────────────────────────
     private var showOverlays = true  // 👁 toggle
 
-    // ── Survol → Appui long (sélection par contact maintenu) ──────────
-    private var selectedGroupId: String? = null
-    private var longPressTimer: java.util.concurrent.ScheduledFuture<*>? = null
-    private var longPressArmed = false
-    private var longPressX = 0f
-    private var longPressY = 0f
+    // ── Blob par groupe inféré ─────────────────────────────────────────
+    // Chaque groupe inféré a son blob (chemin + bounds), calculé UNE fois.
+    private val groupBlobs = mutableMapOf<String, BlobData>()
+    private var activeBlobGroupId: String? = null  // groupe en absorption active
 
-    /** Déclenche la sélection par appui long (appelé par le timer). */
-    private fun fireLongPress() {
-        longPressArmed = false
-        val gm = groupManager ?: return
-        val groups = getSpatialGroups()
-        val bounds = getSpatialBounds()
-        val target = groups.withIndex().firstOrNull { (gi, group) ->
-            val r = bounds[gi]
-            val groupLine = snapToLine((r.top + r.bottom) / 2f)
-            r.left < Float.MAX_VALUE && longPressX >= r.left && longPressX <= r.right 
-                && Math.abs(longPressY - groupLine) < 50f
-        } ?: return
-        val firstStroke = target.value.firstOrNull() ?: return
-        val anyStrokeId = inkStrokeIdToRegistryIndex.entries
-            .firstOrNull { it.value == firstStroke }?.key ?: return
-        val g = gm.reactivateGroup(anyStrokeId) ?: return
-        selectedGroupId?.let { gm.deselectGroup(it) }
-        if (gm.selectGroup(g.id)) {
-            selectedGroupId = g.id
-            updateBlobCache()
-            val bnds = cachedBlobBounds
-            if (bnds != null) {
-                val pad = 10
-                refreshRect(bnds.left.toInt()-pad, bnds.top.toInt()-pad, bnds.right.toInt()+pad, bnds.bottom.toInt()+pad)
-            } else refreshAll()
-            Log.i(TAG, "Appui long — groupe ${g.id} SELECTED")
-        }
-    }
+    data class BlobData(val path: Path, val bounds: android.graphics.RectF)
 
-    /** Arme le timer d'appui long. */
-    private fun armLongPress(x: Float, y: Float) {
-        cancelLongPress()
-        longPressX = x; longPressY = y
-        longPressArmed = true
-        val delay = CalibrationActivity.getLongHoverDelay(this)
-        longPressTimer = inferExecutor.schedule({ fireLongPress() }, delay, java.util.concurrent.TimeUnit.MILLISECONDS)
-    }
-
-    private fun cancelLongPress() {
-        longPressArmed = false
-        longPressTimer?.cancel(false)
-        longPressTimer = null
-    }
-
-    // ── Cache spatial (comme CaptureView) ──────────────────────────────
+    // ── Rafraîchissement EPD ciblé ──
     private var cachedSpatialGroups: List<List<Int>>? = null
     private var cachedSpatialBounds: List<android.graphics.RectF>? = null
     private var cachedGMCacheSize: Int = -1
@@ -180,9 +136,9 @@ class MiroirIME : InputMethodService() {
         timerArmedAt.clear()
         timerArmedStrokeCount.clear()
         cachedGMCacheSize = -1
-        cachedBlobPath.reset()
-        cachedBlobBounds = null
-        cachedSpatialGroups = null
+        inferredGroupFirstIdxs.clear()
+        groupBlobs.clear()
+        activeBlobGroupId = null
         cachedSpatialBounds = null
     }
 
@@ -299,12 +255,6 @@ class MiroirIME : InputMethodService() {
     }
 
     // ── Cache performance ──────────────────────────────────────────────
-    // Blob: enveloppe convexe du groupe, expansée (plus léger que N ovales)
-    private var cachedBlobGroupId: String? = null
-    private val cachedBlobPath = Path()  // chemin de l'enveloppe
-    private var cachedBlobBounds: android.graphics.RectF? = null  // pour refreshRect
-    private var cachedBlobRx = 0f
-    private var cachedBlobRy = 0f
     private var cachedTemplateLines: List<Float> = emptyList()
     private var cachedTemplateHeight: Int = -1
     private val cachedLabelPositions = mutableMapOf<Int, Pair<Float, Float>>()
@@ -497,7 +447,6 @@ class MiroirIME : InputMethodService() {
         refreshAll()
         // Invalider les caches pour refléter les groupes chargés
         cachedGMCacheSize = -1
-        updateBlobCache()
     }
 
     /** Lit les paramètres de calibration et les applique au GroupManager. */
@@ -542,9 +491,11 @@ class MiroirIME : InputMethodService() {
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             if (showOverlays) {
-                // Blob: enveloppe convexe (chemin pré-calculé)
-                if (!cachedBlobPath.isEmpty) {
-                    canvas.drawPath(cachedBlobPath, blobPaint)
+                // Blobs des groupes inférés (en absorption active)
+                if (showOverlays) {
+                    for ((_, data) in groupBlobs) {
+                        canvas.drawPath(data.path, blobPaint)
+                    }
                 }
             }
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
@@ -563,16 +514,17 @@ class MiroirIME : InputMethodService() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> { /* ignoré — IME ne reçoit pas ces événements */ }
                 MotionEvent.ACTION_DOWN -> {
-                    // Armer l'appui long (sera annulé si l'utilisateur bouge)
-                    armLongPress(event.x, event.y)
+                    // ═══ Détecter absorption : le stylet touche-t-il un blob existant ? ═══
+                    activeBlobGroupId = null
+                    for ((gid, data) in groupBlobs) {
+                        if (data.bounds.contains(event.x, event.y)) {
+                            activeBlobGroupId = gid
+                            break
+                        }
+                    }
                     onStylusDown(event.x, event.y)
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    // Si l'utilisateur bouge significativement → écriture, pas sélection
-                    if (longPressArmed) {
-                        val dx = event.x - longPressX; val dy = event.y - longPressY
-                        if (dx*dx + dy*dy > 100f) cancelLongPress()  // >10px
-                    }
                     val historySize = event.historySize
                     for (i in 0 until historySize) {
                         onStylusPoint(event.getHistoricalX(i), event.getHistoricalY(i), event.getHistoricalPressure(i))
@@ -580,8 +532,17 @@ class MiroirIME : InputMethodService() {
                     onStylusPoint(event.x, event.y, event.pressure)
                 }
                 MotionEvent.ACTION_UP -> {
-                    cancelLongPress()
                     onStylusUp()
+                    // Si absorption active → rafraîchir le blob du groupe absorbeur
+                    activeBlobGroupId?.let { gid ->
+                        val gm = groupManager ?: return@let
+                        val group = gm.allGroups().find { it.id == gid } ?: return@let
+                        computeBlobPath(group)?.let { blob ->
+                            groupBlobs[gid] = blob
+                            val b = blob.bounds; val pad = 10
+                            refreshRect(b.left.toInt()-pad, b.top.toInt()-pad, b.right.toInt()+pad, b.bottom.toInt()+pad)
+                        }
+                    }
                 }
             }
             return true
@@ -930,9 +891,20 @@ class MiroirIME : InputMethodService() {
                 uiHandler.post {
                     val firstIdx = indices.firstOrNull() ?: return@post
                     groupLabels[firstIdx] = result
-                    cachedGMCacheSize = -1  // invalider cache spatial
+                    cachedGMCacheSize = -1
+                    // Calculer et cacher le blob pour ce groupe
+                    val gm = groupManager ?: return@post
+                    val group = gm.allGroups().firstOrNull { g ->
+                        val sid = g.strokeIds.firstOrNull() ?: return@firstOrNull false
+                        inkStrokeIdToRegistryIndex[sid] == firstIdx
+                    }
+                    if (group != null) {
+                        computeBlobPath(group)?.let { blob ->
+                            groupBlobs[group.id] = blob
+                        }
+                    }
                     commitText(result)
-                    refreshAll()  // le label change → besoin du redraw complet (template+labels)
+                    refreshAll()
                 }
             }
         } catch (e: Exception) {
@@ -951,25 +923,11 @@ class MiroirIME : InputMethodService() {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // UTILITAIRES
+    // BLOB — ray casting
     // ═══════════════════════════════════════════════════════════════════
 
-    /** 
-     * Calcule la vraie frontière du blob par ray casting.
-     * Pour chaque angle, trouve l'intersection la plus lointaine avec toutes les ellipses.
-     */
-    private fun updateBlobCache() {
-        cachedBlobPath.reset()
-        cachedBlobBounds = null
-        val gm = groupManager ?: return
-        val selectedGroups = gm.groupsInState(GroupState.SELECTED)
-        val group = if (selectedGroups.isNotEmpty()) selectedGroups.first()
-                     else gm.allGroups().lastOrNull() ?: return
-        computeBlobPath(group)
-    }
-
-    /** Calcule le chemin blob pour un groupe (peut être appelé pour n'importe quel groupe). */
-    private fun computeBlobPath(group: InkGroup): Path? {
+    /** Calcule le blob d'un groupe : chemin + bounds. */
+    private fun computeBlobPath(group: InkGroup): BlobData? {
         val gm = groupManager ?: return null
         val rx = gm.params.spatialDistancePx
         val ry = gm.params.spatialDistanceY
@@ -1023,13 +981,9 @@ class MiroirIME : InputMethodService() {
             if (bx < minX) minX = bx; if (bx > maxX) maxX = bx
             if (by < minY) minY = by; if (by > maxY) maxY = by
         }
-        if (first) return null  // aucun point
+        if (first) return null
         path.close()
-
-        // Stocker dans le cache actif
-        cachedBlobPath.set(path)
-        cachedBlobBounds = android.graphics.RectF(minX, minY, maxX, maxY)
-        return path
+        return BlobData(path, android.graphics.RectF(minX, minY, maxX, maxY))
     }
 
     private fun clearCanvas() {
