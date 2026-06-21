@@ -275,7 +275,33 @@ class MiroirIME : InputMethodService() {
         super.onStartInputView(info, restarting)
         Log.i(TAG, "onStartInputView — champ: ${info?.fieldName ?: "inconnu"}")
         syncGroupManagerParams()
-        clearCanvas()
+        // Reconstruire le bitmap depuis les strokes existants
+        rebuildBitmap()
+    }
+
+    /** Redessine tous les strokes du registre dans le bitmap. */
+    private fun rebuildBitmap() {
+        val canvas = bitmapCanvas ?: return
+        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+        for (sr in strokeRegistry) {
+            if (sr.points.size < 2) {
+                if (sr.points.isNotEmpty()) {
+                    val p = sr.points.first()
+                    canvas.drawCircle(p.first, p.second, 1.5f, strokePaint.apply { style = Paint.Style.FILL })
+                }
+            } else {
+                val path = Path()
+                path.moveTo(sr.points[0].first, sr.points[0].second)
+                for (i in 1 until sr.points.size) {
+                    path.lineTo(sr.points[i].first, sr.points[i].second)
+                }
+                canvas.drawPath(path, strokePaint.apply { style = Paint.Style.STROKE })
+            }
+        }
+        throttledInvalidate()
+        // Invalider les caches pour refléter les groupes chargés
+        cachedGMCacheSize = -1
+        updateBlobCache()
     }
 
     /** Lit les paramètres de calibration et les applique au GroupManager. */
