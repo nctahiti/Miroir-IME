@@ -275,20 +275,33 @@ class MiroirIME : InputMethodService() {
 
     // ═══ Rafraîchissement EPD ciblé (remplace throttledInvalidate global) ═══
 
-    /** Rafraîchit une zone précise (EVITE le redraw complet). */
-    private fun refreshRect(left: Int, top: Int, right: Int, bottom: Int) {
-        imeView?.apply {
-            // postInvalidate: non-bloquant, fiable en mode DU, pas déprécié
-            postInvalidate(left, top, right, bottom)
-            try { EpdController.handwritingRepaint(this, left, top, right, bottom) } catch (_: Exception) {}
+    /** Rafraîchit une zone précise (EVITE le redraw complet).
+     *  @param isStroke true = tracé stylet (handwritingRepaint), false = overlay (invalidate DU) */
+    private fun refreshRect(left: Int, top: Int, right: Int, bottom: Int, isStroke: Boolean = false) {
+        val v = imeView
+        if (v == null) { Log.w(TAG, "refreshRect: imeView null"); return }
+        Log.d(TAG, "refreshRect: ($left,$top)-($right,$bottom) view=${v.width}x${v.height} stroke=$isStroke")
+        v.postInvalidate(left, top, right, bottom)
+        try {
+            if (isStroke) {
+                EpdController.handwritingRepaint(v, left, top, right, bottom)
+            } else {
+                EpdController.invalidate(v, UpdateMode.DU)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "refreshRect: EpdController error: ${e.message}")
         }
     }
 
     /** Rafraîchit toute la surface (UNIQUEMENT pour changements globaux). */
     private fun refreshAll() {
-        imeView?.apply {
-            postInvalidate()  // non-bloquant, fiable en mode DU
-            try { EpdController.handwritingRepaint(this, 0, 0, width, height) } catch (_: Exception) {}
+        val v = imeView ?: return
+        Log.d(TAG, "refreshAll: view=${v.width}x${v.height}")
+        v.postInvalidate()
+        try {
+            EpdController.invalidate(v, UpdateMode.DU)
+        } catch (e: Exception) {
+            Log.w(TAG, "refreshAll: EpdController error: ${e.message}")
         }
     }
 
@@ -511,8 +524,11 @@ class MiroirIME : InputMethodService() {
      */
     private inner class CaptureSurfaceView(context: android.content.Context) : View(context) {
 
+        private var drawCount = 0
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
+            drawCount++
+            if (drawCount % 30 == 1) Log.d(TAG, "onDraw #$drawCount showOverlays=$showOverlays labels=${groupLabels.size} template=${cachedTemplateLines.size}")
             if (showOverlays) {
                 // Blob du groupe actif (sélection visuelle, pas transition GM)
                 if (showOverlays) {
@@ -714,7 +730,7 @@ class MiroirIME : InputMethodService() {
         if (now - lastPointRefresh >= interval) {
             lastPointRefresh = now
             val r = 10
-            refreshRect(x.toInt() - r, y.toInt() - r, x.toInt() + r, y.toInt() + r)
+            refreshRect(x.toInt() - r, y.toInt() - r, x.toInt() + r, y.toInt() + r, isStroke = true)
         }
     }
 
@@ -757,7 +773,7 @@ class MiroirIME : InputMethodService() {
             }
             refreshRect(
                 (minX - 10).toInt(), (minY - 10).toInt(),
-                (maxX + 10).toInt(), (maxY + 10).toInt())
+                (maxX + 10).toInt(), (maxY + 10).toInt(), isStroke = true)
         }
     }
 
