@@ -1677,7 +1677,7 @@ class CaptureView(context: Context) : View(context) {
                     rebuildBitmap()
                     // Réactiver les timers par groupe (groupes non inférés seulement)
                     val inferDelay = CalibrationActivity.getAutoInferDelay(context)
-                    val groups = computeWordGroups()
+                    val groups = getSpatialGroups()
                     for ((gi, group) in groups.withIndex()) {
                         if (group.isEmpty()) continue
                         val firstIdx = group.first()
@@ -2156,7 +2156,7 @@ class CaptureView(context: Context) : View(context) {
         throttledInvalidate()
 
         // ═══ Timers par groupe ═══
-        val groups = computeWordGroups()
+        val groups = getSpatialGroups()
         val openIdx = groups.size - 1
         val inferDelay = CalibrationActivity.getAutoInferDelay(context)
 
@@ -2194,7 +2194,7 @@ class CaptureView(context: Context) : View(context) {
     /** Infère un groupe identifié par son firstStrokeIndex (appelé par le timer). */
     private fun armGroupInference(firstIdx: Int) {
         if (firstIdx in inferredGroups) return
-        val latest = computeWordGroups()
+        val latest = getSpatialGroups()
         val group = latest.find { it.firstOrNull() == firstIdx } ?: return
         if (group.isEmpty()) return
         val snapshot = strokeRegistry.toList()
