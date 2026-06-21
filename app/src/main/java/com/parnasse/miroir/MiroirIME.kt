@@ -321,10 +321,11 @@ class MiroirIME : InputMethodService() {
     /** Recalcule l'espacement du template selon la hauteur réelle du canvas. */
     private fun updateTemplateSpacing(canvasHeight: Int) {
         if (canvasHeight <= 0) return
-        // ~5 lignes dans la hauteur disponible
-        val targetLines = 5f
-        val spacing = (canvasHeight / targetLines).coerceIn(60f, 200f)
+        // Lire les paramètres depuis la calibration
+        val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+        val sw = CalibrationActivity.getTemplateStrokeWidth(this@MiroirIME)
         template = Template.HorizontalStaff(spacingPx = spacing)
+        Template.GUIDE_PAINT.strokeWidth = sw
         // Pré-calculer les positions (cache)
         val t = template
         if (t is Template.HorizontalStaff) {
