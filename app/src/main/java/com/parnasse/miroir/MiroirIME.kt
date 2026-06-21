@@ -802,7 +802,6 @@ class MiroirIME : InputMethodService() {
             if (group.strokeIds.isEmpty()) continue
             val firstIdx = inkStrokeIdToRegistryIndex[group.strokeIds.first()] ?: continue
             val strokeCount = group.strokeIds.size
-            groupLastModifiedMs[firstIdx] = now
 
             // Déjà inféré mais modifié → permettre la ré-inférence
             val infCount = groupStrokeCountAtInference[firstIdx]
@@ -817,6 +816,7 @@ class MiroirIME : InputMethodService() {
             val hadTimer = groupTimers.containsKey(firstIdx)
             val countChanged = timerArmedStrokeCount[firstIdx] != strokeCount
             if (hadTimer && !countChanged) continue  // groupe inchangé → ne pas réarmer
+            groupLastModifiedMs[firstIdx] = now  // marquer la modification
             groupTimers.remove(firstIdx)?.cancel(false)
             // Ancrer le groupe si nouveau (premier timer)
             if (groupAnchor[group.id] == null) {
