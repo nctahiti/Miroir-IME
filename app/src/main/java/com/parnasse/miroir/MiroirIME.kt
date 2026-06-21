@@ -658,6 +658,7 @@ class MiroirIME : InputMethodService() {
 
     private var lastPointRefresh = 0L
     private var isStylusDown = false
+    private var lastInjectedGroupFirstIdx: Int? = null  // pour distinguer correction vs nouveau mot
 
     private fun onStylusDown(x: Float, y: Float) {
         isStylusDown = true
@@ -826,7 +827,9 @@ class MiroirIME : InputMethodService() {
     private fun armGroupInference(firstIdx: Int) {
         // ═══ Ne pas inférer si le stylet est encore posé (écriture en cours) ═══
         if (isStylusDown) {
-            Log.d(TAG, "⏭️ Timer ignoré firstIdx=$firstIdx — stylet encore posé")
+            // Libérer l'entrée pour que scheduleGroupInference puisse réarmer
+            groupTimers.remove(firstIdx)
+            Log.d(TAG, "⏭️ Timer reporté firstIdx=$firstIdx — stylet encore posé, sera réarmé")
             return
         }
         // ═══ Garde-fou : groupe modifié depuis l'armement du timer → ignorer ═══
@@ -913,7 +916,19 @@ class MiroirIME : InputMethodService() {
                             groupBlobs[group.id] = blob
                         }
                     }
-                    injectText(result)
+                    // Correction (même mot) → setComposingText (remplace)
+                    // Nouveau mot → commitText (ajoute)
+                    val ic = currentInputConnection
+                    if (ic != null) {
+                        if (firstIdx == lastInjectedGroupFirstIdx) {
+                            ic.setComposingText("$result ", 1)
+                        } else {
+                            lastInjectedGroupFirstIdx = firstIdx
+                            ic.finishComposingText()
+                            ic.commitText("$result ", 1)
+                        }
+                    }
+                    Log.i(TAG, "Texte injecté: \"$result\"")
                     refreshAll()
                 }
             }
@@ -926,7 +941,7 @@ class MiroirIME : InputMethodService() {
     // COMMIT — injection dans le champ cible (setComposingText remplace)
     // ═══════════════════════════════════════════════════════════════════
 
-    private fun injectText(text: String) {
+    private fun commitText(text: String) {
         val ic = currentInputConnection ?: return
         ic.setComposingText("$text ", 1)
         Log.i(TAG, "Texte injecté (composing): \"$text\"")
