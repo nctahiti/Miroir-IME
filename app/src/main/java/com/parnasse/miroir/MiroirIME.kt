@@ -308,6 +308,7 @@ class MiroirIME : InputMethodService() {
         }).also {
             // ═══ DÉSACTIVER le timer interne de GroupManager AVANT toute création de groupe ═══
             it.params = it.params.copy(transcriptionTimeoutMs = Long.MAX_VALUE)
+            Log.i(TAG, "GroupManager params: timeout=${it.params.transcriptionTimeoutMs} rx=${it.params.spatialDistancePx} ry=${it.params.spatialDistanceY}")
             it.pointProvider = { strokeId ->
                 inkStrokeIdToRegistryIndex[strokeId]
                     ?.let { strokeRegistry.getOrNull(it)?.points ?: emptyList() }
@@ -455,7 +456,8 @@ class MiroirIME : InputMethodService() {
         val calY = CalibrationActivity.getSpatialDistanceY(this)
         gm.params = gm.params.copy(
             spatialDistancePx = calX,
-            spatialDistanceY = calY
+            spatialDistanceY = calY,
+            transcriptionTimeoutMs = Long.MAX_VALUE  // NE PAS écraser avec le défaut 2000ms !
         )
         Log.d(TAG, "Params calibration: blobRx=$calX blobRy=$calY")
     }
@@ -807,7 +809,8 @@ class MiroirIME : InputMethodService() {
 
         val loadedGroups = gm.groupsInState(GroupState.LOADED) + gm.groupsInState(GroupState.SELECTED)
         var armed = 0; var skipped = 0
-        Log.d(TAG, "SCHEDULE: ${loadedGroups.size} groupes LOADED/SELECTED (total=${gm.allGroups().size} allGroups)")
+        val allStates = gm.allGroups().joinToString { "${it.id.take(8)}:${it.state}" }
+        Log.d(TAG, "SCHEDULE: ${loadedGroups.size} groupes LOADED/SELECTED (total=${gm.allGroups().size}: $allStates)")
         for (group in loadedGroups) {
             if (group.strokeIds.isEmpty()) continue
             val firstIdx = inkStrokeIdToRegistryIndex[group.strokeIds.first()] ?: continue
