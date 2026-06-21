@@ -311,32 +311,30 @@ class MiroirIME : InputMethodService() {
             canvas.drawPath(currentPath, strokePaint)
         }
         override fun onTouchEvent(event: MotionEvent): Boolean {
-            // ═══ Capturer UNIQUEMENT le stylet — ignorer les doigts ═══
-            if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) {
-                return false
-            }
+            if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
             when (event.actionMasked) {
-                MotionEvent.ACTION_HOVER_MOVE -> {
-                    checkLongHover(event.x, event.y)
-                }
                 MotionEvent.ACTION_DOWN -> {
-                    // Reset survol au contact stylet
                     hoverStartMs = 0L; hoverFirstStrokeIdx = -1
                     onStylusDown(event.x, event.y)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val historySize = event.historySize
                     for (i in 0 until historySize) {
-                        onStylusPoint(
-                            event.getHistoricalX(i),
-                            event.getHistoricalY(i),
-                            event.getHistoricalPressure(i)
-                        )
+                        onStylusPoint(event.getHistoricalX(i), event.getHistoricalY(i), event.getHistoricalPressure(i))
                     }
                     onStylusPoint(event.x, event.y, event.pressure)
                 }
-                MotionEvent.ACTION_UP -> {
-                    onStylusUp()
+                MotionEvent.ACTION_UP -> onStylusUp()
+            }
+            return true
+        }
+
+        override fun onHoverEvent(event: MotionEvent): Boolean {
+            if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_HOVER_MOVE -> checkLongHover(event.x, event.y)
+                MotionEvent.ACTION_HOVER_EXIT -> {
+                    hoverStartMs = 0L; hoverFirstStrokeIdx = -1
                 }
             }
             return true
