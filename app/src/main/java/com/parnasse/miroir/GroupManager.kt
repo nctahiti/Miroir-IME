@@ -99,36 +99,36 @@ class GroupManager(
 
     /**
      * Teste si le stroke touche le blob du groupe.
-     * Utilise les BOUNDS du groupe (rectangle englobant) dilatés de rx, ry.
-     * Ne dépend pas des strokeIds (instables entre sessions) — le test est
-     * purement géométrique : distance du point de stroke au rectangle du groupe.
+     * Blob = union des ellipses (rx, ry) centrées sur chaque point du groupe.
+     * Le bouncing box (fast-reject dans onStrokeSealed) filtre avant — 
+     * ici on fait le vrai test point-contre-point.
      */
     private fun isStrokeNearGroup(stroke: InkStroke, group: InkGroup): Boolean {
         if (stroke.points.isEmpty()) return false
+        val provider = pointProvider ?: return false
         if (group.bounds.isEmpty) return false
 
         val rx = params.spatialDistancePx
         val ry = params.spatialDistanceY
 
-        // Test géométrique : chaque point du stroke est-il à distance ≤ (rx,ry)
-        // du rectangle englobant du groupe ?
-        val gLeft = group.bounds.left; val gRight = group.bounds.right
-        val gTop = group.bounds.top; val gBottom = group.bounds.bottom
-
-        var tested = 0
-        for (sp in stroke.points) {
-            // Point le plus proche sur le rectangle du groupe
-            val nearestX = sp.x.coerceIn(gLeft, gRight)
-            val nearestY = sp.y.coerceIn(gTop, gBottom)
-            val dx = (sp.x - nearestX) / rx
-            val dy = (sp.y - nearestY) / ry
-            if (dx * dx + dy * dy <= 1.0f) {
-                Log.i(TAG, "isStrokeNearGroup MATCH (bounds): strokePt=(${sp.x.toInt()},${sp.y.toInt()}) nearestBounds=(${nearestX.toInt()},${nearestY.toInt()}) dx=$dx dy=$dy")
-                return true
-            }
-            tested++
+        // Collecter les points du groupe (via le provider branché sur strokeRegistry)
+        val groupPoints = mutableListOf<Pair<Float, Float>>()
+        for (sid in group.strokeIds) {
+            provider(sid)?.let { groupPoints.addAll(it) }
         }
-        Log.w(TAG, "isStrokeNearGroup NO MATCH (bounds): $tested strokePts tested, groupBounds=[${gLeft.toInt()},${gTop.toInt()}][${gRight.toInt()},${gBottom.toInt()}], rx=$rx ry=$ry. FirstPt=(${stroke.points.firstOrNull()?.x?.toInt()},${stroke.points.firstOrNull()?.y?.toInt()})")
+        if (groupPoints.isEmpty()) {
+            Log.w(TAG, "isStrokeNearGroup: 0 groupPoints pour ${group.strokeIds.size} strokeIds")
+            return false
+        }
+
+        // Test point-contre-point : chaque point du stroke contre chaque point du groupe
+        for (sp in stroke.points) {
+            for (gp in groupPoints) {
+                val dx = (sp.x - gp.first) / rx
+                val dy = (sp.y - gp.second) / ry
+                if (dx * dx + dy * dy <= 1.0f) return true  // dans l'ellipse
+            }
+        }
         return false
     }
     fun getOrCreateActiveGroup(): InkGroup {
