@@ -167,6 +167,30 @@ périodique ou une limite de groupes dans `allGroupsFull()`.
 | `04d703f` | Filtre les STORED dans `injectReadingOrder()` |
 | `33ec898` | `setComposingText` remplace au lieu d'accumuler |
 
+## 🔴 Boutons tactiles muets — diagnostic
+
+**Symptôme** : les boutons (✓ ⚙ 👁 + ✕) ne réagissent plus au toucher.
+
+**Cause racine** : `TouchHelper.create(surface, ...)` + `setPostInputEvent(true)`
+crée un tunnel direct entre le digitizer Wacom et `CaptureSurfaceView`.
+TOUS les événements tactiles (stylet ET doigt) sont injectés directement
+dans `surface.onTouchEvent()`, court-circuitant la hiérarchie Android.
+La `LinearLayout` des boutons ne reçoit jamais `onTouchEvent`.
+
+**Pourquoi c'est pire qu'avant** : avec la persistence pleine, le thread UI
+était lent → TouchHelper avait des ratés → certains événements passaient.
+Maintenant que le thread UI est fluide (persistence nettoyée), TouchHelper
+capture TOUT, sans exception. Les boutons sont devenus parfaitement…
+parfaitement inaccessibles.
+
+**Piste de solution** : ne pas utiliser `setPostInputEvent(true)`.
+Traiter les événements stylet via les callbacks `RawInputCallback`
+(qui donnent les points bruts), et laisser les événements doigts
+suivre la distribution Android normale vers les boutons.
+
+C'est comme ça que fonctionne le Miroir classique (CaptureView) —
+pas de `setPostInputEvent`, capture via TouchHelper callbacks.
+
 ---
 
 *Nicolas & Hermès, 22 juin 2026, minuit passé.*
