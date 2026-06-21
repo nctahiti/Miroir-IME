@@ -70,6 +70,9 @@ class MiroirIME : InputMethodService() {
     // ── Vue IME ────────────────────────────────────────────────────────
     private var imeView: CaptureSurfaceView? = null
 
+    // ── Template (partition) ───────────────────────────────────────────
+    private val template: Template = Template.HorizontalStaff(spacingPx = 500f)
+
     // ═══════════════════════════════════════════════════════════════════
     // LIFECYCLE IME
     // ═══════════════════════════════════════════════════════════════════
@@ -151,9 +154,12 @@ class MiroirIME : InputMethodService() {
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+            // Dessiner la partition (template delta)
+            if (template is Template.HorizontalStaff) {
+                template.draw(canvas, width, height)
+            }
             canvas.drawPath(currentPath, strokePaint)
         }
-
         override fun onTouchEvent(event: MotionEvent): Boolean {
             // TouchHelper forward les événements stylet ici (quand setPostInputEvent=true)
             if (!useTouchHelper && touchHelperAttempted) {
