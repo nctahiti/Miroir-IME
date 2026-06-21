@@ -3275,35 +3275,29 @@ class CaptureView(context: Context) : View(context) {
         if (currentMode != CaptureMode.CAPTURE) return
         if (!isBlocnoteMode) return
 
-        // Blob UNIQUEMENT sur le groupe SELECTED
-        val selectedIndices = groupManager.groupsInState(GroupState.SELECTED)
-            .flatMap { it.strokeIds.mapNotNull { id -> inkStrokeIdToRegistryIndex[id] } }.toSet()
-        if (selectedIndices.isEmpty()) return
-        val groups = getSpatialGroups()
-        if (groups.isEmpty()) return
-        val groupsToDraw = groups.filter { it.any { idx -> idx in selectedIndices } }
-        if (groupsToDraw.isEmpty()) return
-
-        // Rayons DIRECTS — chaque point du groupe est le centre de son ellipse (rx, ry)
+        // Blob UNIQUEMENT sur le groupe SELECTED — ses bounds (calculées au survol)
+        val selectedGroups = groupManager.groupsInState(GroupState.SELECTED)
+        if (selectedGroups.isEmpty()) return
+        
+        // Rayons DIRECTS
         blobRadiusX = CalibrationActivity.getSpatialDistanceX(context)
         blobRadiusY = CalibrationActivity.getSpatialDistanceY(context)
         val rx = blobRadiusX; val ry = blobRadiusY
         val sampleStep = ((rx + ry) / 10f).toInt().coerceIn(1, 6)
 
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            // Forcer alpha=255 — pas de transparence, pas d'accumulation par superposition
             color = CalibrationActivity.getBlobColor(context) or 0xFF000000.toInt()
         }
 
-        for (groupIndices in groupsToDraw) {
-            for (idx in groupIndices) {
+        for (sel in selectedGroups) {
+            // Dessiner les ellipses autour des points du groupe SELECTED
+            val indices = sel.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+            for (idx in indices) {
                 if (idx >= strokeRegistry.size) continue
                 val s = strokeRegistry[idx]
                 var pi = 0
                 for ((x, y) in s.points) {
                     if (pi % sampleStep == 0) {
-                        // Chaque point est le centre de son ellipse (rx, ry)
-                        // L'union de toutes ces ellipses = le blob du groupe
                         canvas.drawOval(x - rx, y - ry, x + rx, y + ry, paint)
                     }
                     pi++
