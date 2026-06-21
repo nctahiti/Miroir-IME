@@ -996,7 +996,10 @@ class MiroirIME : InputMethodService() {
             words.add(Word(snapToLine(anchor.second), anchor.first, text))
         }
         // 2. Groupes sans label → placeholder \"…\" (diagnostic : blocage groupe ou inference ?)
-        for (group in gm.allGroupsFull()) {
+        // ═══ Ne prendre que les groupes LOADED/SELECTED (session courante) ═══
+        // Les groupes STORED sont dans la persistence (sessions antérieures) et polluent le diagnostic.
+        val activeGroups = gm.groupsInState(GroupState.LOADED) + gm.groupsInState(GroupState.SELECTED)
+        for (group in activeGroups) {
             val firstIdx = group.strokeIds.firstOrNull()
                 ?.let { inkStrokeIdToRegistryIndex[it] } ?: continue
             if (firstIdx in seenFirstIdx) continue  // deja traite avec label
