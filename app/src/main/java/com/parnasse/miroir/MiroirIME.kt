@@ -904,7 +904,7 @@ class MiroirIME : InputMethodService() {
                             groupBlobs[group.id] = blob
                         }
                     }
-                    commitText(result)
+                    injectText(result)
                     refreshAll()
                 }
             }
@@ -914,13 +914,13 @@ class MiroirIME : InputMethodService() {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // COMMIT — injection dans le champ cible
+    // COMMIT — injection dans le champ cible (setComposingText remplace)
     // ═══════════════════════════════════════════════════════════════════
 
-    private fun commitText(text: String) {
+    private fun injectText(text: String) {
         val ic = currentInputConnection ?: return
-        ic.commitText("$text ", 1)
-        Log.i(TAG, "Texte injecté: \"$text\"")
+        ic.setComposingText("$text ", 1)
+        Log.i(TAG, "Texte injecté (composing): \"$text\"")
     }
 
     // ═══════════════════════════════════════════════════════════════════
