@@ -179,7 +179,7 @@ class MiroirIME : InputMethodService() {
         Log.i(TAG, "onCreateInputView — plein écran")
 
         val density = resources.displayMetrics.density
-        val toolbarHeight = (40 * density).toInt()
+        val toolbarHeight = (80 * density).toInt()  // hauteur adaptée aux grands boutons
 
         val root = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
