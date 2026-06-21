@@ -756,11 +756,6 @@ class MiroirIME : InputMethodService() {
         // ═══ GroupManager : groupement spatial ═══
         val inkStroke = strokeRecordToInkStroke(stroke, inkId)
         groupManager?.onStrokeSealed(inkStroke)
-        // ═══ PAS d'evictInactive — l'IME n'a que quelques mots, pas de persistance ═══
-        // Les groupes doivent rester en mémoire pour la sélection par survol.
-
-        // Mettre à jour le cache du blob
-        updateBlobCache()
 
         // Armer le timer d'inférence pour les groupes modifiés
         scheduleGroupInference()
@@ -834,7 +829,7 @@ class MiroirIME : InputMethodService() {
         val inferDelay = CalibrationActivity.getAutoInferDelay(this)
         val now = System.currentTimeMillis()
 
-        val loadedGroups = gm.groupsInState(GroupState.LOADED)
+        val loadedGroups = gm.groupsInState(GroupState.LOADED) + gm.groupsInState(GroupState.SELECTED)
         for (group in loadedGroups) {
             if (group.strokeIds.isEmpty()) continue
             val firstIdx = inkStrokeIdToRegistryIndex[group.strokeIds.first()] ?: continue
