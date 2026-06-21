@@ -927,12 +927,8 @@ class MiroirIME : InputMethodService() {
                         computeBlobPath(group)?.let { blob ->
                             groupBlobs[group.id] = blob
                         }
-                        // Sélectionner pour afficher le blob
-                        val gm2 = groupManager
-                        if (gm2 != null) {
-                            gm2.groupsInState(GroupState.SELECTED).forEach { gm2.deselectGroup(it.id) }
-                            gm2.selectGroup(group.id)
-                        }
+                        // ═══ PAS de sélection auto — le blob est la vue de sélection,
+                        // pas le témoin d'inférence. Le label EST le témoin. ═══
                     }
                     // Correction (même mot) → setComposingText (remplace)
                     // Nouveau mot → commitText (ajoute)
