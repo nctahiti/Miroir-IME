@@ -313,6 +313,9 @@ class MiroirIME : InputMethodService() {
         override fun onTouchEvent(event: MotionEvent): Boolean {
             if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
             when (event.actionMasked) {
+                MotionEvent.ACTION_HOVER_MOVE -> {
+                    checkLongHover(event.x, event.y)
+                }
                 MotionEvent.ACTION_DOWN -> {
                     hoverStartMs = 0L; hoverGroupId = null
                     onStylusDown(event.x, event.y)
@@ -325,19 +328,6 @@ class MiroirIME : InputMethodService() {
                     onStylusPoint(event.x, event.y, event.pressure)
                 }
                 MotionEvent.ACTION_UP -> onStylusUp()
-            }
-            return true
-        }
-
-        override fun onHoverEvent(event: MotionEvent): Boolean {
-            if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
-            when (event.actionMasked) {
-                MotionEvent.ACTION_HOVER_MOVE -> {
-                    checkLongHover(event.x, event.y)
-                }
-                // ⚠️ NE PAS reset sur HOVER_EXIT — sur e-ink, il est émis
-                // à chaque transition hover→contact, ce qui tuerait le survol
-                MotionEvent.ACTION_HOVER_EXIT -> { /* ignoré */ }
             }
             return true
         }
