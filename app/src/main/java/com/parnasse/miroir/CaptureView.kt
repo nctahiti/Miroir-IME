@@ -406,6 +406,21 @@ class CaptureView(context: Context) : View(context) {
         groupTranscriptions[firstIdx] = text
         throttledInvalidate()  // rafraîchir le label immédiatement
     }
+
+    /**
+     * Retourne les transcriptions dans l'ordre des seedGroups (JSON → ordre spatial de sauvegarde).
+     * Les nouveaux groupes (post-chargement) sont ajoutés en fin de liste.
+     * Source : groupTranscriptions (firstIdx → texte), pas le .transcription.
+     */
+    internal fun getOrderedTranscriptions(): List<String> {
+        val groups = getSpatialGroups()
+        val result = groups.mapNotNull { group ->
+            val firstIdx = group.firstOrNull() ?: return@mapNotNull null
+            groupTranscriptions[firstIdx]
+        }.filter { it.isNotBlank() }
+        Log.i(TAG, "📋 getOrderedTranscriptions: ${groups.size} groupes → ${result.size} mots → ${result.take(6).joinToString(" | ")}")
+        return result
+    }
     private var blobRadiusX = 28f  // rayon horizontal du blob
     private var blobRadiusY = 48f  // rayon vertical du blob
 
@@ -1742,10 +1757,10 @@ class CaptureView(context: Context) : View(context) {
             Log.w(TAG, "saveCurrentNote: rien a sauvegarder"); return null
         }
         // Groupes depuis GroupManager (ignore l'archivage)
-        val rawWords = computeWordGroupsForSave()
-        if (rawWords.isEmpty()) return null
-        // Ordonner par position visuelle
-        val words = computeVisualOrder(rawWords) ?: rawWords
+        // ⚠️ Pas de computeVisualOrder — l'ordre des seedGroups (JSON) est préservé.
+        // Le réordonnancement visuel ne se fait qu'après un drag spatial (repaginate).
+        val words = computeWordGroupsForSave()
+        if (words.isEmpty()) return null
         // Les transcriptions arrivent DEJA en ordre visuel (checkAutoInfer + refresh)
         // → pas de reordonnancement, on les utilise telles quelles
         val orderedTx = transcriptions
@@ -1923,6 +1938,14 @@ class CaptureView(context: Context) : View(context) {
                 }
             }
             Log.i(TAG, "Note chargée: ${inferredGroups.size} groupes marqués inférés, ${groupTranscriptions.size} transcriptions")
+
+            // Log : ordre des seedGroups après chargement
+            val seedPreview = seedGroups?.take(8)?.mapIndexed { i, g ->
+                val fi = g.firstOrNull()
+                val tx = if (fi != null) groupTranscriptions[fi] else "?"
+                "[$i]${g.size}s:$tx"
+            }?.joinToString(" | ") ?: "null"
+            Log.i(TAG, "📋 seedGroups ordre: $seedPreview")
 
             currentNotePath = file.absolutePath
             rebuildBitmap()
@@ -2748,28 +2771,22 @@ class CaptureView(context: Context) : View(context) {
             return absorbSelectedGroup(computeSpatialGroupsRaw())
         }
         // ── MODE RECHARGEMENT : seedGroups = contrainte ──
+        // La note chargée est une photographie : les groupes sont préservés
+        // tels que sauvegardés. Pas d'absorption automatique entre groupes
+        // existants — la fusion reste manuelle (bouton 🔗).
         val covered = seed.flatten().toSet()
         val allIndices = strokeRegistry.indices.toSet()
         if (allIndices == covered) return seed
 
-        // Blob 2D sur les strokes orphelins
+        // Nouveaux strokes forment leurs propres groupes (pas d'absorption)
         val newIndices = (allIndices - covered).toList()
         val newGroups = computeSpatialGroupsFor(newIndices)
 
-        // Absorption : chaque nouveau groupe blob → intersecte un seedGroup ?
-        val result = seed.map { it.toMutableList() }.toMutableList()
-        for (newGroup in newGroups) {
-            var absorbed = false
-            for (seedGroup in result) {
-                if (blobIntersects(newGroup, seedGroup)) {
-                    seedGroup.addAll(newGroup)
-                    absorbed = true
-                    break
-                }
-            }
-            if (!absorbed) result.add(newGroup.toMutableList())
-        }
-        return result
+        // Pas d'absorption entre seedGroups et newGroups.
+        // Les nouveaux strokes restent indépendants jusqu'à ce que
+        // l'utilisateur les sélectionne (hover long → SELECTED → absorption live).
+        val allGroups = (seed.map { it.toMutableList() } + newGroups.map { it.toMutableList() }).toMutableList()
+        return absorbSelectedGroup(allGroups)
     }
 
     /** Vrai si les bounds (RectF) des deux groupes se chevauchent avec les marges blob 2D. */
@@ -2984,8 +3001,7 @@ class CaptureView(context: Context) : View(context) {
      */
     /** Point d'accès pour la sauvegarde : groupes depuis GroupManager. */
     fun computeWordGroupsForSave(): List<List<Int>> {
-        val groups = getSpatialGroups()  // cache unifié
-        return computeVisualOrder(groups) ?: groups
+        return getSpatialGroups()  // ordre des seedGroups (JSON) préservé
     }
 
     /**
@@ -3584,6 +3600,7 @@ class CaptureView(context: Context) : View(context) {
      * EDIT_TEMPORAL: montre (cadran + aiguilles)
      */
     private var modeIndicatorLogged = false
+    private var debugLabelsLogged = false  // log one-shot pour drawGroupDebugInfo
     private fun drawModeIndicator(canvas: Canvas) {
         if (!modeIndicatorLogged) {
             Log.i(TAG, "drawModeIndicator: width=$width height=$height mode=$currentMode temporal=$temporalMode")
@@ -3675,7 +3692,15 @@ class CaptureView(context: Context) : View(context) {
             val infCount = groupInferenceCount[firstIdx]
             val countSuffix = if (infCount != null && infCount > 1) " #$infCount" else ""
             val label = "*$state-${groupIndices.size}S${transcription?.let { " $it" } ?: ""}$countSuffix"
+            // Log : position + transcription (8 premiers groupes, une seule fois)
+            if (gi < 8 && !debugLabelsLogged) {
+                Log.i(TAG, "🎯 label G$gi: @(${labelX.toInt()},${labelY.toInt()}) firstIdx=$firstIdx tx=\"${transcription ?: "?"}\"")
+            }
             canvas.drawText(label, labelX, labelY, debugTextPaint)
+        }
+        if (!debugLabelsLogged) {
+            debugLabelsLogged = true
+            Log.i(TAG, "🎯 drawGroupDebugInfo: ${groups.size} groupes affichés")
         }
         // Timecode dernière inférence
         if (lastInferenceTime > 0) {
@@ -3725,6 +3750,7 @@ class CaptureView(context: Context) : View(context) {
         scrubGroupIndices = null
         isWritingInEdit = false
         modeIndicatorLogged = false
+        debugLabelsLogged = false
         throttledInvalidate()
     }
 }

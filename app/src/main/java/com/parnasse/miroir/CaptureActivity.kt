@@ -334,8 +334,7 @@ class CaptureActivity : Activity() {
             setBackgroundColor(android.graphics.Color.argb(220, 255, 255, 255))
             gravity = Gravity.CENTER
             setOnLongClickListener {
-                val tw = transcriptionWriter
-                val words = tw?.getOrderedWords()?.filter { it.isNotBlank() } ?: emptyList()
+                val words = captureView?.getOrderedTranscriptions() ?: emptyList()
                 if (words.isEmpty()) {
                     Toast.makeText(this@CaptureActivity, "Aucun texte à copier", Toast.LENGTH_SHORT).show()
                 } else {
