@@ -236,8 +236,9 @@ class MiroirIME : InputMethodService() {
 
     // ── Blob ───────────────────────────────────────────────────────────
     private val blobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFFA0A0A0.toInt()  // gris opaque, visible e-ink
-        style = Paint.Style.FILL
+        color = Color.BLACK
+        style = Paint.Style.STROKE  // contour seul — comme un booléen
+        strokeWidth = 2.5f
     }
 
     // ── Cache performance ──────────────────────────────────────────────
@@ -255,7 +256,7 @@ class MiroirIME : InputMethodService() {
     /** Rafraîchit une zone précise (EVITE le redraw complet). */
     private fun refreshRect(left: Int, top: Int, right: Int, bottom: Int) {
         imeView?.apply {
-            invalidate(left, top, right, bottom)
+            invalidate(android.graphics.Rect(left, top, right, bottom))
             try { EpdController.handwritingRepaint(this, left, top, right, bottom) } catch (_: Exception) {}
         }
     }
