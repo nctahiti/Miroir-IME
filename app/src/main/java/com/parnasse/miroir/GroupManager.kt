@@ -58,7 +58,7 @@ class GroupManager(
             expanded.inset(-params.spatialDistancePx, -params.spatialDistanceY)
             RectF.intersects(expanded, strokeBounds)
         }
-        Log.d(TAG, "onStrokeSealed: pendingGroupId=${machine.pendingGroupId}, selected=${selected?.id} state=${selected?.state}, fastReject=${if (selected != null) nearSelected else "N/A"}")
+        Log.i(TAG, "onStrokeSealed: pendingGroupId=${machine.pendingGroupId}, selected=${selected?.id} state=${selected?.state} strokes=${selected?.strokeCount}, bounds=${selected?.bounds?.toShortString()}, fastReject=${if (selected != null) nearSelected else "N/A"}, params(rx=${params.spatialDistancePx}, ry=${params.spatialDistanceY})")
         val group = if (nearSelected && isStrokeNearGroup(stroke, selected!!)) {
             Log.i(TAG, "Absorption SELECTED " + selected.id + " (stroke proche)")
             selected
@@ -81,32 +81,37 @@ class GroupManager(
     }
 
     /**
-     * Teste si le stroke touche le blob du groupe (après fast-reject dans onStrokeSealed).
-     * Blob = union des ellipses (rx, ry) centrées sur chaque point du groupe.
-     * Chaque point du stroke est testé contre chaque point du groupe.
+     * Teste si le stroke touche le blob du groupe.
+     * Utilise les BOUNDS du groupe (rectangle englobant) dilatés de rx, ry.
+     * Ne dépend pas des strokeIds (instables entre sessions) — le test est
+     * purement géométrique : distance du point de stroke au rectangle du groupe.
      */
     private fun isStrokeNearGroup(stroke: InkStroke, group: InkGroup): Boolean {
         if (stroke.points.isEmpty()) return false
-        val provider = pointProvider ?: return false
+        if (group.bounds.isEmpty) return false
 
-        val rx = params.spatialDistancePx  // DIRECT — rayon horizontal de l'ellipse
-        val ry = params.spatialDistanceY   // DIRECT — rayon vertical de l'ellipse
+        val rx = params.spatialDistancePx
+        val ry = params.spatialDistanceY
 
-        // Collecter les points du groupe (via le provider branche sur strokeRegistry)
-        val groupPoints = mutableListOf<Pair<Float, Float>>()
-        for (sid in group.strokeIds) {
-            provider(sid)?.let { groupPoints.addAll(it) }
-        }
-        if (groupPoints.isEmpty()) return false
+        // Test géométrique : chaque point du stroke est-il à distance ≤ (rx,ry)
+        // du rectangle englobant du groupe ?
+        val gLeft = group.bounds.left; val gRight = group.bounds.right
+        val gTop = group.bounds.top; val gBottom = group.bounds.bottom
 
-        // Test point-contre-point : chaque point du stroke contre chaque point du groupe
+        var tested = 0
         for (sp in stroke.points) {
-            for (gp in groupPoints) {
-                val dx = (sp.x - gp.first) / rx
-                val dy = (sp.y - gp.second) / ry
-                if (dx * dx + dy * dy <= 1.0f) return true  // dans l'ellipse du point du groupe
+            // Point le plus proche sur le rectangle du groupe
+            val nearestX = sp.x.coerceIn(gLeft, gRight)
+            val nearestY = sp.y.coerceIn(gTop, gBottom)
+            val dx = (sp.x - nearestX) / rx
+            val dy = (sp.y - nearestY) / ry
+            if (dx * dx + dy * dy <= 1.0f) {
+                Log.i(TAG, "isStrokeNearGroup MATCH (bounds): strokePt=(${sp.x.toInt()},${sp.y.toInt()}) nearestBounds=(${nearestX.toInt()},${nearestY.toInt()}) dx=$dx dy=$dy")
+                return true
             }
+            tested++
         }
+        Log.w(TAG, "isStrokeNearGroup NO MATCH (bounds): $tested strokePts tested, groupBounds=[${gLeft.toInt()},${gTop.toInt()}][${gRight.toInt()},${gBottom.toInt()}], rx=$rx ry=$ry. FirstPt=(${stroke.points.firstOrNull()?.x?.toInt()},${stroke.points.firstOrNull()?.y?.toInt()})")
         return false
     }
     fun getOrCreateActiveGroup(): InkGroup {
@@ -157,7 +162,7 @@ class GroupManager(
                 group = p.readGroup(groupId)
                 if (group != null) {
                     groups[groupId] = group
-                    Log.i(TAG, "Groupe " + group!!.id + " recharge depuis .groups")
+                    Log.i(TAG, "Groupe " + group!!.id + " recharge depuis .groups (${group!!.strokeIds.size} strokeIds: ${group!!.strokeIds.take(3).joinToString(",")}...)")
                 }
             }
         }
@@ -221,6 +226,34 @@ class GroupManager(
         machine.transition(group, GroupState.STORED)
         persistence?.writeGroup(group)
         Log.d(TAG, "Groupe charge: " + group.id + " (" + group.strokeCount + " strokes)")
+    }
+
+    /** Synchronise les strokeIds d'un groupe avec la liste fournie (groupe spatial).
+     *  Met à jour strokeToGroup, les bounds, et persiste. */
+    fun syncStrokeIds(groupId: String, strokeIds: List<Long>) {
+        val group = groups[groupId] ?: return
+        val oldCount = group.strokeIds.size
+        group.strokeIds.clear()
+        group.strokeIds.addAll(strokeIds)
+        for (sid in strokeIds) {
+            strokeToGroup[sid] = groupId
+        }
+        // ═══ Recalculer les bounds à partir de TOUS les strokeIds ═══
+        val provider = pointProvider
+        if (provider != null) {
+            group.bounds.setEmpty()
+            for (sid in strokeIds) {
+                val pts = provider(sid) ?: continue
+                for ((px, py) in pts) {
+                    if (group.bounds.isEmpty) {
+                        group.bounds.set(px, py, px, py)
+                    } else {
+                        group.bounds.union(px, py)
+                    }
+                }
+            }
+        }
+        Log.i(TAG, "Groupe " + groupId + " strokeIds synchronises: $oldCount → ${strokeIds.size}, bounds=${group.bounds.toShortString()}")
     }
 
     fun allGroups(): List<InkGroup> = groups.values.toList()

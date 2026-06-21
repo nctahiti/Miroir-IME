@@ -260,15 +260,11 @@ class CaptureView(context: Context) : View(context) {
             inkStrokeIdToRegistryIndex[strokeId]
                 ?.let { registryIdx -> strokeRegistry.getOrNull(registryIdx)?.points }
         }
-        // ═══ Quand un groupe SELECTED est auto-désélectionné, réinitialiser les params ═══
+        // ═══ Quand un groupe SELECTED est auto-désélectionné ═══
         it.onGroupAutoDeselected = {
-            it.params = it.params.copy(
-                spatialDistancePx = 1f,
-                spatialDistanceY = 1f,
-                temporalDistanceMs = 0L,
-                minOverlapPercent = 100
-            )
-            Log.d(TAG, "Params absorption réinitialisés (auto-désélection)")
+            // Restaurer les params calibrés (pas de reset à 1px — le blob reste actif)
+            syncGroupManagerParams()
+            Log.d(TAG, "Params absorption restaurés (auto-désélection)")
             onActiveGroupChanged?.invoke()
         }
     }
@@ -406,6 +402,9 @@ class CaptureView(context: Context) : View(context) {
         groupTranscriptions[firstIdx] = text
         throttledInvalidate()  // rafraîchir le label immédiatement
     }
+
+    /** Accès lecture pour la synchro compagnon (CaptureActivity). */
+    internal fun getGroupTranscription(firstIdx: Int): String? = groupTranscriptions[firstIdx]
 
     /**
      * Retourne les transcriptions dans l'ordre des seedGroups (JSON → ordre spatial de sauvegarde).
@@ -699,7 +698,7 @@ class CaptureView(context: Context) : View(context) {
     private var seedGroups: List<List<Int>>? = null
 
     /** Retourne les groupes spatiaux avec cache, unifié (spatial + absorption SELECTED). */
-    private fun getSpatialGroups(): List<List<Int>> {
+    internal fun getSpatialGroups(): List<List<Int>> {
         if (cachedStrokeRegistrySize != strokeRegistry.size) {
             val groups = computeWordGroups()
             cachedSpatialGroups = groups
@@ -807,11 +806,32 @@ class CaptureView(context: Context) : View(context) {
             return
         }
         if (groupManager.selectGroup(g.id)) {
+            // ═══ Synchroniser les bounds du groupe GroupManager avec le groupe spatial ═══
+            // On calcule les bounds DIRECTEMENT depuis le strokeRegistry (registre = source unique).
+            // Les strokeIds GroupManager sont instables (changement de session), mais les indices
+            // du strokeRegistry sont la vérité spatiale.
+            var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
+            var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
+            for (idx in targetIndices) {
+                if (idx >= strokeRegistry.size) continue
+                for ((px, py) in strokeRegistry[idx].points) {
+                    if (px < minX) minX = px
+                    if (px > maxX) maxX = px
+                    if (py < minY) minY = py
+                    if (py > maxY) maxY = py
+                }
+            }
+            if (minX < Float.MAX_VALUE) {
+                g.bounds.set(minX, minY, maxX, maxY)
+                Log.i(TAG, "Survol long — bounds synchronisées: [${minX.toInt()},${minY.toInt()}][${maxX.toInt()},${maxY.toInt()}]")
+            }
             // Synchroniser selectedWordGroup — la SURCOUCHE ÉDITION en a besoin pour le VERT
             selectedWordGroup = targetIndices
             Log.i(TAG, "Survol long — groupe ${g.id} SELECTED (${targetIndices.size} strokes)" )
             onActiveGroupChanged?.invoke()
             invalidate()
+        } else {
+            Log.w(TAG, "Survol long — selectGroup ÉCHEC pour ${g.id} (state=${g.state}, groups contient=${groupManager.allGroups().any { it.id == g.id }})")
         }
     }
 
@@ -824,15 +844,11 @@ class CaptureView(context: Context) : View(context) {
             groupManager.deselectGroup(g.id)
             Log.d(TAG, "Déselection — groupe ${g.id} SELECTED → STORED")
         }
-        // Désactiver l'absorption : revenir au mode "chaque stroke = un groupe"
-        // ⚠️ TOUJOURS reset, même si selected est vide — un groupe évincé
-        // laisse des params permissifs orphelins qui aspirent les strokes suivants
-        groupManager.params = groupManager.params.copy(
-            spatialDistancePx = 1f,
-            spatialDistanceY = 1f,
-            temporalDistanceMs = 0L,
-            minOverlapPercent = 100
-        )
+        // ⚠️ Ne plus reset les params — le blob reste calibré.
+        // Le survol long ne change plus les params (plus de minOverlapPercent=0 temporaire),
+        // donc le reset à 1px n'est plus nécessaire et cassait l'absorption.
+        // Restaurer les params calibrés (au cas où un post-drag les a réduits).
+        syncGroupManagerParams()
         if (selected.isNotEmpty()) {
             onActiveGroupChanged?.invoke()
             postInvalidate()
@@ -867,8 +883,24 @@ class CaptureView(context: Context) : View(context) {
     private var scrubStartX = 0f                 // X au debut du scrub (repere absolu)
     private var scrubInitialPos = 0f             // timelinePos au debut du scrub
     private var scrubGroupIndices: List<Int>? = null  // groupe en cours de scrub
+    private var scrubGroupWidth = 100f              // largeur pixels du groupe scrubbe (pour scale 1:1)
     private var scrubHappened = false              // true si un scrub a eu lieu pendant ce gesture
     private var isWritingInEdit = false          // ecriture en cours depuis le mode EDIT
+
+    /** Largeur pixel du groupe pour le scale 1:1 du scrub (min 50px). */
+    private fun computeScrubWidth(indices: List<Int>): Float {
+        var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
+        for (si in indices) {
+            if (si >= strokeRegistry.size) continue
+            val s = strokeRegistry[si]
+            for (k in 0 until s.activePoints) {
+                val px = s.points[k].first
+                if (px < minX) minX = px
+                if (px > maxX) maxX = px
+            }
+        }
+        return if (minX < Float.MAX_VALUE) (maxX - minX).coerceAtLeast(50f) else 100f
+    }
 
     /**
      * Détecte un double-tap sur un mot clôturé → le réactive.
@@ -935,7 +967,9 @@ class CaptureView(context: Context) : View(context) {
                     longPressStartX = x; longPressStartY = y
                     longPressStartTime = System.currentTimeMillis()
                     longPressDisabled = false
-                    Log.d(TAG, "⏳ PENDOWN en mode temporel — pret pour scrub (initPos=$scrubInitialPos)")
+                    // Recalculer la largeur du groupe cible (a pu changer apres absorption)
+                    scrubGroupWidth = scrubGroupIndices?.let { computeScrubWidth(it) } ?: scrubGroupWidth
+                    Log.d(TAG, "⏳ PENDOWN en mode temporel — pret pour scrub (initPos=$scrubInitialPos, largeur=${scrubGroupWidth.toInt()}px)")
                     return
                 }
                 // Armer le timer long-press pour le toggle EDIT_SPATIAL ↔ TEMPORAL
@@ -1056,7 +1090,8 @@ class CaptureView(context: Context) : View(context) {
                                     }
                                 }
                             }
-                            Log.i(TAG, "⏳ EDIT_TEMPORAL active (scrubInitPos=$scrubInitialPos, groupe=${scrubGroupIndices?.size}s)")
+                            scrubGroupWidth = scrubGroupIndices?.let { computeScrubWidth(it) } ?: 100f
+                            Log.i(TAG, "⏳ EDIT_TEMPORAL active (scrubInitPos=$scrubInitialPos, groupe=${scrubGroupIndices?.size}s, largeur=${scrubGroupWidth.toInt()}px)")
                         } else {
                             // Sortir d'EDIT_TEMPORAL → retour EDIT_SPATIAL
                             currentMode = CaptureMode.EDIT
@@ -1076,7 +1111,7 @@ class CaptureView(context: Context) : View(context) {
                 if (currentMode == CaptureMode.EDIT_TEMPORAL) {
                     // deltaX negatif = stylet a gauche = reculer dans le temps = effacer
                     val deltaX = scrubStartX - x
-                    val scrubScale = 100f  // pixels pour parcourir 0→1
+                    val scrubScale = scrubGroupWidth  // largeur reelle du groupe → 1:1
                     val prevPos = scrubTimelinePos
                     scrubTimelinePos = (scrubInitialPos + deltaX / scrubScale).coerceIn(0f, 1f)
                     if (Math.abs(scrubTimelinePos - prevPos) > 0.01f) {
@@ -1809,7 +1844,10 @@ class CaptureView(context: Context) : View(context) {
         for ((gi, group) in groups.withIndex()) {
             if (group.isEmpty()) continue
             val wordObj = org.json.JSONObject()
-            wordObj.put("transcription", transcriptions?.getOrElse(gi) { "" } ?: "")
+            // ═══ Transcription depuis groupTranscriptions (stable, firstIdx) — pas le paramètre (corrompu par .transcription)
+            val firstIdx = group.firstOrNull()
+            val tx = if (firstIdx != null) groupTranscriptions[firstIdx] ?: "" else ""
+            wordObj.put("transcription", tx)
             wordObj.put("correction", corrections?.getOrElse(gi) { "" } ?: "")
 
             var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE

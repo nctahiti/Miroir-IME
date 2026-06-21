@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -75,6 +77,10 @@ class CaptureActivity : Activity() {
     // ── Navigation pages ──────────────────────────────────────────────
     private var blocNoteFiles = mutableListOf<java.io.File>()
     private var currentPageIndex = -1  // -1 = nouvelle page
+
+    // ── Synchro compagnon .transcription (debounce 1s) ─────────────────
+    private val syncHandler = Handler(Looper.getMainLooper())
+    private var syncCompanionRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -192,6 +198,7 @@ class CaptureActivity : Activity() {
 
         // ✕ Fermer
         topBar.addView(makeToolbarButton("✕", android.graphics.Color.argb(200, 150, 0, 0)) {
+            syncTranscriptionFromGroups()
             captureView?.saveCurrentNote(mode = "blocnote", transcriptions = transcriptionWriter?.getOrderedWords() ?: wordTranscriptions.toList())
             finish()
         })
@@ -233,6 +240,7 @@ class CaptureActivity : Activity() {
 
         // 💾 Sauvegarder sans changer la vue
         topBar.addView(makeToolbarButton("💾", android.graphics.Color.argb(200, 0, 100, 50)) {
+            syncTranscriptionFromGroups()
             val path = captureView?.saveCurrentNote(
                 mode = "blocnote",
                 transcriptions = transcriptionWriter?.getOrderedWords() ?: wordTranscriptions.toList()
@@ -328,9 +336,9 @@ class CaptureActivity : Activity() {
         // Placé sous le bouton 📝, aligné à gauche
         editModeIndicator = TextView(this).apply {
             text = "🚢"
-            textSize = 22f
+            textSize = 28f
             setTextColor(android.graphics.Color.argb(220, 40, 40, 40))
-            setPadding(14, 8, 14, 8)
+            setPadding(18, 12, 18, 12)
             setBackgroundColor(android.graphics.Color.argb(220, 255, 255, 255))
             gravity = Gravity.CENTER
             setOnLongClickListener {
@@ -405,6 +413,7 @@ class CaptureActivity : Activity() {
         // On recharge simplement depuis le fichier pour afficher.
         if (isBlocNote) {
             reloadFromTranscription()
+            scheduleCompanionSync()
         } else {
             // Mode Dictée : comparer au mot cible
             val match = text.equals(currentWord, ignoreCase = true)
@@ -425,10 +434,43 @@ class CaptureActivity : Activity() {
         wordTranscriptions.addAll(tw.getOrderedWords())
     }
 
+    // ── Synchro compagnon .transcription ───────────────────────────────
+
+    /** Synchronise le fichier .transcription depuis groupTranscriptions (source stable).
+     *  Efface et réécrit TOUT le fichier avec les transcriptions actuelles,
+     *  dans l'ordre spatial des groupes. */
+    private fun syncTranscriptionFromGroups() {
+        val tw = transcriptionWriter ?: return
+        val cv = captureView ?: return
+        val groups = cv.getSpatialGroups()
+        if (groups.isEmpty()) return
+        val strokes = cv.getStrokeRegistry()
+        val words = groups.mapIndexedNotNull { idx, group ->
+            val firstIdx = group.firstOrNull() ?: return@mapIndexedNotNull null
+            val text = cv.getGroupTranscription(firstIdx) ?: return@mapIndexedNotNull null
+            if (text.isBlank()) return@mapIndexedNotNull null
+            val snapY = StrokeRenderer.computeSnapY(strokes, group)
+            Triple(snapY, idx, text)
+        }
+        if (words.isEmpty()) return
+        tw.rewriteAll(words)
+        Log.i(TAG, "📝 Compagnon .transcription synchronise: ${words.size} mots")
+    }
+
+    /** Programme une synchro du compagnon après 1s d'inactivité (debounce).
+     *  Appelé après chaque inférence — si une autre arrive dans la seconde, on repousse. */
+    private fun scheduleCompanionSync() {
+        syncCompanionRunnable?.let { syncHandler.removeCallbacks(it) }
+        val runnable = Runnable { syncTranscriptionFromGroups() }
+        syncCompanionRunnable = runnable
+        syncHandler.postDelayed(runnable, 1000L)
+    }
+
     // ── Actions ────────────────────────────────────────────────────────
 
     private fun onValidate() {
         Log.i(TAG, "✓ Validation")
+        syncTranscriptionFromGroups()
         captureView?.saveCurrentNote(
             mode = "blocnote",
             transcriptions = transcriptionWriter?.getOrderedWords() ?: wordTranscriptions.toList()
@@ -504,6 +546,7 @@ class CaptureActivity : Activity() {
         
         // Sauver la page courante d'abord
         if (currentPageIndex < 0 && captureView?.hasStrokes() == true) {
+            syncTranscriptionFromGroups()
             captureView?.saveCurrentNote(mode = "blocnote", transcriptions = transcriptionWriter?.getOrderedWords() ?: wordTranscriptions.toList())
             scanBlocnoteFiles()
         }
