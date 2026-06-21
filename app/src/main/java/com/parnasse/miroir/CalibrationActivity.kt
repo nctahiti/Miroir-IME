@@ -9,17 +9,6 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.widget.*
 
-/**
- * CalibrationActivity — réglages du Miroir IME.
- *
- * Curseurs :
- *   - Distance spatiale X (↔) : blob horizontal
- *   - Distance spatiale Y (↕) : blob vertical
- *   - Délai inférence (ms)
- *   - Survol long (ms)
- *
- * Playground : zone d'essai avec TouchHelper, modes, fusion.
- */
 class CalibrationActivity : Activity() {
 
     companion object {
@@ -47,29 +36,21 @@ class CalibrationActivity : Activity() {
 
         fun getSpatialDistanceX(ctx: Context): Float =
             prefs(ctx).getFloat(KEY_SPATIAL_DISTANCE_X, DEFAULT_SPATIAL_DISTANCE_X)
-
         fun getSpatialDistanceY(ctx: Context): Float =
             prefs(ctx).getFloat(KEY_SPATIAL_DISTANCE_Y, DEFAULT_SPATIAL_DISTANCE_Y)
-
         fun getAutoInferDelay(ctx: Context): Long =
             prefs(ctx).getLong(KEY_AUTO_INFER_DELAY, DEFAULT_AUTO_INFER_DELAY)
-
         fun getLongHoverDelay(ctx: Context): Long =
             prefs(ctx).getLong(KEY_LONG_HOVER_DELAY, DEFAULT_LONG_HOVER_DELAY)
-
         fun getRefreshInterval(ctx: Context): Long =
             prefs(ctx).getLong(KEY_REFRESH_INTERVAL, DEFAULT_REFRESH_INTERVAL)
-
         fun getBlobRayCount(ctx: Context): Int =
             prefs(ctx).getInt(KEY_BLOB_RAY_COUNT, DEFAULT_BLOB_RAY_COUNT)
-
         fun getTemplateSpacing(ctx: Context): Float =
             prefs(ctx).getFloat(KEY_TEMPLATE_SPACING, DEFAULT_TEMPLATE_SPACING)
-
         fun getTemplateStrokeWidth(ctx: Context): Float =
             prefs(ctx).getFloat(KEY_TEMPLATE_STROKE_WIDTH, DEFAULT_TEMPLATE_STROKE_WIDTH)
 
-        // ── Stubs pour compatibilité CaptureView ──
         fun getTemporalDistance(ctx: Context): Long = 800L
         fun getBlobColor(ctx: Context): Int = 0xFFC0C0C0.toInt()
     }
@@ -89,11 +70,12 @@ class CalibrationActivity : Activity() {
         val currentDelay = p.getLong(KEY_AUTO_INFER_DELAY, DEFAULT_AUTO_INFER_DELAY)
         val currentHover = p.getLong(KEY_LONG_HOVER_DELAY, DEFAULT_LONG_HOVER_DELAY)
 
+        val scroll = ScrollView(this).apply { setBackgroundColor(Color.WHITE) }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
             setPadding(dp(20), dp(40), dp(20), dp(20))
         }
+        scroll.addView(root)
 
         // Titre
         root.addView(TextView(this).apply {
@@ -103,7 +85,9 @@ class CalibrationActivity : Activity() {
             setPadding(0, 0, 0, dp(16))
         })
 
-        // Distance spatiale X
+        // ═══ 🎯 Groupe & Blob ═══
+        root.addView(sectionHeader("🎯 Groupe & Blob"))
+
         val xLabel = addSlider(root, "Distance spatiale X (↔)", 5, 500, currentX.toInt(), "px")
         spatialXSeek = root.getChildAt(root.childCount - 1) as SeekBar
         spatialXSeek.setOnSeekBarChangeListener(simpleListener { v ->
@@ -112,7 +96,6 @@ class CalibrationActivity : Activity() {
             testView?.invalidate()
         })
 
-        // Distance spatiale Y
         val yLabel = addSlider(root, "Distance spatiale Y (↕)", 5, 500, currentY.toInt(), "px")
         spatialYSeek = root.getChildAt(root.childCount - 1) as SeekBar
         spatialYSeek.setOnSeekBarChangeListener(simpleListener { v ->
@@ -121,33 +104,6 @@ class CalibrationActivity : Activity() {
             testView?.invalidate()
         })
 
-        // Délai inférence
-        val delayLabel = addSlider(root, "Délai inférence", 500, 5000, currentDelay.toInt(), "ms")
-        delaySeek = root.getChildAt(root.childCount - 1) as SeekBar
-        delaySeek.setOnSeekBarChangeListener(simpleListener { v ->
-            delayLabel.text = "Délai inférence : ${v + 500} ms"
-            prefs(this).edit().putLong(KEY_AUTO_INFER_DELAY, (v + 500).toLong()).apply()
-            testView?.reloadAutoInferDelay()
-        })
-
-        // Survol long
-        val hoverLabel = addSlider(root, "Survol long (réactivation)", 500, 3000, currentHover.toInt(), "ms")
-        hoverSeek = root.getChildAt(root.childCount - 1) as SeekBar
-        hoverSeek.setOnSeekBarChangeListener(simpleListener { v ->
-            hoverLabel.text = "Survol long (réactivation) : ${v + 500} ms"
-            prefs(this).edit().putLong(KEY_LONG_HOVER_DELAY, (v + 500).toLong()).apply()
-        })
-
-        // Fréquence de rafraîchissement
-        val currentRefresh = p.getLong(KEY_REFRESH_INTERVAL, DEFAULT_REFRESH_INTERVAL)
-        val refreshLabel = addSlider(root, "Rafraîchissement stylet", 8, 50, currentRefresh.toInt(), "ms")
-        val refreshSeek = root.getChildAt(root.childCount - 1) as SeekBar
-        refreshSeek.setOnSeekBarChangeListener(simpleListener { v ->
-            refreshLabel.text = "Rafraîchissement stylet : ${v + 8} ms"
-            prefs(this).edit().putLong(KEY_REFRESH_INTERVAL, (v + 8).toLong()).apply()
-        })
-
-        // Densité du blob (rayons de ray casting)
         val currentRays = p.getInt(KEY_BLOB_RAY_COUNT, DEFAULT_BLOB_RAY_COUNT)
         val rayLabel = addSlider(root, "Densité blob (rayons)", 30, 360, currentRays, "")
         val raySeek = root.getChildAt(root.childCount - 1) as SeekBar
@@ -156,16 +112,46 @@ class CalibrationActivity : Activity() {
             prefs(this).edit().putInt(KEY_BLOB_RAY_COUNT, v + 30).apply()
         })
 
-        // Template : interligne
+        // ═══ ⏱️ Temps ═══
+        root.addView(sectionHeader("⏱️ Temps"))
+
+        val delayLabel = addSlider(root, "Délai inférence", 500, 5000, currentDelay.toInt(), "ms")
+        delaySeek = root.getChildAt(root.childCount - 1) as SeekBar
+        delaySeek.setOnSeekBarChangeListener(simpleListener { v ->
+            delayLabel.text = "Délai inférence : ${v + 500} ms"
+            prefs(this).edit().putLong(KEY_AUTO_INFER_DELAY, (v + 500).toLong()).apply()
+            testView?.reloadAutoInferDelay()
+        })
+
+        val hoverLabel = addSlider(root, "Appui long (sélection)", 500, 3000, currentHover.toInt(), "ms")
+        hoverSeek = root.getChildAt(root.childCount - 1) as SeekBar
+        hoverSeek.setOnSeekBarChangeListener(simpleListener { v ->
+            hoverLabel.text = "Appui long (sélection) : ${v + 500} ms"
+            prefs(this).edit().putLong(KEY_LONG_HOVER_DELAY, (v + 500).toLong()).apply()
+        })
+
+        // ═══ 🖊️ Écriture ═══
+        root.addView(sectionHeader("🖊️ Écriture"))
+
+        val currentRefresh = p.getLong(KEY_REFRESH_INTERVAL, DEFAULT_REFRESH_INTERVAL)
+        val refreshLabel = addSlider(root, "Rafraîchissement stylet", 8, 50, currentRefresh.toInt(), "ms")
+        val refreshSeek = root.getChildAt(root.childCount - 1) as SeekBar
+        refreshSeek.setOnSeekBarChangeListener(simpleListener { v ->
+            refreshLabel.text = "Rafraîchissement stylet : ${v + 8} ms"
+            prefs(this).edit().putLong(KEY_REFRESH_INTERVAL, (v + 8).toLong()).apply()
+        })
+
+        // ═══ 📏 Template ═══
+        root.addView(sectionHeader("📏 Template"))
+
         val currentSpacing = p.getFloat(KEY_TEMPLATE_SPACING, DEFAULT_TEMPLATE_SPACING)
-        val spaceLabel = addSlider(root, "Interligne (template)", 40, 300, currentSpacing.toInt(), "px")
+        val spaceLabel = addSlider(root, "Interligne", 40, 300, currentSpacing.toInt(), "px")
         val spaceSeek = root.getChildAt(root.childCount - 1) as SeekBar
         spaceSeek.setOnSeekBarChangeListener(simpleListener { v ->
             spaceLabel.text = "Interligne : ${v + 40} px"
             prefs(this).edit().putFloat(KEY_TEMPLATE_SPACING, (v + 40).toFloat()).apply()
         })
 
-        // Template : épaisseur du trait
         val currentWidth = p.getFloat(KEY_TEMPLATE_STROKE_WIDTH, DEFAULT_TEMPLATE_STROKE_WIDTH)
         val widthLabel = addSlider(root, "Épaisseur interligne", 1, 6, currentWidth.toInt(), "px")
         val widthSeek = root.getChildAt(root.childCount - 1) as SeekBar
@@ -196,60 +182,40 @@ class CalibrationActivity : Activity() {
         })
         btnRow.addView(Button(this).apply {
             text = "✓ OK"
-            setOnClickListener {
-                save()
-                finish()
-            }
+            setOnClickListener { save(); finish() }
         })
         root.addView(btnRow)
 
-        // ── Barre playground (fusion + témoin mode) ──────────────────
+        // ── Playground ─────────────────────────────────────────────────
         val playgroundBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(4), 0, dp(8))
         }
-        // Bouton 🔗 fusion
         val mergeBtn = TextView(this).apply {
-            text = "🔗"
-            textSize = 28f
-            setTextColor(Color.WHITE)
+            text = "🔗"; textSize = 28f; setTextColor(Color.WHITE)
             setPadding(dp(16), dp(12), dp(16), dp(12))
-            setBackgroundColor(Color.argb(180, 80, 80, 80))
-            gravity = Gravity.CENTER
+            setBackgroundColor(Color.argb(180, 80, 80, 80)); gravity = Gravity.CENTER
             setOnClickListener {
                 val newState = !(testView?.mergeMode ?: false)
-                testView?.mergeMode = newState
-                testView?.mergeSourceGroup = null
+                testView?.mergeMode = newState; testView?.mergeSourceGroup = null
                 this.text = if (newState) "🔗✓" else "🔗"
-                this.setBackgroundColor(if (newState)
-                    Color.argb(200, 100, 180, 255)
-                else Color.argb(180, 80, 80, 80))
+                this.setBackgroundColor(if (newState) Color.argb(200, 100, 180, 255) else Color.argb(180, 80, 80, 80))
                 if (newState) {
-                    testView?.currentMode = CaptureMode.EDIT
                     testView?.currentMode = CaptureMode.EDIT_TEMPORAL
                     Toast.makeText(this@CalibrationActivity, "🔗 Tapez deux groupes pour les fusionner", Toast.LENGTH_SHORT).show()
                 }
             }
         }
         playgroundBar.addView(mergeBtn)
-        // Témoin de mode (🚢 CAPTURE / 🔦 EDIT / ⏳ TEMPOREL)
         val modeIndicatorBtn = TextView(this).apply {
-            text = "🚢"
-            textSize = 28f
-            setTextColor(Color.WHITE)
+            text = "🚢"; textSize = 28f; setTextColor(Color.WHITE)
             setPadding(dp(16), dp(12), dp(16), dp(12))
-            setBackgroundColor(Color.argb(180, 60, 60, 60))
-            gravity = Gravity.CENTER
+            setBackgroundColor(Color.argb(180, 60, 60, 60)); gravity = Gravity.CENTER
         }
         playgroundBar.addView(modeIndicatorBtn)
         root.addView(playgroundBar)
 
-        // ── Zone d'essai (CaptureView réelle avec TouchHelper) ───────
-        val cv = CaptureView(this).apply {
-            isBlocnoteMode = true
-            onWordGroupCompleted = null
-        }
+        val cv = CaptureView(this).apply { isBlocnoteMode = true; onWordGroupCompleted = null }
         testView = cv
         cv.onModeChanged = { mode ->
             modeIndicatorBtn.text = when {
@@ -259,50 +225,37 @@ class CalibrationActivity : Activity() {
                 else -> "🚢"
             }
         }
-        root.addView(cv, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
-        ))
-
-        setContentView(root)
+        root.addView(cv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        setContentView(scroll)
     }
 
-    override fun onResume() {
-        super.onResume()
-        testView?.initTouchHelper()
-    }
+    override fun onResume() { super.onResume(); testView?.initTouchHelper() }
+    override fun onDestroy() { testView?.releaseTouchHelper(); testView = null; super.onDestroy() }
 
-    override fun onDestroy() {
-        testView?.releaseTouchHelper()
-        testView = null
-        super.onDestroy()
+    private fun sectionHeader(title: String): TextView = TextView(this).apply {
+        text = title; setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        setTextColor(Color.argb(220, 40, 40, 40))
+        setPadding(0, dp(16), 0, dp(4))
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
     }
 
     private fun addSlider(parent: LinearLayout, name: String, min: Int, max: Int, current: Int, unit: String): TextView {
         val label = TextView(this).apply {
             text = "$name : $current $unit"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            setPadding(0, dp(8), 0, dp(2))
-            setTextColor(Color.DKGRAY)
+            setPadding(0, dp(8), 0, dp(2)); setTextColor(Color.DKGRAY)
         }
         parent.addView(label)
-        val seek = SeekBar(this).apply {
-            this.max = max - min
-            this.progress = current - min
-            setPadding(0, 0, 0, dp(12))
-        }
-        parent.addView(seek)
+        parent.addView(SeekBar(this).apply { this.max = max - min; this.progress = current - min; setPadding(0, 0, 0, dp(12)) })
         return label
     }
 
-    private fun simpleListener(onProgress: (Int) -> Unit): SeekBar.OnSeekBarChangeListener {
-        return object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sk: SeekBar, v: Int, fromUser: Boolean) {
-                if (fromUser) onProgress(v)
-            }
+    private fun simpleListener(onProgress: (Int) -> Unit): SeekBar.OnSeekBarChangeListener =
+        object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sk: SeekBar, v: Int, fromUser: Boolean) { if (fromUser) onProgress(v) }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         }
-    }
 
     private fun save() {
         prefs(this).edit()
