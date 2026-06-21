@@ -1989,6 +1989,7 @@ class CaptureView(context: Context) : View(context) {
                 if (wi < loadedGroups.size && loadedGroups[wi].isNotEmpty()) {
                     val firstIdx = loadedGroups[wi].first()
                     inferredGroups.add(firstIdx)
+                    groupStrokeCountAtInference[firstIdx] = loadedGroups[wi].size
                     if (transcription.isNotEmpty()) {
                         groupTranscriptions[firstIdx] = transcription
                     }
@@ -2140,12 +2141,16 @@ class CaptureView(context: Context) : View(context) {
     private val groupTimers = mutableMapOf<Int, java.util.concurrent.ScheduledFuture<*>>()
     // Groupes déjà inférés (identifié par l'index du premier stroke — stable)
     private val inferredGroups = mutableSetOf<Int>()
+    // Nombre de strokes du groupe au moment de l'inférence (pour détecter les modifications)
+    private val groupStrokeCountAtInference = mutableMapOf<Int, Int>()
+    // Timestamp de dernière modification du groupe (pour le délai d'inactivité)
+    private val groupLastModifiedMs = mutableMapOf<Int, Long>()
 
     private fun registerCompletedStroke() {
         val ds = drawingStroke ?: return
         strokeRegistry.add(ds)
 
-        Log.d(TAG, "Stroke #${strokeRegistry.size}: ${ds.activePoints} pts")
+        Log.i(TAG, "Stroke #${strokeRegistry.size}: ${ds.activePoints} pts — registerCompletedStroke")
         drawingStroke = null
 
         // ═══ GroupManager : convertir, mapper, injecter ═══
@@ -2169,21 +2174,53 @@ class CaptureView(context: Context) : View(context) {
         val groups = getSpatialGroups()
         val openIdx = groups.size - 1
         val inferDelay = CalibrationActivity.getAutoInferDelay(context)
+        Log.i(TAG, "⏱️ Timers: ${groups.size} groupes, openIdx=$openIdx, inferredGroups=${inferredGroups.size}")
 
         for ((gi, group) in groups.withIndex()) {
             if (group.isEmpty()) continue
             val firstIdx = group.first()
             val isOpen = (gi == openIdx)
+            val now = System.currentTimeMillis()
 
-            // Groupe ouvert modifié → retirer de inferredGroups pour ré-inférence
-            if (isOpen) {
+            // Mettre à jour le timestamp de dernière modification
+            val prevMod = groupLastModifiedMs[firstIdx] ?: 0L
+            groupLastModifiedMs[firstIdx] = now
+
+            // Groupe déjà inféré et non modifié → skip
+            val infStrokeCount = groupStrokeCountAtInference[firstIdx]
+            if (firstIdx in inferredGroups && infStrokeCount != null && group.size == infStrokeCount) {
+                groupTimers.remove(firstIdx)?.cancel(false)
+                Log.d(TAG, "⏭️ G$gi ($firstIdx) déjà inféré (${group.size}s = $infStrokeCount) → skip")
+                continue
+            }
+            
+            // Groupe modifié (taille changée) → retirer de inferredGroups
+            if (firstIdx in inferredGroups) {
                 inferredGroups.remove(firstIdx)
+                Log.i(TAG, "🔄 G$gi ($firstIdx) modifié (${group.size}s ≠ $infStrokeCount) → ré-inférence")
             }
 
-            // Groupe déjà inféré et non modifié → juste nettoyer le timer
-            if (firstIdx in inferredGroups) {
-                groupTimers.remove(firstIdx)?.cancel(false)
-                continue
+            // Groupe ouvert : ne pas ré-inferer immédiatement — attendre 800ms d'inactivité
+            // depuis la dernière modification (le timer se réarme à chaque stroke)
+            // Groupe fermé : inferer après le délai standard
+            if (isOpen) {
+                if (prevMod == 0L) {
+                    // Premier stroke du groupe → pas encore d'historique, ne pas armer de timer
+                    Log.d(TAG, "⏳ G$gi ($firstIdx) premier stroke → on attend le suivant")
+                    continue
+                }
+                // Vérifier si le délai d'inactivité est déjà écoulé
+                val elapsed = now - prevMod
+                if (elapsed < inferDelay) {
+                    // Pas encore assez d'inactivité → annuler l'ancien ET réarmer un nouveau timer
+                    groupTimers.remove(firstIdx)?.cancel(false)
+                    val timer = inferExecutor.schedule({
+                        armGroupInference(firstIdx)
+                    }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    groupTimers[firstIdx] = timer
+                    Log.d(TAG, "⏳ G$gi ($firstIdx) ouvert — ${elapsed}ms/${inferDelay}ms → timer réarmé ${inferDelay}ms")
+                    continue
+                }
             }
 
             // Démarrer ou réarmer le timer pour ce groupe
@@ -2194,9 +2231,9 @@ class CaptureView(context: Context) : View(context) {
             groupTimers[firstIdx] = timer
 
             if (isOpen) {
-                Log.d(TAG, "⏱️ Groupe ouvert G$gi ($firstIdx) → timer ${inferDelay}ms")
+                Log.i(TAG, "⏱️ Groupe ouvert G$gi ($firstIdx) → timer ${inferDelay}ms")
             } else {
-                Log.d(TAG, "📦 Groupe fermé G$gi ($firstIdx) → timer ${inferDelay}ms indépendant")
+                Log.i(TAG, "📦 Groupe fermé G$gi ($firstIdx) → timer ${inferDelay}ms indépendant")
             }
         }
     }
@@ -2217,6 +2254,8 @@ class CaptureView(context: Context) : View(context) {
         mapSpatialGroupToSeq(group, seq)
         onWordGroupCompleted?.invoke(snapshot, group, seq)
         inferredGroups.add(firstIdx)
+        groupStrokeCountAtInference[firstIdx] = group.size
+        groupLastModifiedMs[firstIdx] = System.currentTimeMillis()
         groupTimers.remove(firstIdx)
     }
 
@@ -3560,6 +3599,8 @@ class CaptureView(context: Context) : View(context) {
         // ═══ Mode écriture live ═══
         invalidateSpatialCache()
         inferredGroups.clear()
+        groupStrokeCountAtInference.clear()
+        groupLastModifiedMs.clear()
         groupTranscriptions.clear()
         // Nettoyer les timers par groupe
         groupTimers.values.forEach { it.cancel(false) }

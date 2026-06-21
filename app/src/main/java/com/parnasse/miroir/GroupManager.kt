@@ -62,22 +62,18 @@ class GroupManager(
             Log.i(TAG, "Absorption SELECTED " + selected.id + " (stroke proche)")
             selected
         } else {
-            // ═══ 2. Blob contre TOUS les groupes LOADED (pas seulement SELECTED) ═══
-            var found: InkGroup? = null
-            for ((id, g) in groups) {
-                if (g.state != GroupState.LOADED) continue
-                if (g.id == selected?.id) continue  // déjà testé
-                val expanded = RectF(g.bounds)
+            // ═══ 2. Blob contre le groupe ACTIF (celui qui reçoit les strokes en cours) ═══
+            // Ne pas tester TOUS les LOADED — sinon les strokes du mot 2 sont absorbés par le mot 1.
+            val activeId = machine.activeGroupId
+            val active = if (activeId != null && activeId != selected?.id) groups[activeId] else null
+            val nearActive = active != null && active.state == GroupState.LOADED && run {
+                val expanded = RectF(active.bounds)
                 expanded.inset(-params.spatialDistancePx, -params.spatialDistanceY)
-                if (RectF.intersects(expanded, strokeBounds) && isStrokeNearGroup(stroke, g)) {
-                    found = g
-                    Log.i(TAG, "Absorption LOADED " + g.id + " (stroke proche)")
-                    break
-                }
+                RectF.intersects(expanded, strokeBounds)
             }
-            if (found != null) {
-                // Absorbé par un groupe LOADED — le SELECTED reste SELECTED
-                found
+            if (nearActive && isStrokeNearGroup(stroke, active!!)) {
+                Log.i(TAG, "Absorption ACTIVE " + active.id + " (stroke proche)")
+                active
             } else {
                 // ═══ 3. Aucun blob ne touche → nouveau groupe ═══
                 if (selected != null) {
