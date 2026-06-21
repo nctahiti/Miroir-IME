@@ -134,16 +134,14 @@ class MiroirIME : InputMethodService() {
         recognizer?.load()
 
         // GroupManager — groupement spatial par blob
-        // ⚠️ Désactiver le timer GroupManager (comme CaptureView)
-        // L'inférence est déclenchée par inactivité stylet globale, pas par groupe.
+        // Timer GroupManager → STORED → callback → file d'attente → inférence après inactivité
         groupManager = GroupManager({ group ->
             val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
             if (indices.isEmpty()) return@GroupManager
             Log.i(TAG, "Groupe complet: ${group.id} (${indices.size} strokes)")
-            // Différer la reconnaissance — attendre inactivité stylet
             scheduleInferenceForGroup(indices)
         }).also {
-            it.params = it.params.copy(transcriptionTimeoutMs = Long.MAX_VALUE) // désactivé
+            it.params = it.params.copy(transcriptionTimeoutMs = 3000L)  // 3s sans stroke → groupe fermé
             it.pointProvider = { strokeId ->
                 inkStrokeIdToRegistryIndex[strokeId]
                     ?.let { idx -> strokeRegistry.getOrNull(idx)?.points }
