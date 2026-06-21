@@ -95,8 +95,8 @@ class MiroirIME : InputMethodService() {
 
     // ── Ancrage des groupes ───────────────────────────────────────────
     // anchor = premier point du premier stroke du groupe.
-    // Une fois fixé, le mot ne bouge que par déplacement, pas par recalcul.
-    private val groupAnchor = mutableMapOf<String, Pair<Float, Float>>()  // groupId → (x, y)
+    // Clé = firstIdx (même que groupLabels), pas groupId.
+    private val groupAnchor = mutableMapOf<Int, Pair<Float, Float>>()  // firstIdx → (x, y)
 
     private var currentPageIndex = 0
     private val pagesDir by lazy { java.io.File(cacheDir, "ime-pages").also { it.mkdirs() } }
@@ -819,11 +819,11 @@ class MiroirIME : InputMethodService() {
             groupLastModifiedMs[firstIdx] = now  // marquer la modification
             groupTimers.remove(firstIdx)?.cancel(false)
             // Ancrer le groupe si nouveau (premier timer)
-            if (groupAnchor[group.id] == null) {
+            if (groupAnchor[firstIdx] == null) {
                 val sid = group.strokeIds.firstOrNull()
                 val idx = sid?.let { inkStrokeIdToRegistryIndex[it] }
                 val sr = idx?.let { strokeRegistry.getOrNull(it) }
-                sr?.points?.firstOrNull()?.let { groupAnchor[group.id] = it }
+                sr?.points?.firstOrNull()?.let { groupAnchor[firstIdx] = it }
             }
             timerArmedAt[firstIdx] = now
             timerArmedStrokeCount[firstIdx] = strokeCount
@@ -873,7 +873,7 @@ class MiroirIME : InputMethodService() {
 
         inferenceQueue.add(indices)
         cachedGMCacheSize = -1
-        Log.i(TAG, "🔥 Timer TIRÉ firstIdx=$firstIdx → inférence groupe ${group.id} (${indices.size} strokes)")
+        Log.i(TAG, "TIMER FIRED firstIdx=$firstIdx -> inference group ${group.id} (${indices.size} strokes)")
         Log.i(TAG, "Groupe à inférer: ${group.id} (${indices.size} strokes)")
         startInferencePipeline()
     }
@@ -916,6 +916,7 @@ class MiroirIME : InputMethodService() {
                 uiHandler.post {
                     val firstIdx = indices.firstOrNull() ?: return@post
                     groupLabels[firstIdx] = result
+                    Log.i(TAG, "LABEL set: firstIdx=$firstIdx -> '$result' (${groupLabels.size} labels total)")
                     cachedGMCacheSize = -1
                     // Calculer et cacher le blob pour ce groupe
                     val gm = groupManager ?: return@post
@@ -1035,18 +1036,15 @@ class MiroirIME : InputMethodService() {
     /** Dessine les labels à leur position d'ancre (premier point du premier stroke). */
     private fun drawGroupLabels(canvas: Canvas) {
         if (groupLabels.isEmpty()) return
+        var drawn = 0
         for ((firstIdx, label) in groupLabels) {
-            // Trouver le groupId de ce firstIdx
-            val gm = groupManager ?: continue
-            val groupId = gm.allGroups().firstOrNull { g ->
-                val sid = g.strokeIds.firstOrNull() ?: return@firstOrNull false
-                inkStrokeIdToRegistryIndex[sid] == firstIdx
-            }?.id ?: continue
-            val anchor = groupAnchor[groupId] ?: continue
-            // 30px avant le premier point, sous l'interligne
+            val anchor = groupAnchor[firstIdx]
+            if (anchor == null) { Log.d(TAG, "LABEL skip firstIdx=$firstIdx: anchor null"); continue }
             val x = anchor.first - 30f
             val y = snapToLine(anchor.second) + labelPaint.textSize + 2f
             canvas.drawText(label, x, y, labelPaint)
+            drawn++
         }
+        if (drawn < groupLabels.size) Log.d(TAG, "LABEL drawn: $drawn/${groupLabels.size}")
     }
 }
