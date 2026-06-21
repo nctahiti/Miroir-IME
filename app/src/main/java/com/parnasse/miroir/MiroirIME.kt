@@ -286,7 +286,11 @@ class MiroirIME : InputMethodService() {
             if (isStroke) {
                 EpdController.handwritingRepaint(v, left, top, right, bottom)
             } else {
-                EpdController.invalidate(v, UpdateMode.DU)
+                // ═══ refreshScreen(GU) pour les overlays ═══
+                // handwritingRepaint ignore drawText. invalidate() est parfois no-op.
+                // refreshScreen avec GU fait un rafraîchissement complet ponctuel,
+                // sans changer le mode par défaut (DU reste actif pour le tracé).
+                EpdController.refreshScreen(v, UpdateMode.GU)
             }
         } catch (e: Exception) {
             Log.w(TAG, "refreshRect: EpdController error: ${e.message}")
@@ -299,7 +303,7 @@ class MiroirIME : InputMethodService() {
         Log.d(TAG, "refreshAll: view=${v.width}x${v.height}")
         v.postInvalidate()
         try {
-            EpdController.invalidate(v, UpdateMode.DU)
+            EpdController.refreshScreen(v, UpdateMode.GU)
         } catch (e: Exception) {
             Log.w(TAG, "refreshAll: EpdController error: ${e.message}")
         }
