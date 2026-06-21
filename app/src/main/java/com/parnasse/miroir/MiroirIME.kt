@@ -96,6 +96,144 @@ class MiroirIME : InputMethodService() {
     private var cachedSpatialBounds: List<android.graphics.RectF>? = null
     private var cachedGMCacheSize: Int = -1
 
+    // ── Pages ─────────────────────────────────────────────────────────
+    private var currentPageIndex = 0
+    private val pagesDir by lazy { java.io.File(cacheDir, "ime-pages").also { it.mkdirs() } }
+
+    /** Sauvegarde la page active et en crée une nouvelle. */
+    private fun newPage() {
+        savePage()
+        currentPageIndex++
+        clearPage()
+        Log.i(TAG, "Nouvelle page: $currentPageIndex")
+    }
+
+    /** Efface la page active (sans sauvegarde). */
+    private fun clearPage() {
+        strokeRegistry.clear()
+        groupLabels.clear()
+        inkStrokeIdToRegistryIndex.clear()
+        inkStrokeIdCounter = 0L
+        groupManager?.clearAll()
+        clearCanvas()
+        inferredGroupFirstIdxs.clear()
+        groupStrokeCountAtInference.clear()
+        groupLastModifiedMs.clear()
+        groupTimers.values.forEach { it.cancel(false) }
+        groupTimers.clear()
+        timerArmedAt.clear()
+        timerArmedStrokeCount.clear()
+        cachedGMCacheSize = -1
+        cachedBlobOvals.clear()
+        cachedSpatialGroups = null
+        cachedSpatialBounds = null
+    }
+
+    /** Sauvegarde la page active sur disque (bitmap + strokes + labels). */
+    private fun savePage() {
+        try {
+            val dir = java.io.File(pagesDir, "page_$currentPageIndex")
+            dir.mkdirs()
+            // Bitmap
+            bitmap?.let {
+                java.io.FileOutputStream(java.io.File(dir, "bitmap.png")).use { out ->
+                    it.compress(Bitmap.CompressFormat.PNG, 90, out)
+                }
+            }
+            // Strokes + labels (JSON simple)
+            val json = org.json.JSONObject()
+            json.put("inkIdCounter", inkStrokeIdCounter)
+            // strokeRegistry : liste de [points, timestamps, pressures]
+            val strokesArr = org.json.JSONArray()
+            for (sr in strokeRegistry) {
+                val obj = org.json.JSONObject()
+                obj.put("id", sr.id)
+                val ptsArr = org.json.JSONArray()
+                for ((x, y) in sr.points) {
+                    val pt = org.json.JSONArray(); pt.put(x.toDouble()); pt.put(y.toDouble()); ptsArr.put(pt)
+                }
+                obj.put("points", ptsArr)
+                strokesArr.put(obj)
+            }
+            json.put("strokes", strokesArr)
+            // Labels: firstIdx → text
+            val labelsObj = org.json.JSONObject()
+            for ((k, v) in groupLabels) labelsObj.put(k.toString(), v)
+            json.put("labels", labelsObj)
+            java.io.FileWriter(java.io.File(dir, "state.json")).use { it.write(json.toString()) }
+            // Copier la persistance GroupManager
+            val gmFile = java.io.File(cacheDir, "ime-groups/current.groups")
+            if (gmFile.exists()) {
+                gmFile.copyTo(java.io.File(dir, "groups.json"), overwrite = true)
+            }
+            Log.d(TAG, "Page $currentPageIndex sauvegardée: ${strokeRegistry.size} strokes")
+        } catch (e: Exception) {
+            Log.w(TAG, "Erreur sauvegarde page: ${e.message}")
+        }
+    }
+
+    /** Charge une page depuis le disque. */
+    private fun loadPage(index: Int): Boolean {
+        try {
+            val dir = java.io.File(pagesDir, "page_$index")
+            if (!dir.exists()) return false
+            // Bitmap
+            val bmpFile = java.io.File(dir, "bitmap.png")
+            if (bmpFile.exists()) {
+                val loaded = android.graphics.BitmapFactory.decodeFile(bmpFile.absolutePath)
+                if (loaded != null) {
+                    bitmap?.recycle()
+                    bitmap = loaded.copy(Bitmap.Config.ARGB_8888, true)
+                    bitmapCanvas = Canvas(bitmap!!)
+                }
+            }
+            // State JSON
+            val stateFile = java.io.File(dir, "state.json")
+            if (stateFile.exists()) {
+                val json = org.json.JSONObject(stateFile.readText())
+                inkStrokeIdCounter = json.optLong("inkIdCounter", 0L)
+                // Strokes
+                val strokesArr = json.optJSONArray("strokes")
+                strokeRegistry.clear()
+                if (strokesArr != null) {
+                    for (i in 0 until strokesArr.length()) {
+                        val obj = strokesArr.optJSONObject(i) ?: continue
+                        val sr = StrokeRecord(id = obj.optString("id", ""))
+                        val ptsArr = obj.optJSONArray("points")
+                        if (ptsArr != null) {
+                            for (j in 0 until ptsArr.length()) {
+                                val pt = ptsArr.optJSONArray(j) ?: continue
+                                sr.points.add(Pair(pt.optDouble(0).toFloat(), pt.optDouble(1).toFloat()))
+                            }
+                        }
+                        if (sr.points.isNotEmpty()) strokeRegistry.add(sr)
+                    }
+                }
+                // Labels
+                val labelsObj = json.optJSONObject("labels")
+                groupLabels.clear()
+                if (labelsObj != null) {
+                    for (key in labelsObj.keys()) {
+                        groupLabels[key.toInt()] = labelsObj.optString(key, "")
+                    }
+                }
+            }
+            // GroupManager: charger depuis persistance spécifique à la page
+            val pageGroupsFile = java.io.File(dir, "groups.json")
+            if (pageGroupsFile.exists()) {
+                groupManager?.persistence = GroupPersistence(pageGroupsFile)
+                cachedGMCacheSize = -1
+            }
+            currentPageIndex = index
+            rebuildBitmap()
+            Log.i(TAG, "Page $index chargée: ${strokeRegistry.size} strokes, ${groupLabels.size} labels")
+            return true
+        } catch (e: Exception) {
+            Log.w(TAG, "Erreur chargement page $index: ${e.message}")
+            return false
+        }
+    }
+
     // ── Blob ───────────────────────────────────────────────────────────
     private val blobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFA0A0A0.toInt()  // gris opaque, visible e-ink
@@ -216,6 +354,7 @@ class MiroirIME : InputMethodService() {
         }
 
         toolbar.addView(makeButton("✓") {
+            savePage()
             val ic = currentInputConnection
             if (ic != null) ic.commitText("\n", 1)
             requestHideSelf(0)
@@ -230,6 +369,16 @@ class MiroirIME : InputMethodService() {
 
         toolbar.addView(makeButton("👁") {
             showOverlays = !showOverlays
+            refreshAll()
+        })
+
+        toolbar.addView(makeButton("+") {
+            newPage()
+            refreshAll()
+        })
+
+        toolbar.addView(makeButton("✕") {
+            clearPage()
             refreshAll()
         })
 
