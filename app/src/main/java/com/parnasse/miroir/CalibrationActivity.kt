@@ -28,11 +28,13 @@ class CalibrationActivity : Activity() {
         private const val KEY_SPATIAL_DISTANCE_Y = "spatial_distance_y_px"
         private const val KEY_AUTO_INFER_DELAY = "auto_infer_delay_ms"
         private const val KEY_LONG_HOVER_DELAY = "long_hover_delay_ms"
+        private const val KEY_REFRESH_INTERVAL = "refresh_interval_ms"
 
         const val DEFAULT_SPATIAL_DISTANCE_X = 40f
         const val DEFAULT_SPATIAL_DISTANCE_Y = 70f
         const val DEFAULT_AUTO_INFER_DELAY = 1500L
         const val DEFAULT_LONG_HOVER_DELAY = 1000L
+        const val DEFAULT_REFRESH_INTERVAL = 16L  // ~60fps
 
         fun prefs(ctx: Context): SharedPreferences =
             ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -48,6 +50,9 @@ class CalibrationActivity : Activity() {
 
         fun getLongHoverDelay(ctx: Context): Long =
             prefs(ctx).getLong(KEY_LONG_HOVER_DELAY, DEFAULT_LONG_HOVER_DELAY)
+
+        fun getRefreshInterval(ctx: Context): Long =
+            prefs(ctx).getLong(KEY_REFRESH_INTERVAL, DEFAULT_REFRESH_INTERVAL)
 
         // ── Stubs pour compatibilité CaptureView ──
         fun getTemporalDistance(ctx: Context): Long = 800L
@@ -118,6 +123,15 @@ class CalibrationActivity : Activity() {
             prefs(this).edit().putLong(KEY_LONG_HOVER_DELAY, (v + 500).toLong()).apply()
         })
 
+        // Fréquence de rafraîchissement
+        val currentRefresh = p.getLong(KEY_REFRESH_INTERVAL, DEFAULT_REFRESH_INTERVAL)
+        val refreshLabel = addSlider(root, "Rafraîchissement stylet", 8, 50, currentRefresh.toInt(), "ms")
+        val refreshSeek = root.getChildAt(root.childCount - 1) as SeekBar
+        refreshSeek.setOnSeekBarChangeListener(simpleListener { v ->
+            refreshLabel.text = "Rafraîchissement stylet : ${v + 8} ms"
+            prefs(this).edit().putLong(KEY_REFRESH_INTERVAL, (v + 8).toLong()).apply()
+        })
+
         // ── Boutons ────────────────────────────────────────────────────
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -131,6 +145,7 @@ class CalibrationActivity : Activity() {
                 spatialYSeek.progress = DEFAULT_SPATIAL_DISTANCE_Y.toInt() - 5
                 delaySeek.progress = DEFAULT_AUTO_INFER_DELAY.toInt() - 500
                 hoverSeek.progress = (DEFAULT_LONG_HOVER_DELAY.toInt() - 500).coerceAtLeast(0)
+                refreshSeek.progress = (DEFAULT_REFRESH_INTERVAL.toInt() - 8).coerceAtLeast(0)
                 save()
             }
         })

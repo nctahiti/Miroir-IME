@@ -560,9 +560,10 @@ class MiroirIME : InputMethodService() {
             stroke.timestamps.add(System.currentTimeMillis())
             stroke.pressures.add(pressure.coerceIn(0f, 1f))
         }
-        // Rafraîchir pendant le glissé (throttlé 16ms = ~60fps max)
+        // Rafraîchir pendant le glissé (fréquence paramétrable via calibration)
+        val interval = CalibrationActivity.getRefreshInterval(this@MiroirIME)
         val now = System.currentTimeMillis()
-        if (now - lastPointRefresh >= 16) {
+        if (now - lastPointRefresh >= interval) {
             lastPointRefresh = now
             val r = 10
             refreshRect(x.toInt() - r, y.toInt() - r, x.toInt() + r, y.toInt() + r)
