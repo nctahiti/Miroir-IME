@@ -306,11 +306,13 @@ class MiroirIME : InputMethodService() {
             // ⚠️ Callback vide — l'inférence est déclenchée par inactivité stylet.
             // Les groupes restent LOADED → absorption toujours active (comme Miroir).
         }).also {
+            // ═══ DÉSACTIVER le timer interne de GroupManager AVANT toute création de groupe ═══
+            it.params = it.params.copy(transcriptionTimeoutMs = Long.MAX_VALUE)
             it.pointProvider = { strokeId ->
                 inkStrokeIdToRegistryIndex[strokeId]
-                    ?.let { idx -> strokeRegistry.getOrNull(idx)?.points }
+                    ?.let { strokeRegistry.getOrNull(it)?.points ?: emptyList() }
+                    ?: emptyList()
             }
-            // ═══ Persistance en mémoire (fichier temporaire) ═══
             val tmpDir = java.io.File(cacheDir, "ime-groups")
             tmpDir.mkdirs()
             it.persistence = GroupPersistence(java.io.File(tmpDir, "current.groups"))
@@ -453,8 +455,7 @@ class MiroirIME : InputMethodService() {
         val calY = CalibrationActivity.getSpatialDistanceY(this)
         gm.params = gm.params.copy(
             spatialDistancePx = calX,
-            spatialDistanceY = calY,
-            transcriptionTimeoutMs = Long.MAX_VALUE  // jamais fermer — comme le Miroir
+            spatialDistanceY = calY
         )
         Log.d(TAG, "Params calibration: blobRx=$calX blobRy=$calY")
     }
@@ -805,6 +806,8 @@ class MiroirIME : InputMethodService() {
         val now = System.currentTimeMillis()
 
         val loadedGroups = gm.groupsInState(GroupState.LOADED) + gm.groupsInState(GroupState.SELECTED)
+        var armed = 0; var skipped = 0
+        Log.d(TAG, "SCHEDULE: ${loadedGroups.size} groupes LOADED/SELECTED (total=${gm.allGroups().size} allGroups)")
         for (group in loadedGroups) {
             if (group.strokeIds.isEmpty()) continue
             val firstIdx = inkStrokeIdToRegistryIndex[group.strokeIds.first()] ?: continue
@@ -822,8 +825,9 @@ class MiroirIME : InputMethodService() {
             // Le timer ne tire qu'après inferDelay d'inactivité DANS CE GROUPE.
             val hadTimer = groupTimers.containsKey(firstIdx)
             val countChanged = timerArmedStrokeCount[firstIdx] != strokeCount
-            if (hadTimer && !countChanged) continue  // groupe inchangé → ne pas réarmer
-            groupLastModifiedMs[firstIdx] = now  // marquer la modification
+            if (hadTimer && !countChanged) { skipped++; continue }  // groupe inchangé
+            armed++
+            groupLastModifiedMs[firstIdx] = now
             groupTimers.remove(firstIdx)?.cancel(false)
             // Ancrer le groupe si nouveau (premier timer)
             if (groupAnchor[firstIdx] == null) {
@@ -838,24 +842,25 @@ class MiroirIME : InputMethodService() {
                 armGroupInference(firstIdx)
             }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
             groupTimers[firstIdx] = timer
-            Log.d(TAG, "⏱️ Timer armé firstIdx=$firstIdx → ${inferDelay}ms (${strokeCount}s)")
+            Log.d(TAG, "TIMER ARM firstIdx=$firstIdx → ${inferDelay}ms (${strokeCount}s)")
         }
+        if (armed > 0 || skipped > 0) Log.d(TAG, "SCHEDULE: ${loadedGroups.size} groupes, $armed armés, $skipped skip")
     }
 
     /** Appelé par le timer — vérifie que le stylet n'est pas en train d'écrire. */
     private fun armGroupInference(firstIdx: Int) {
+        Log.d(TAG, "TIMER CHECK firstIdx=$firstIdx isStylusDown=$isStylusDown timerExists=${groupTimers.containsKey(firstIdx)}")
         // ═══ Ne pas inférer si le stylet est encore posé (écriture en cours) ═══
         if (isStylusDown) {
-            // Libérer l'entrée pour que scheduleGroupInference puisse réarmer
             groupTimers.remove(firstIdx)
-            Log.d(TAG, "⏭️ Timer reporté firstIdx=$firstIdx — stylet encore posé, sera réarmé")
+            Log.d(TAG, "TIMER DEFERRED firstIdx=$firstIdx — stylet posé")
             return
         }
         // ═══ Garde-fou : groupe modifié depuis l'armement du timer → ignorer ═══
-        val armedAt = timerArmedAt[firstIdx] ?: return
-        val lastMod = groupLastModifiedMs[firstIdx] ?: return
+        val armedAt = timerArmedAt[firstIdx] ?: run { Log.w(TAG, "TIMER FAIL firstIdx=$firstIdx: armedAt null"); return }
+        val lastMod = groupLastModifiedMs[firstIdx] ?: run { Log.w(TAG, "TIMER FAIL firstIdx=$firstIdx: lastMod null"); return }
         if (lastMod > armedAt) {
-            Log.d(TAG, "⏭️ Timer ignoré firstIdx=$firstIdx — modifié (armed=${armedAt}ms, lastMod=${lastMod}ms)")
+            Log.d(TAG, "TIMER SKIP firstIdx=$firstIdx — modifié (armed=$armedAt, lastMod=$lastMod)")
             return
         }
         if (firstIdx in inferredGroupFirstIdxs) return
