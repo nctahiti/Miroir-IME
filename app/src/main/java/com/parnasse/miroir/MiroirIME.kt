@@ -23,11 +23,9 @@ import java.util.UUID
  * InputMethodService qui capture l'écriture au stylet, la reconnaît via
  * ML Kit Digital Ink, et injecte le texte dans le champ cible.
  *
- * Phase 1 (squelette) : capture → reconnaissance → commit.
- * Pas de persistance, pas de groupement — le minimum vivant.
- *
  * Architecture :
- *   TouchHelper (Onyx) → forward MotionEvent → onTouchEvent → strokes → ML Kit → commit
+ *   TouchHelper (Onyx) → forward MotionEvent → onTouchEvent → strokes
+ *   → GroupManager (blob elliptique) → groupes → ML Kit → labels + commit
  */
 class MiroirIME : InputMethodService() {
 
@@ -52,9 +50,6 @@ class MiroirIME : InputMethodService() {
 
     // ── TouchHelper Onyx ───────────────────────────────────────────────
     private var touchHelper: TouchHelper? = null
-    private var useTouchHelper = false
-    private var touchHelperAttempted = false
-    private var touchHelperLastEvent = 0L
 
     // ── Reconnaissance ML Kit ──────────────────────────────────────────
     private var recognizer: DigitalInkWrapper? = null
@@ -67,8 +62,6 @@ class MiroirIME : InputMethodService() {
             priority = Thread.NORM_PRIORITY - 1
         }
     }
-    private var pendingRecognition = false
-    private var accumulatedText = ""  // texte déjà commité
 
     // ── GroupManager — groupement spatial par blob ─────────────────────
     private var groupManager: GroupManager? = null
@@ -116,7 +109,7 @@ class MiroirIME : InputMethodService() {
             if (indices.isEmpty()) return@GroupManager
             Log.i(TAG, "Groupe STORED: ${group.id} (${indices.size} strokes)")
             inferExecutor.submit {
-                recognizeGroup(indices, group.strokeIds.firstOrNull() ?: 0L)
+                recognizeGroup(indices)
             }
         }).also {
             it.pointProvider = { strokeId ->
@@ -164,8 +157,6 @@ class MiroirIME : InputMethodService() {
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         Log.i(TAG, "onStartInputView — champ: ${info?.fieldName ?: "inconnu"}")
-        // Nouveau champ : réinitialiser le texte accumulé
-        accumulatedText = ""
         clearCanvas()
     }
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -208,11 +199,6 @@ class MiroirIME : InputMethodService() {
             canvas.drawPath(currentPath, strokePaint)
         }
         override fun onTouchEvent(event: MotionEvent): Boolean {
-            // TouchHelper forward les événements stylet ici (quand setPostInputEvent=true)
-            if (!useTouchHelper && touchHelperAttempted) {
-                // TouchHelper a échoué, traiter directement
-            }
-
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     onStylusDown(event.x, event.y)
@@ -245,18 +231,10 @@ class MiroirIME : InputMethodService() {
         try {
             touchHelper = TouchHelper.create(target, TouchHelper.FEATURE_APP_TOUCH_RENDER,
                 object : RawInputCallback() {
-                    override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
-                        touchHelperLastEvent = System.currentTimeMillis()
-                    }
-                    override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {
-                        touchHelperLastEvent = System.currentTimeMillis()
-                    }
-                    override fun onRawDrawingTouchPointListReceived(list: TouchPointList?) {
-                        if (list != null) touchHelperLastEvent = System.currentTimeMillis()
-                    }
-                    override fun onEndRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
-                        touchHelperLastEvent = System.currentTimeMillis()
-                    }
+                    override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {}
+                    override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {}
+                    override fun onRawDrawingTouchPointListReceived(list: TouchPointList?) {}
+                    override fun onEndRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {}
                     override fun onBeginRawErasing(p0: Boolean, p1: OnyxTouchPoint) {}
                     override fun onEndRawErasing(p0: Boolean, p1: OnyxTouchPoint) {}
                     override fun onRawErasingTouchPointMoveReceived(p0: OnyxTouchPoint) {}
@@ -268,10 +246,7 @@ class MiroirIME : InputMethodService() {
             touchHelper!!.setRawDrawingEnabled(true)
             touchHelper!!.openRawDrawing()
             touchHelper!!.setPostInputEvent(true)  // forward vers onTouchEvent
-            useTouchHelper = (touchHelper != null)
-            touchHelperAttempted = true
-            touchHelperLastEvent = System.currentTimeMillis()
-            Log.i(TAG, "TouchHelper actif (useTouchHelper=$useTouchHelper)")
+            Log.i(TAG, "TouchHelper actif")
 
             // Mode écriture EPD
             try {
@@ -283,9 +258,7 @@ class MiroirIME : InputMethodService() {
                 Log.w(TAG, "EPD handwriting mode indisponible: ${e.message}")
             }
         } catch (e: Exception) {
-            useTouchHelper = false
             touchHelper = null
-            touchHelperAttempted = true
             Log.w(TAG, "TouchHelper indisponible: ${e.message} — fallback onTouchEvent")
         }
     }
@@ -303,7 +276,6 @@ class MiroirIME : InputMethodService() {
             } catch (_: Exception) {}
         }
         touchHelper = null
-        useTouchHelper = false
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -393,7 +365,7 @@ class MiroirIME : InputMethodService() {
     /**
      * Reconnaît un groupe individuel (appelé depuis le thread background).
      */
-    private fun recognizeGroup(indices: List<Int>, firstStrokeId: Long) {
+    private fun recognizeGroup(indices: List<Int>) {
         val recognizer = recognizer ?: return
         if (!recognizer.isLoaded) return
 
@@ -403,10 +375,8 @@ class MiroirIME : InputMethodService() {
             if (!result.isNullOrBlank()) {
                 Log.i(TAG, "Reconnaissance groupe: \"$result\" (${indices.size} strokes)")
                 uiHandler.post {
-                    // Stocker le label
                     val firstIdx = indices.firstOrNull() ?: return@post
                     groupLabels[firstIdx] = result
-                    // Commit le nouveau texte
                     commitText(result)
                     imeView?.invalidate()
                 }
@@ -440,16 +410,8 @@ class MiroirIME : InputMethodService() {
     /** Dessine les labels de groupe sous leur emplacement spatial */
     private fun drawGroupLabels(canvas: Canvas) {
         if (groupLabels.isEmpty()) return
-        val gm = groupManager ?: return
-        val groups = gm.allGroups()
-        for (group in groups) {
-            val firstIdx = group.strokeIds.firstOrNull()
-                ?.let { inkStrokeIdToRegistryIndex[it] }
-                ?: continue
-            val label = groupLabels[firstIdx] ?: continue
-            // Calculer la position Y du label (sous le groupe)
-            val registryIdx = firstIdx
-            val sr = strokeRegistry.getOrNull(registryIdx) ?: continue
+        for ((firstIdx, label) in groupLabels) {
+            val sr = strokeRegistry.getOrNull(firstIdx) ?: continue
             if (sr.points.isEmpty()) continue
             // Centre Y du stroke + 30px
             var sumY = 0f
