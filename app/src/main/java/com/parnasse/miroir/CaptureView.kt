@@ -2143,6 +2143,9 @@ class CaptureView(context: Context) : View(context) {
         groupManager.onStrokeSealed(inkStroke)
         Log.d(TAG, "GroupManager: stroke #$inkStrokeId → ${groupManager.allGroups().size} groupes actifs")
 
+        // ═══ Invalider le cache spatial — les groupes ont changé (absorption ou nouveau) ═══
+        invalidateSpatialCache()
+
         // ═══ Nettoyer le cache : évincer les groupes STORED et les LOADED non-actifs ═══
         groupManager.evictInactive()
 
