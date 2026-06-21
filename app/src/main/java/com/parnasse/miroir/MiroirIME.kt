@@ -544,7 +544,6 @@ class MiroirIME : InputMethodService() {
             stroke.timestamps.add(System.currentTimeMillis())
             stroke.pressures.add(1.0f)
         }
-        throttledInvalidate()
     }
 
     private fun onStylusPoint(x: Float, y: Float, pressure: Float) {
@@ -554,7 +553,6 @@ class MiroirIME : InputMethodService() {
             stroke.timestamps.add(System.currentTimeMillis())
             stroke.pressures.add(pressure.coerceIn(0f, 1f))
         }
-        throttledInvalidate()
     }
 
     private fun onStylusUp() {
@@ -589,6 +587,22 @@ class MiroirIME : InputMethodService() {
 
         // Armer le timer d'inférence pour les groupes modifiés
         scheduleGroupInference()
+
+        // ═══ EPD : rafraîchir uniquement la zone modifiée ═══
+        val sr = stroke
+        if (sr.points.size >= 2) {
+            var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
+            var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
+            for ((x, y) in sr.points) {
+                if (x < minX) minX = x; if (x > maxX) maxX = x
+                if (y < minY) minY = y; if (y > maxY) maxY = y
+            }
+            try {
+                EpdController.handwritingRepaint(imeView!!,
+                    (minX - 10).toInt(), (minY - 10).toInt(),
+                    (maxX + 10).toInt(), (maxY + 10).toInt())
+            } catch (_: Exception) {}
+        }
 
         throttledInvalidate()
     }
@@ -820,20 +834,19 @@ class MiroirIME : InputMethodService() {
         if (groupLabels.isEmpty()) return
         val groups = getSpatialGroups()
         val bounds = getSpatialBounds()
-        var drawn = 0
+        // Index: firstIdx → position dans groups (évite la recherche linéaire)
+        val groupIndexByFirst = mutableMapOf<Int, Int>()
+        for ((gi, g) in groups.withIndex()) {
+            g.firstOrNull()?.let { groupIndexByFirst[it] = gi }
+        }
         for ((firstIdx, label) in groupLabels) {
-            val gi = groups.indexOfFirst { it.firstOrNull() == firstIdx }
-            if (gi < 0 || gi >= bounds.size) {
-                Log.d(TAG, "Label '$label' (firstIdx=$firstIdx) — groupe spatial introuvable parmi ${groups.size} groupes")
-                continue
-            }
+            val gi = groupIndexByFirst[firstIdx] ?: continue
+            if (gi >= bounds.size) continue
             val r = bounds[gi]
             if (r.left >= Float.MAX_VALUE) continue
             val lineY = snapToLine((r.top + r.bottom) / 2f)
             val y = lineY + labelPaint.textSize + 4f
             canvas.drawText(label, r.left, y, labelPaint)
-            drawn++
         }
-        if (drawn > 0) Log.d(TAG, "Labels dessinés: $drawn/${groupLabels.size}")
     }
 }
