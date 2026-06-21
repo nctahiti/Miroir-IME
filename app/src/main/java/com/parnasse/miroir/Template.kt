@@ -17,10 +17,10 @@ sealed class Template {
     /** Peinture pour les lignes de guide */
     companion object {
         val GUIDE_PAINT = Paint().apply {
-            color = Color.argb(160, 100, 100, 100) // gris soutenu, visible e-ink
-            strokeWidth = 1.5f
+            color = Color.BLACK  // noir pur — mode DU ne rend que le noir
+            strokeWidth = 2.0f   // légèrement plus épais pour compenser l'absence d'anti-aliasing
             style = Paint.Style.STROKE
-            isAntiAlias = true
+            isAntiAlias = false  // mode DU : pas de gris
         }
     }
 

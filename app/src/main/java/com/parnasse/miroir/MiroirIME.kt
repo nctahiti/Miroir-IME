@@ -91,12 +91,11 @@ class MiroirIME : InputMethodService() {
     // Map firstIdx → texte reconnu (labels)
     private val groupLabels = mutableMapOf<Int, String>()
     private val labelPaint = Paint().apply {
-        color = Color.BLACK  // noir pour visibilité e-ink
+        color = Color.BLACK  // noir pur pour mode DU
         textSize = 28f
-        isAntiAlias = true
+        isAntiAlias = false  // mode DU : pas de gris
         typeface = Typeface.DEFAULT_BOLD
-        // Fond blanc léger derrière le texte pour lisibilité
-        setShadowLayer(3f, 1f, 1f, Color.argb(200, 255, 255, 255))
+        // Pas d'ombre — mode DU ignore le gris/blanc semi-transparent
     }
     // ── Dessin ────────────────────────────────────────────────────────
     private var imeView: CaptureSurfaceView? = null
@@ -262,10 +261,11 @@ class MiroirIME : InputMethodService() {
     }
 
     // ── Blob ───────────────────────────────────────────────────────────
-    private val blobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val blobPaint = Paint().apply {
         color = Color.BLACK
         style = Paint.Style.STROKE  // contour seul — comme un booléen
         strokeWidth = 2.5f
+        isAntiAlias = false  // mode DU : pas de gris
     }
 
     // ── Cache performance ──────────────────────────────────────────────
