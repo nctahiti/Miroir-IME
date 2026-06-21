@@ -87,7 +87,7 @@ class MiroirIME : InputMethodService() {
 
     // ── Survol (sélection de groupe) ───────────────────────────────────
     private var hoverStartMs = 0L
-    private var hoverFirstStrokeIdx: Int = -1
+    private var hoverGroupId: String? = null  // groupe sous le stylet (stable, pas stroke)
     private var selectedGroupId: String? = null
 
     // ── Blob ───────────────────────────────────────────────────────────
@@ -314,7 +314,7 @@ class MiroirIME : InputMethodService() {
             if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    hoverStartMs = 0L; hoverFirstStrokeIdx = -1
+                    hoverStartMs = 0L; hoverGroupId = null
                     onStylusDown(event.x, event.y)
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -332,10 +332,12 @@ class MiroirIME : InputMethodService() {
         override fun onHoverEvent(event: MotionEvent): Boolean {
             if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
             when (event.actionMasked) {
-                MotionEvent.ACTION_HOVER_MOVE -> checkLongHover(event.x, event.y)
-                MotionEvent.ACTION_HOVER_EXIT -> {
-                    hoverStartMs = 0L; hoverFirstStrokeIdx = -1
+                MotionEvent.ACTION_HOVER_MOVE -> {
+                    checkLongHover(event.x, event.y)
                 }
+                // ⚠️ NE PAS reset sur HOVER_EXIT — sur e-ink, il est émis
+                // à chaque transition hover→contact, ce qui tuerait le survol
+                MotionEvent.ACTION_HOVER_EXIT -> { /* ignoré */ }
             }
             return true
         }
@@ -346,6 +348,7 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
 
     private fun checkLongHover(x: Float, y: Float) {
+        // Trouver le stroke le plus proche
         var closestIdx = -1
         var closestDist = Float.MAX_VALUE
         for (i in strokeRegistry.indices) {
@@ -356,14 +359,24 @@ class MiroirIME : InputMethodService() {
                 if (dist < closestDist) { closestDist = dist; closestIdx = i }
             }
         }
-        if (closestIdx < 0 || closestDist > 2500f) { hoverStartMs = 0L; hoverFirstStrokeIdx = -1; return }
-        if (closestIdx == hoverFirstStrokeIdx) {
+        if (closestIdx < 0 || closestDist > 10000f) {  // >100px → trop loin
+            hoverStartMs = 0L; hoverGroupId = null; return
+        }
+        // Trouver le GROUPE contenant ce stroke (stable, pas le stroke)
+        val gm = groupManager ?: return
+        val strokeId = inkStrokeIdToRegistryIndex.entries
+            .firstOrNull { it.value == closestIdx }?.key ?: return
+        val currentGroupId = gm.findGroupByStroke(strokeId)?.id ?: return
+
+        if (currentGroupId == hoverGroupId) {
+            // Même groupe → accumuler le temps
             if (hoverStartMs > 0 && System.currentTimeMillis() - hoverStartMs > 1000L) {
                 selectGroupContaining(closestIdx)
                 hoverStartMs = 0L
             }
         } else {
-            hoverFirstStrokeIdx = closestIdx
+            // Nouveau groupe → reset timer
+            hoverGroupId = currentGroupId
             hoverStartMs = System.currentTimeMillis()
         }
     }
