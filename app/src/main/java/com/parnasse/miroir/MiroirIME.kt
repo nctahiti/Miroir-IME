@@ -378,8 +378,15 @@ class MiroirIME : InputMethodService() {
         })
 
         toolbar.addView(makeButton("✕") {
+            // Vider le champ texte
+            val ic = currentInputConnection
+            if (ic != null) {
+                ic.performContextMenuAction(android.R.id.selectAll)
+                ic.commitText("", 1)
+            }
             clearPage()
             refreshAll()
+            requestHideSelf(0)
         })
 
         root.addView(toolbar)  // barre EN HAUT
@@ -667,7 +674,8 @@ class MiroirIME : InputMethodService() {
 
     private var lastPointRefresh = 0L
     private var isStylusDown = false
-    private var lastInjectedGroupFirstIdx: Int? = null  // pour distinguer correction vs nouveau mot
+    private var lastInjectedGroupFirstIdx: Int? = null
+    private var lastInjectedLineY: Float? = null  // pour détecter les changements d'interligne
 
     private fun onStylusDown(x: Float, y: Float) {
         isStylusDown = true
@@ -933,14 +941,24 @@ class MiroirIME : InputMethodService() {
                     }
                     // Correction (même mot) → setComposingText (remplace)
                     // Nouveau mot → commitText (ajoute)
+                    // Changement d'interligne → retour à la ligne
                     val ic = currentInputConnection
                     if (ic != null) {
+                        // Calculer l'interligne de ce mot
+                        val anchor = groupAnchor[firstIdx]
+                        val lineY = if (anchor != null) snapToLine(anchor.second) else null
+
                         if (firstIdx == lastInjectedGroupFirstIdx) {
                             ic.setComposingText("$result ", 1)
                         } else {
                             lastInjectedGroupFirstIdx = firstIdx
                             ic.finishComposingText()
+                            // Retour à la ligne si changement d'interligne
+                            if (lineY != null && lastInjectedLineY != null && Math.abs(lineY - lastInjectedLineY!!) > 10f) {
+                                ic.commitText("\n", 1)
+                            }
                             ic.commitText("$result ", 1)
+                            lastInjectedLineY = lineY
                         }
                     }
                     Log.i(TAG, "Texte injecté: \"$result\"")
