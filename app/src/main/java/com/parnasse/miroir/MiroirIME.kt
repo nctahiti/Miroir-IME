@@ -1029,9 +1029,9 @@ class MiroirIME : InputMethodService() {
                 inkStrokeIdToRegistryIndex[sid] == firstIdx
             }?.id ?: continue
             val anchor = groupAnchor[groupId] ?: continue
-            // 30px avant le premier point, dans le sens de lecture, sur l'interligne
+            // 30px avant le premier point, sous l'interligne
             val x = anchor.first - 30f
-            val y = snapToLine(anchor.second)
+            val y = snapToLine(anchor.second) + labelPaint.textSize + 2f
             canvas.drawText(label, x, y, labelPaint)
         }
     }
