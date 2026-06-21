@@ -73,6 +73,9 @@ class MiroirIME : InputMethodService() {
         isAntiAlias = true
         typeface = Typeface.DEFAULT_BOLD
     }
+    // Timer d'inactivité stylet global (pour différer l'inférence)
+    private var lastStylusActivity = 0L
+    private var inactivityCheckScheduled = false
 
     // ── Vue IME ────────────────────────────────────────────────────────
     private var imeView: CaptureSurfaceView? = null
@@ -103,15 +106,16 @@ class MiroirIME : InputMethodService() {
         recognizer?.load()
 
         // GroupManager — groupement spatial par blob
+        // ⚠️ Désactiver le timer GroupManager (comme CaptureView)
+        // L'inférence est déclenchée par inactivité stylet globale, pas par groupe.
         groupManager = GroupManager({ group ->
-            // Groupe complété → reconnaissance individuelle
             val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
             if (indices.isEmpty()) return@GroupManager
-            Log.i(TAG, "Groupe STORED: ${group.id} (${indices.size} strokes)")
-            inferExecutor.submit {
-                recognizeGroup(indices)
-            }
+            Log.i(TAG, "Groupe complet: ${group.id} (${indices.size} strokes)")
+            // Différer la reconnaissance — attendre inactivité stylet
+            scheduleInferenceForGroup(indices)
         }).also {
+            it.params = it.params.copy(transcriptionTimeoutMs = Long.MAX_VALUE) // désactivé
             it.pointProvider = { strokeId ->
                 inkStrokeIdToRegistryIndex[strokeId]
                     ?.let { idx -> strokeRegistry.getOrNull(idx)?.points }
@@ -283,6 +287,7 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
 
     private fun onStylusDown(x: Float, y: Float) {
+        markStylusActive()
         currentPath.reset()
         currentPath.moveTo(x, y)
         currentStroke = StrokeRecord(
@@ -359,8 +364,53 @@ class MiroirIME : InputMethodService() {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // RECONNAISSANCE PAR GROUPE (via GroupManager)
+    // INFÉRENCE DIFFÉRÉE (attend 1.5s d'inactivité stylet)
     // ═══════════════════════════════════════════════════════════════════
+
+    /** Groupes en attente de reconnaissance. */
+    private val pendingGroups = mutableListOf<List<Int>>()
+
+    /** Appelé à chaque stroke — enregistre l'activité stylet. */
+    private fun markStylusActive() {
+        lastStylusActivity = System.currentTimeMillis()
+        scheduleInactivityCheck()
+    }
+
+    /** Programme une vérification d'inactivité (debounce 1.5s). */
+    private fun scheduleInactivityCheck() {
+        if (inactivityCheckScheduled) return
+        inactivityCheckScheduled = true
+        uiHandler.postDelayed({
+            inactivityCheckScheduled = false
+            val idle = System.currentTimeMillis() - lastStylusActivity
+            if (idle >= 1500 && pendingGroups.isNotEmpty()) {
+                // Assez d'inactivité → lancer les reconnaissances
+                flushPendingGroups()
+            } else if (pendingGroups.isNotEmpty()) {
+                // Pas encore assez d'inactivité → reprogrammer
+                scheduleInactivityCheck()
+            }
+        }, 1500)
+    }
+
+    /** Ajoute un groupe à la file d'attente d'inférence. */
+    private fun scheduleInferenceForGroup(indices: List<Int>) {
+        pendingGroups.add(indices)
+        scheduleInactivityCheck()
+    }
+
+    /** Vide la file d'attente : reconnaît tous les groupes en attente. */
+    private fun flushPendingGroups() {
+        if (pendingGroups.isEmpty()) return
+        val groups = pendingGroups.toList()
+        pendingGroups.clear()
+        Log.i(TAG, "Inférence différée: ${groups.size} groupe(s) après inactivité stylet")
+        for (indices in groups) {
+            inferExecutor.submit {
+                recognizeGroup(indices)
+            }
+        }
+    }
 
     /**
      * Reconnaît un groupe individuel (appelé depuis le thread background).
