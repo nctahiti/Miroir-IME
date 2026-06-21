@@ -947,8 +947,8 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
 
     /** 
-     * Calcule l'enveloppe convexe du groupe et crée le chemin blob.
-     * Appelé après stroke/groupement, PAS dans onDraw.
+     * Calcule la vraie frontière du blob par ray casting.
+     * Pour chaque angle, trouve l'intersection la plus lointaine avec toutes les ellipses.
      */
     private fun updateBlobCache() {
         cachedBlobPath.reset()
@@ -957,57 +957,71 @@ class MiroirIME : InputMethodService() {
         val selectedGroups = gm.groupsInState(GroupState.SELECTED)
         val group = if (selectedGroups.isNotEmpty()) selectedGroups.first()
                      else gm.allGroups().lastOrNull() ?: return
-        if (group.strokeIds.isEmpty()) return
+        computeBlobPath(group)
+    }
 
+    /** Calcule le chemin blob pour un groupe (peut être appelé pour n'importe quel groupe). */
+    private fun computeBlobPath(group: InkGroup): Path? {
+        val gm = groupManager ?: return null
         val rx = gm.params.spatialDistancePx
         val ry = gm.params.spatialDistanceY
-        if (rx <= 0f && ry <= 0f) return
+        if (rx <= 0f && ry <= 0f) return null
+        if (group.strokeIds.isEmpty()) return null
 
-        cachedBlobRx = rx
-        cachedBlobRy = ry
-        cachedBlobGroupId = group.id
-
-        // Collecter tous les points du groupe
+        // Collecter les points
         val pts = mutableListOf<Pair<Float, Float>>()
         for (sid in group.strokeIds) {
             val idx = inkStrokeIdToRegistryIndex[sid] ?: continue
             val sr = strokeRegistry.getOrNull(idx) ?: continue
             for ((x, y) in sr.points) pts.add(Pair(x, y))
         }
-        if (pts.size < 3) return
+        if (pts.size < 2) return null
 
-        // Centroïd du groupe
+        // Centroïd
         var cx = 0f; var cy = 0f
         for ((px, py) in pts) { cx += px; cy += py }
         cx /= pts.size; cy /= pts.size
 
-        // Échantillonner les points, les expandre, et les trier par angle
-        val expand = (rx + ry) / 2f
-        val step = (pts.size / 40).coerceAtLeast(1)  // ~40 points max
-        val expanded = mutableListOf<Pair<Float, Float>>()
-        for (i in pts.indices step step) {
-            val (px, py) = pts[i]
-            val dx = px - cx; val dy = py - cy
-            val dist = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
-            val ex = if (dist < 1f) px else px + dx / dist * expand
-            val ey = if (dist < 1f) py else py + dy / dist * expand
-            expanded.add(Pair(ex, ey))
-        }
-        // Trier par angle autour du centroïd (pour créer une enveloppe sans croisement)
-        expanded.sortBy { Math.atan2((it.second - cy).toDouble(), (it.first - cx).toDouble()) }
-
-        // Créer le chemin
+        // Ray casting : N rayons, intersection la plus lointaine
+        val rayCount = CalibrationActivity.getBlobRayCount(this@MiroirIME)
         var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
         var maxX = Float.MIN_VALUE; var maxY = Float.MIN_VALUE
-        cachedBlobPath.moveTo(expanded[0].first, expanded[0].second)
-        for (i in 1 until expanded.size) {
-            val (ex, ey) = expanded[i]
-            cachedBlobPath.lineTo(ex, ey)
-            if (ex < minX) minX = ex; if (ex > maxX) maxX = ex
-            if (ey < minY) minY = ey; if (ey > maxY) maxY = ey
+        val path = Path()
+        var first = true
+
+        for (i in 0 until rayCount) {
+            val angle = 2.0 * Math.PI * i / rayCount
+            val dx = Math.cos(angle).toFloat()
+            val dy = Math.sin(angle).toFloat()
+
+            // Intersection maximale parmi toutes les ellipses
+            var bestT = 0f
+            for ((px, py) in pts) {
+                val ox = cx - px; val oy = cy - py
+                val a = (dx*dx)/(rx*rx) + (dy*dy)/(ry*ry)
+                val b = dx*ox/(rx*rx) + dy*oy/(ry*ry)
+                val c = (ox*ox)/(rx*rx) + (oy*oy)/(ry*ry) - 1f
+                val disc = b*b - a*c
+                if (disc <= 0f) continue
+                val t = (-b + Math.sqrt(disc.toDouble()).toFloat()) / a
+                if (t > bestT) bestT = t
+            }
+            if (bestT <= 0f) continue
+
+            val bx = cx + bestT * dx
+            val by = cy + bestT * dy
+            if (first) { path.moveTo(bx, by); first = false }
+            else path.lineTo(bx, by)
+            if (bx < minX) minX = bx; if (bx > maxX) maxX = bx
+            if (by < minY) minY = by; if (by > maxY) maxY = by
         }
-        cachedBlobPath.close()
+        if (first) return null  // aucun point
+        path.close()
+
+        // Stocker dans le cache actif
+        cachedBlobPath.set(path)
         cachedBlobBounds = android.graphics.RectF(minX, minY, maxX, maxY)
+        return path
     }
 
     private fun clearCanvas() {

@@ -29,12 +29,14 @@ class CalibrationActivity : Activity() {
         private const val KEY_AUTO_INFER_DELAY = "auto_infer_delay_ms"
         private const val KEY_LONG_HOVER_DELAY = "long_hover_delay_ms"
         private const val KEY_REFRESH_INTERVAL = "refresh_interval_ms"
+        private const val KEY_BLOB_RAY_COUNT = "blob_ray_count"
 
         const val DEFAULT_SPATIAL_DISTANCE_X = 40f
         const val DEFAULT_SPATIAL_DISTANCE_Y = 70f
         const val DEFAULT_AUTO_INFER_DELAY = 1500L
         const val DEFAULT_LONG_HOVER_DELAY = 1000L
         const val DEFAULT_REFRESH_INTERVAL = 16L  // ~60fps
+        const val DEFAULT_BLOB_RAY_COUNT = 90     // 90 rayons = 4° par rayon
 
         fun prefs(ctx: Context): SharedPreferences =
             ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -53,6 +55,9 @@ class CalibrationActivity : Activity() {
 
         fun getRefreshInterval(ctx: Context): Long =
             prefs(ctx).getLong(KEY_REFRESH_INTERVAL, DEFAULT_REFRESH_INTERVAL)
+
+        fun getBlobRayCount(ctx: Context): Int =
+            prefs(ctx).getInt(KEY_BLOB_RAY_COUNT, DEFAULT_BLOB_RAY_COUNT)
 
         // ── Stubs pour compatibilité CaptureView ──
         fun getTemporalDistance(ctx: Context): Long = 800L
@@ -132,6 +137,15 @@ class CalibrationActivity : Activity() {
             prefs(this).edit().putLong(KEY_REFRESH_INTERVAL, (v + 8).toLong()).apply()
         })
 
+        // Densité du blob (rayons de ray casting)
+        val currentRays = p.getInt(KEY_BLOB_RAY_COUNT, DEFAULT_BLOB_RAY_COUNT)
+        val rayLabel = addSlider(root, "Densité blob (rayons)", 30, 360, currentRays, "")
+        val raySeek = root.getChildAt(root.childCount - 1) as SeekBar
+        raySeek.setOnSeekBarChangeListener(simpleListener { v ->
+            rayLabel.text = "Densité blob : ${v + 30} rayons"
+            prefs(this).edit().putInt(KEY_BLOB_RAY_COUNT, v + 30).apply()
+        })
+
         // ── Boutons ────────────────────────────────────────────────────
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -146,6 +160,7 @@ class CalibrationActivity : Activity() {
                 delaySeek.progress = DEFAULT_AUTO_INFER_DELAY.toInt() - 500
                 hoverSeek.progress = (DEFAULT_LONG_HOVER_DELAY.toInt() - 500).coerceAtLeast(0)
                 refreshSeek.progress = (DEFAULT_REFRESH_INTERVAL.toInt() - 8).coerceAtLeast(0)
+                raySeek.progress = (DEFAULT_BLOB_RAY_COUNT - 30).coerceAtLeast(0)
                 save()
             }
         })
