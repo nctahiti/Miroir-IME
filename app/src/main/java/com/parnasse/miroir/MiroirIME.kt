@@ -578,16 +578,21 @@ class MiroirIME : InputMethodService() {
 
     // (fireLongPress, armLongPress, cancelLongPress définis plus haut)
 
-    /** Cale Y sur la ligne de portée la plus proche. */
+    /** Cale Y sur la ligne de portée la plus proche — 70% au-dessus, 30% en dessous. */
     private fun snapToLine(y: Float): Float {
         if (cachedTemplateLines.isEmpty()) return y
-        var best = cachedTemplateLines.first()
-        var bestDist = Math.abs(y - best)
+        // Trouver les deux lignes qui encadrent le point
+        var upper = cachedTemplateLines.first()
+        var lower = cachedTemplateLines.last()
         for (line in cachedTemplateLines) {
-            val dist = Math.abs(y - line)
-            if (dist < bestDist) { bestDist = dist; best = line }
+            if (line <= y && line > upper) upper = line
+            if (line >= y && line < lower) lower = line
         }
-        return best
+        if (upper == lower) return upper
+        // Frontière à 70% depuis la ligne du haut
+        val spacing = lower - upper
+        val boundary = upper + spacing * 0.7f
+        return if (y <= boundary) upper else lower
     }
 
     /** Groupes spatiaux depuis GroupManager (source unique), avec cache. */
