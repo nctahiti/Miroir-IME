@@ -87,8 +87,14 @@ class MiroirIME : InputMethodService() {
 
     // ── Survol (sélection de groupe) ───────────────────────────────────
     private var hoverStartMs = 0L
-    private var hoverGroupId: String? = null  // groupe sous le stylet (stable, pas stroke)
+    private var hoverLineIdx: Int = -1  // ligne de template sous le stylet
     private var selectedGroupId: String? = null
+
+    // ── Interlignes (mapping groupe → ligne de portée) ─────────────────
+    // groupId → index dans cachedTemplateLines
+    private val groupToLine = mutableMapOf<String, Int>()
+    // ligne → groupId
+    private val lineToGroup = mutableMapOf<Int, String>()
 
     // ── Blob ───────────────────────────────────────────────────────────
     private val blobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -165,6 +171,8 @@ class MiroirIME : InputMethodService() {
             val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
             if (indices.isEmpty()) return@GroupManager
             Log.i(TAG, "Groupe complet: ${group.id} (${indices.size} strokes)")
+            // Assigner le groupe à une ligne de portée
+            assignGroupToLine(group.id)
             scheduleInferenceForGroup(indices)
         }).also {
             it.params = it.params.copy(transcriptionTimeoutMs = 3000L)  // 3s sans stroke → groupe fermé
@@ -317,7 +325,7 @@ class MiroirIME : InputMethodService() {
                     checkLongHover(event.x, event.y)
                 }
                 MotionEvent.ACTION_DOWN -> {
-                    hoverStartMs = 0L; hoverGroupId = null
+                    hoverStartMs = 0L; hoverLineIdx = -1
                     onStylusDown(event.x, event.y)
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -334,55 +342,66 @@ class MiroirIME : InputMethodService() {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // SURVOL LONG — sélection de groupe (comme Miroir V4)
+    // SURVOL LONG — sélection par interligne (pas par stroke)
     // ═══════════════════════════════════════════════════════════════════
 
-    private fun checkLongHover(x: Float, y: Float) {
-        // Trouver le stroke le plus proche
-        var closestIdx = -1
-        var closestDist = Float.MAX_VALUE
-        for (i in strokeRegistry.indices) {
-            val sr = strokeRegistry[i]
-            for ((px, py) in sr.points) {
-                val dx = x - px; val dy = y - py
-                val dist = dx * dx + dy * dy
-                if (dist < closestDist) { closestDist = dist; closestIdx = i }
-            }
-        }
-        if (closestIdx < 0 || closestDist > 10000f) {  // >100px → trop loin
-            hoverStartMs = 0L; hoverGroupId = null; return
-        }
-        // Trouver le GROUPE contenant ce stroke (stable, pas le stroke)
+    /** Associe un groupe à la ligne de portée la plus proche de son centre Y. */
+    private fun assignGroupToLine(groupId: String) {
         val gm = groupManager ?: return
-        val strokeId = inkStrokeIdToRegistryIndex.entries
-            .firstOrNull { it.value == closestIdx }?.key ?: return
-        val currentGroupId = gm.findGroupByStroke(strokeId)?.id ?: return
+        val group = gm.allGroups().find { it.id == groupId } ?: return
+        if (cachedTemplateLines.isEmpty()) return
+        // Calculer le centre Y du groupe
+        var sumY = 0f; var count = 0
+        for (sid in group.strokeIds) {
+            val idx = inkStrokeIdToRegistryIndex[sid] ?: continue
+            val sr = strokeRegistry.getOrNull(idx) ?: continue
+            for ((_, y) in sr.points) { sumY += y; count++ }
+        }
+        if (count == 0) return
+        val centerY = sumY / count
+        // Trouver la ligne la plus proche
+        var bestIdx = 0; var bestDist = Float.MAX_VALUE
+        for (i in cachedTemplateLines.indices) {
+            val dist = Math.abs(centerY - cachedTemplateLines[i])
+            if (dist < bestDist) { bestDist = dist; bestIdx = i }
+        }
+        groupToLine[groupId] = bestIdx
+        lineToGroup[bestIdx] = groupId
+    }
 
-        if (currentGroupId == hoverGroupId) {
-            // Même groupe → accumuler le temps
+    private fun checkLongHover(x: Float, y: Float) {
+        if (cachedTemplateLines.isEmpty()) return
+        // Trouver la ligne de portée la plus proche du stylet
+        var bestIdx = 0; var bestDist = Float.MAX_VALUE
+        for (i in cachedTemplateLines.indices) {
+            val dist = Math.abs(y - cachedTemplateLines[i])
+            if (dist < bestDist) { bestDist = dist; bestIdx = i }
+        }
+        // Trop loin d'une ligne → reset
+        if (bestDist > 150f) { hoverStartMs = 0L; hoverLineIdx = -1; return }
+        
+        if (bestIdx == hoverLineIdx) {
             if (hoverStartMs > 0 && System.currentTimeMillis() - hoverStartMs > 1000L) {
-                selectGroupContaining(closestIdx)
+                selectGroupOnLine(bestIdx)
                 hoverStartMs = 0L
             }
         } else {
-            // Nouveau groupe → reset timer
-            hoverGroupId = currentGroupId
+            hoverLineIdx = bestIdx
             hoverStartMs = System.currentTimeMillis()
         }
     }
 
-    private fun selectGroupContaining(strokeIdx: Int) {
+    /** Sélectionne le groupe sur une ligne de portée. */
+    private fun selectGroupOnLine(lineIdx: Int) {
+        val groupId = lineToGroup[lineIdx] ?: return
+        if (groupId == selectedGroupId) return
         val gm = groupManager ?: return
-        val strokeId = inkStrokeIdToRegistryIndex.entries
-            .firstOrNull { it.value == strokeIdx }?.key ?: return
-        val group = gm.findGroupByStroke(strokeId) ?: return
-        if (group.id == selectedGroupId) return
         selectedGroupId?.let { gm.deselectGroup(it) }
-        selectedGroupId = group.id
-        gm.selectGroup(group.id)
+        selectedGroupId = groupId
+        gm.selectGroup(groupId)
         updateBlobCache()
         throttledInvalidate()
-        Log.i(TAG, "Groupe sélectionné: ${group.id}")
+        Log.i(TAG, "Groupe sélectionné sur ligne $lineIdx: $groupId")
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -669,34 +688,24 @@ class MiroirIME : InputMethodService() {
         throttledInvalidate()
     }
 
-    /** Dessine les labels de groupe sous leur emplacement spatial */
+    /** Dessine les labels de groupe à leur position d'interligne */
     private fun drawGroupLabels(canvas: Canvas) {
-        if (groupLabels.isEmpty()) return
+        if (groupLabels.isEmpty() || cachedTemplateLines.isEmpty()) return
         for ((firstIdx, label) in groupLabels) {
-            val pos = cachedLabelPositions.getOrPut(firstIdx) {
-                val sr = strokeRegistry.getOrNull(firstIdx) ?: return@getOrPut Pair(0f, 0f)
-                if (sr.points.isEmpty()) return@getOrPut Pair(0f, 0f)
-                var sumY = 0f
-                for (pt in sr.points) sumY += pt.second
-                val centerY = sumY / sr.points.size
-                // ═══ Accrocher à la ligne de template la plus proche ═══
-                val snappedY = snapToTemplate(centerY)
-                Pair(sr.points.first().first, snappedY)
-            }
-            if (pos.first == 0f && pos.second == 0f) continue
-            canvas.drawText(label, pos.first, pos.second, labelPaint)
+            // Trouver l'interligne de ce groupe via son groupId
+            val gm = groupManager ?: continue
+            val groupId = gm.allGroups().firstOrNull { g ->
+                val sid = g.strokeIds.firstOrNull() ?: return@firstOrNull false
+                inkStrokeIdToRegistryIndex[sid] == firstIdx
+            }?.id ?: continue
+            val lineIdx = groupToLine[groupId] ?: continue
+            if (lineIdx >= cachedTemplateLines.size) continue
+            val y = cachedTemplateLines[lineIdx] + 6f
+            // Position X: premier point du premier stroke
+            val sr = strokeRegistry.getOrNull(firstIdx) ?: continue
+            if (sr.points.isEmpty()) continue
+            val x = sr.points.first().first
+            canvas.drawText(label, x, y, labelPaint)
         }
-    }
-
-    /** Cale une position Y sur la ligne de portée la plus proche. */
-    private fun snapToTemplate(y: Float): Float {
-        if (cachedTemplateLines.isEmpty()) return y + 20f
-        var best = cachedTemplateLines.first()
-        var bestDist = Math.abs(y - best)
-        for (line in cachedTemplateLines) {
-            val dist = Math.abs(y - line)
-            if (dist < bestDist) { bestDist = dist; best = line }
-        }
-        return best + 6f  // léger décalage sous la ligne pour lisibilité
     }
 }
