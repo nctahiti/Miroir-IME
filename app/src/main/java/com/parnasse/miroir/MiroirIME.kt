@@ -231,13 +231,10 @@ class MiroirIME : InputMethodService() {
         })
 
         toolbar.addView(makeButton("⚙") {
-            // Masquer l'IME avant d'ouvrir la calibration (sinon cachée derrière)
-            requestHideSelf(0)
-            uiHandler.postDelayed({
-                val intent = android.content.Intent(this@MiroirIME, CalibrationActivity::class.java)
-                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(intent)
-            }, 200)  // délai pour laisser l'IME se fermer
+            // Ouvrir CalibrationActivity sans cacher l'IME
+            val intent = android.content.Intent(this@MiroirIME, CalibrationActivity::class.java)
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
         })
 
         toolbar.addView(makeButton("👁") {
@@ -272,7 +269,20 @@ class MiroirIME : InputMethodService() {
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         Log.i(TAG, "onStartInputView — champ: ${info?.fieldName ?: "inconnu"}")
+        syncGroupManagerParams()
         clearCanvas()
+    }
+
+    /** Lit les paramètres de calibration et les applique au GroupManager. */
+    private fun syncGroupManagerParams() {
+        val gm = groupManager ?: return
+        val calX = CalibrationActivity.getSpatialDistanceX(this)
+        val calY = CalibrationActivity.getSpatialDistanceY(this)
+        gm.params = gm.params.copy(
+            spatialDistancePx = calX,
+            spatialDistanceY = calY
+        )
+        Log.d(TAG, "Params calibration: blobRx=$calX blobRy=$calY")
     }
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
@@ -551,8 +561,8 @@ class MiroirIME : InputMethodService() {
         // ═══ GroupManager : groupement spatial ═══
         val inkStroke = strokeRecordToInkStroke(stroke, inkId)
         groupManager?.onStrokeSealed(inkStroke)
-        // ═══ Nettoyer le cache GroupManager (comme CaptureView) ═══
-        groupManager?.evictInactive()
+        // ═══ PAS d'evictInactive — l'IME n'a que quelques mots, pas de persistance ═══
+        // Les groupes doivent rester en mémoire pour la sélection par survol.
 
         // Mettre à jour le cache du blob
         updateBlobCache()
