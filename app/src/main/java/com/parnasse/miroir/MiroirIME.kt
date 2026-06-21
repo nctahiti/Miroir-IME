@@ -30,7 +30,8 @@ class MiroirIME : InputMethodService() {
 
     companion object {
         private const val TAG = "Miroir/IME"
-        private const val IME_HEIGHT_DP = 160
+        // 0 = plein écran (le système donne toute la hauteur disponible)
+        private const val IME_HEIGHT_DP = 0
     }
 
     // ── Dessin ────────────────────────────────────────────────────────
@@ -126,33 +127,26 @@ class MiroirIME : InputMethodService() {
     }
 
     override fun onCreateInputView(): View {
-        Log.i(TAG, "onCreateInputView — création de la surface de capture")
+        Log.i(TAG, "onCreateInputView — plein écran")
 
         val density = resources.displayMetrics.density
-        val totalHeight = (IME_HEIGHT_DP * density).toInt()
         val toolbarHeight = (40 * density).toInt()
-        val canvasHeight = totalHeight - toolbarHeight
 
         val root = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, totalHeight)
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT)  // plein écran
+            // Fond transparent — l'app en dessous reste visible
+            setBackgroundColor(Color.TRANSPARENT)
         }
 
-        // ── Surface de capture ──────────────────────────────────────
-        val surface = CaptureSurfaceView(this).apply {
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, canvasHeight)
-        }
-        imeView = surface
-        root.addView(surface)
-
-        // ── Barre d'outils ──────────────────────────────────────────
+        // ── Barre d'outils EN HAUT ──────────────────────────────────
         val toolbar = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
             layoutParams = android.widget.LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, toolbarHeight)
-            setBackgroundColor(Color.argb(220, 240, 240, 240))
+            setBackgroundColor(Color.argb(180, 240, 240, 240))
             gravity = android.view.Gravity.CENTER
         }
 
@@ -169,16 +163,12 @@ class MiroirIME : InputMethodService() {
         }
 
         toolbar.addView(makeButton("✓") {
-            // Valider : envoyer le texte final et fermer l'IME
             val ic = currentInputConnection
-            if (ic != null) {
-                ic.commitText("\n", 1)
-            }
+            if (ic != null) ic.commitText("\n", 1)
             requestHideSelf(0)
         })
 
         toolbar.addView(makeButton("⚙") {
-            // Ouvrir CalibrationActivity
             val intent = android.content.Intent(this@MiroirIME, CalibrationActivity::class.java)
             intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
@@ -189,14 +179,22 @@ class MiroirIME : InputMethodService() {
             imeView?.invalidate()
         })
 
-        root.addView(toolbar)
+        root.addView(toolbar)  // barre EN HAUT
 
-        // Initialiser le bitmap et TouchHelper après layout
+        // ── Surface de capture (reste de l'écran) ───────────────────
+        val surface = CaptureSurfaceView(this).apply {
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0, 1f)  // weight=1 → prend tout l'espace restant
+        }
+        imeView = surface
+        root.addView(surface)
+
         root.post {
             if (surface.width > 0 && surface.height > 0) {
                 bitmap = Bitmap.createBitmap(surface.width, surface.height, Bitmap.Config.ARGB_8888)
                 bitmapCanvas = Canvas(bitmap!!)
-                bitmapCanvas?.drawColor(Color.WHITE)
+                bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)  // transparent
                 updateTemplateSpacing(surface.height)
             }
         }
@@ -252,6 +250,10 @@ class MiroirIME : InputMethodService() {
             canvas.drawPath(currentPath, strokePaint)
         }
         override fun onTouchEvent(event: MotionEvent): Boolean {
+            // ═══ Capturer UNIQUEMENT le stylet — ignorer les doigts ═══
+            if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) {
+                return false  // laisser passer les événements doigt
+            }
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     onStylusDown(event.x, event.y)
@@ -513,7 +515,7 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
 
     private fun clearCanvas() {
-        bitmapCanvas?.drawColor(Color.WHITE)
+        bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         currentPath.reset()
         currentStroke = null
         imeView?.invalidate()
