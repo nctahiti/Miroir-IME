@@ -522,6 +522,11 @@ class MiroirIME : InputMethodService() {
                             break
                         }
                     }
+                    // Si hors de tout blob → nouveau groupe → masquer les anciens blobs
+                    if (activeBlobGroupId == null) {
+                        groupBlobs.clear()
+                        refreshAll()
+                    }
                     onStylusDown(event.x, event.y)
                 }
                 MotionEvent.ACTION_MOVE -> {
