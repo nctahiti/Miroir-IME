@@ -137,7 +137,21 @@ class MiroirIME : InputMethodService() {
     private var cachedSpatialBounds: List<android.graphics.RectF>? = null
     private var cachedGMCacheSize: Int = -1
 
-    // ── Pages ─────────────────────────────────────────────────────────
+    // ── Ancrage des groupes ───────────────────────────────────────────
+    // anchor = premier point du premier stroke du groupe.
+    // Une fois fixé, le mot ne bouge que par déplacement, pas par recalcul.
+    private val groupAnchor = mutableMapOf<String, Pair<Float, Float>>()  // groupId → (x, y)
+
+    /** Enregistre l'ancre d'un groupe à sa création. */
+    private fun anchorGroup(groupId: String) {
+        val gm = groupManager ?: return
+        val group = gm.allGroups().find { it.id == groupId } ?: return
+        val firstStrokeId = group.strokeIds.firstOrNull() ?: return
+        val idx = inkStrokeIdToRegistryIndex[firstStrokeId] ?: return
+        val sr = strokeRegistry.getOrNull(idx) ?: return
+        val pt = sr.points.firstOrNull() ?: return
+        groupAnchor[groupId] = pt
+    }
     private var currentPageIndex = 0
     private val pagesDir by lazy { java.io.File(cacheDir, "ime-pages").also { it.mkdirs() } }
 
@@ -155,6 +169,7 @@ class MiroirIME : InputMethodService() {
         groupLabels.clear()
         inkStrokeIdToRegistryIndex.clear()
         inkStrokeIdCounter = 0L
+        groupAnchor.clear()
         groupManager?.clearAll()
         clearCanvas()
         inferredGroupFirstIdxs.clear()
@@ -349,6 +364,7 @@ class MiroirIME : InputMethodService() {
         groupManager = GroupManager({ group ->
             // ⚠️ Callback vide — l'inférence est déclenchée par inactivité stylet.
             // Les groupes restent LOADED → absorption toujours active (comme Miroir).
+            anchorGroup(group.id)
         }).also {
             it.pointProvider = { strokeId ->
                 inkStrokeIdToRegistryIndex[strokeId]
@@ -1028,24 +1044,19 @@ class MiroirIME : InputMethodService() {
         refreshAll()
     }
 
-    /** Dessine les labels de groupe à leur position d'interligne */
+    /** Dessine les labels à leur position d'ancre (premier point du premier stroke). */
     private fun drawGroupLabels(canvas: Canvas) {
         if (groupLabels.isEmpty()) return
-        val groups = getSpatialGroups()
-        val bounds = getSpatialBounds()
-        // Index: firstIdx → position dans groups (évite la recherche linéaire)
-        val groupIndexByFirst = mutableMapOf<Int, Int>()
-        for ((gi, g) in groups.withIndex()) {
-            g.firstOrNull()?.let { groupIndexByFirst[it] = gi }
-        }
         for ((firstIdx, label) in groupLabels) {
-            val gi = groupIndexByFirst[firstIdx] ?: continue
-            if (gi >= bounds.size) continue
-            val r = bounds[gi]
-            if (r.left >= Float.MAX_VALUE) continue
-            val lineY = snapToLine((r.top + r.bottom) / 2f)
-            val y = lineY + labelPaint.textSize + 4f
-            canvas.drawText(label, r.left, y, labelPaint)
+            // Trouver le groupId de ce firstIdx
+            val gm = groupManager ?: continue
+            val groupId = gm.allGroups().firstOrNull { g ->
+                val sid = g.strokeIds.firstOrNull() ?: return@firstOrNull false
+                inkStrokeIdToRegistryIndex[sid] == firstIdx
+            }?.id ?: continue
+            val anchor = groupAnchor[groupId] ?: continue
+            val y = snapToLine(anchor.second) + labelPaint.textSize + 4f
+            canvas.drawText(label, anchor.first, y, labelPaint)
         }
     }
 }
