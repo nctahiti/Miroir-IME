@@ -8,7 +8,6 @@ import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.widget.FrameLayout
 import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.api.device.epd.UpdateMode
 import com.onyx.android.sdk.data.note.TouchPoint as OnyxTouchPoint
@@ -80,6 +79,9 @@ class MiroirIME : InputMethodService() {
     // ── Vue IME ────────────────────────────────────────────────────────
     private var imeView: CaptureSurfaceView? = null
 
+    // ── Barre d'outils ─────────────────────────────────────────────────
+    private var showOverlays = true  // 👁 toggle
+
     // ── Template (partition) ───────────────────────────────────────────
     // L'espacement est calculé dynamiquement selon la hauteur du canvas
     // pour garantir ~4-6 lignes visibles quelle que soit la densité d'écran.
@@ -126,24 +128,71 @@ class MiroirIME : InputMethodService() {
     override fun onCreateInputView(): View {
         Log.i(TAG, "onCreateInputView — création de la surface de capture")
 
-        val container = FrameLayout(this).apply {
+        val density = resources.displayMetrics.density
+        val totalHeight = (IME_HEIGHT_DP * density).toInt()
+        val toolbarHeight = (40 * density).toInt()
+        val canvasHeight = totalHeight - toolbarHeight
+
+        val root = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                (IME_HEIGHT_DP * resources.displayMetrics.density).toInt()
-            )
-            setBackgroundColor(Color.argb(240, 255, 255, 255))
+                ViewGroup.LayoutParams.MATCH_PARENT, totalHeight)
         }
 
+        // ── Surface de capture ──────────────────────────────────────
         val surface = CaptureSurfaceView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, canvasHeight)
         }
         imeView = surface
+        root.addView(surface)
 
-        container.addView(surface)
-        container.post {
+        // ── Barre d'outils ──────────────────────────────────────────
+        val toolbar = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, toolbarHeight)
+            setBackgroundColor(Color.argb(220, 240, 240, 240))
+            gravity = android.view.Gravity.CENTER
+        }
+
+        fun makeButton(label: String, onClick: () -> Unit): android.widget.Button {
+            return android.widget.Button(this).apply {
+                text = label
+                textSize = 12f
+                setTextColor(Color.DKGRAY)
+                setBackgroundColor(Color.TRANSPARENT)
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                setOnClickListener { onClick() }
+            }
+        }
+
+        toolbar.addView(makeButton("✓") {
+            // Valider : envoyer le texte final et fermer l'IME
+            val ic = currentInputConnection
+            if (ic != null) {
+                ic.commitText("\n", 1)
+            }
+            requestHideSelf(0)
+        })
+
+        toolbar.addView(makeButton("⚙") {
+            // Ouvrir CalibrationActivity
+            val intent = android.content.Intent(this@MiroirIME, CalibrationActivity::class.java)
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        })
+
+        toolbar.addView(makeButton("👁") {
+            showOverlays = !showOverlays
+            imeView?.invalidate()
+        })
+
+        root.addView(toolbar)
+
+        // Initialiser le bitmap et TouchHelper après layout
+        root.post {
             if (surface.width > 0 && surface.height > 0) {
                 bitmap = Bitmap.createBitmap(surface.width, surface.height, Bitmap.Config.ARGB_8888)
                 bitmapCanvas = Canvas(bitmap!!)
@@ -152,10 +201,8 @@ class MiroirIME : InputMethodService() {
             }
         }
 
-        // Initialiser TouchHelper sur la surface
         initTouchHelper(surface)
-
-        return container
+        return root
     }
 
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
@@ -193,13 +240,15 @@ class MiroirIME : InputMethodService() {
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
-            // Dessiner la partition (template delta)
-            val t = template
-            if (t is Template.HorizontalStaff) {
-                t.draw(canvas, width, height)
+            if (showOverlays) {
+                // Dessiner la partition (template delta)
+                val t = template
+                if (t is Template.HorizontalStaff) {
+                    t.draw(canvas, width, height)
+                }
+                // Dessiner les labels de groupe
+                drawGroupLabels(canvas)
             }
-            // Dessiner les labels de groupe
-            drawGroupLabels(canvas)
             canvas.drawPath(currentPath, strokePaint)
         }
         override fun onTouchEvent(event: MotionEvent): Boolean {
