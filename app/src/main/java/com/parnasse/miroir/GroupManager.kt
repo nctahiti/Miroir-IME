@@ -286,6 +286,16 @@ class GroupManager(
     fun groupsInState(state: GroupState): List<InkGroup> = groups.values.filter { it.state == state }
     fun cacheSize(): Int = groups.size
 
+    /** Vide tous les groupes (cache + machine à états). Appelé au clear(). */
+    fun clearAll() {
+        groups.clear()
+        strokeToGroup.clear()
+        machine.reset()
+        timeoutFuture?.cancel(false)
+        timeoutGroupId = null
+        Log.i(TAG, "GroupManager: tous les groupes vidés")
+    }
+
     fun release() {
         timeoutFuture?.cancel(false)
         scheduler.shutdown()

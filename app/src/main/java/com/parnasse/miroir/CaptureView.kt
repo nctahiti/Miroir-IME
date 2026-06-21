@@ -720,8 +720,18 @@ class CaptureView(context: Context) : View(context) {
      *  Convertit les groupes GroupManager (inkStrokeIds) → indices strokeRegistry.
      *  Lit TOUS les groupes (cache + persistance). */
     internal fun getSpatialGroupsFromGM(): List<List<Int>> {
-        val allGmGroups = groupManager.allGroupsFull()  // cache + persistance
-        return allGmGroups.mapNotNull { group ->
+        val cached = groupManager.allGroups()
+        val full = groupManager.allGroupsFull()
+        val persistedCount = full.size - cached.size
+        Log.i(TAG, "📊 getSpatialGroupsFromGM: ${full.size} total (${cached.size} cache + $persistedCount persistance)")
+        if (persistedCount > 0) {
+            val persisted = full.drop(cached.size)
+            for (g in persisted.take(3)) {
+                val mapped = g.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+                Log.i(TAG, "📊   persistance: groupe ${g.id} ${g.strokeIds.size}s → ${mapped.size} indices mappés: ${mapped.take(4).joinToString(",")}")
+            }
+        }
+        return full.mapNotNull { group ->
             val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
             if (indices.isEmpty()) null else indices
         }
@@ -3546,6 +3556,7 @@ class CaptureView(context: Context) : View(context) {
         // ═══ Nettoyer les maps GroupManager (sinon accumulation → lag) ═══
         inkStrokeIdToRegistryIndex.clear()
         registryIndexToInkStrokeId.clear()
+        groupManager.clearAll()
         // ═══ Mode écriture live ═══
         invalidateSpatialCache()
         inferredGroups.clear()
