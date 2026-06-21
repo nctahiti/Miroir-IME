@@ -85,16 +85,20 @@ class MiroirIME : InputMethodService() {
     // ── Barre d'outils ─────────────────────────────────────────────────
     private var showOverlays = true  // 👁 toggle
 
-    // ── Survol (sélection de groupe) ───────────────────────────────────
-    private var hoverStartMs = 0L
-    private var hoverLineIdx: Int = -1  // ligne de template sous le stylet
+    // ── Survol (sélection de groupe) — importé de CaptureView ──────────
+    private var hoverX = 0f
+    private var hoverY = 0f
+    private var isHovering = false
+    private var hoverWordGroup: List<Int>? = null
+    private var hoverStrokeIndex: Int? = null
+    private var longHoverStartMs = 0L
+    private var longHoverFirstStroke: Int = -1
     private var selectedGroupId: String? = null
 
-    // ── Interlignes (mapping groupe → ligne de portée) ─────────────────
-    // groupId → index dans cachedTemplateLines
-    private val groupToLine = mutableMapOf<String, Int>()
-    // ligne → groupId
-    private val lineToGroup = mutableMapOf<Int, String>()
+    // ── Cache spatial (comme CaptureView) ──────────────────────────────
+    private var cachedSpatialGroups: List<List<Int>>? = null
+    private var cachedSpatialBounds: List<android.graphics.RectF>? = null
+    private var cachedGMCacheSize: Int = -1
 
     // ── Blob ───────────────────────────────────────────────────────────
     private val blobPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -171,8 +175,8 @@ class MiroirIME : InputMethodService() {
             val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
             if (indices.isEmpty()) return@GroupManager
             Log.i(TAG, "Groupe complet: ${group.id} (${indices.size} strokes)")
-            // Assigner le groupe à une ligne de portée
-            assignGroupToLine(group.id)
+            // Invalider le cache spatial (nouveau groupe)
+            cachedGMCacheSize = -1
             scheduleInferenceForGroup(indices)
         }).also {
             it.params = it.params.copy(transcriptionTimeoutMs = 3000L)  // 3s sans stroke → groupe fermé
@@ -322,10 +326,10 @@ class MiroirIME : InputMethodService() {
             if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> {
-                    checkLongHover(event.x, event.y)
+                    updateHover(event.x, event.y)
                 }
                 MotionEvent.ACTION_DOWN -> {
-                    hoverStartMs = 0L; hoverLineIdx = -1
+                    isHovering = false; longHoverStartMs = 0L; longHoverFirstStroke = -1
                     onStylusDown(event.x, event.y)
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -342,66 +346,101 @@ class MiroirIME : InputMethodService() {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // SURVOL LONG — sélection par interligne (pas par stroke)
+    // SPATIAL + SURVOL — importé de CaptureView (même mécanisme que playground)
     // ═══════════════════════════════════════════════════════════════════
 
-    /** Associe un groupe à la ligne de portée la plus proche de son centre Y. */
-    private fun assignGroupToLine(groupId: String) {
-        val gm = groupManager ?: return
-        val group = gm.allGroups().find { it.id == groupId } ?: return
-        if (cachedTemplateLines.isEmpty()) return
-        // Calculer le centre Y du groupe
-        var sumY = 0f; var count = 0
-        for (sid in group.strokeIds) {
-            val idx = inkStrokeIdToRegistryIndex[sid] ?: continue
-            val sr = strokeRegistry.getOrNull(idx) ?: continue
-            for ((_, y) in sr.points) { sumY += y; count++ }
+    /** Cale Y sur la ligne de portée la plus proche. */
+    private fun snapToLine(y: Float): Float {
+        if (cachedTemplateLines.isEmpty()) return y
+        var best = cachedTemplateLines.first()
+        var bestDist = Math.abs(y - best)
+        for (line in cachedTemplateLines) {
+            val dist = Math.abs(y - line)
+            if (dist < bestDist) { bestDist = dist; best = line }
         }
-        if (count == 0) return
-        val centerY = sumY / count
-        // Trouver la ligne la plus proche
-        var bestIdx = 0; var bestDist = Float.MAX_VALUE
-        for (i in cachedTemplateLines.indices) {
-            val dist = Math.abs(centerY - cachedTemplateLines[i])
-            if (dist < bestDist) { bestDist = dist; bestIdx = i }
-        }
-        groupToLine[groupId] = bestIdx
-        lineToGroup[bestIdx] = groupId
+        return best
     }
 
-    private fun checkLongHover(x: Float, y: Float) {
-        if (cachedTemplateLines.isEmpty()) return
-        // Trouver la ligne de portée la plus proche du stylet
-        var bestIdx = 0; var bestDist = Float.MAX_VALUE
-        for (i in cachedTemplateLines.indices) {
-            val dist = Math.abs(y - cachedTemplateLines[i])
-            if (dist < bestDist) { bestDist = dist; bestIdx = i }
-        }
-        // Trop loin d'une ligne → reset
-        if (bestDist > 150f) { hoverStartMs = 0L; hoverLineIdx = -1; return }
-        
-        if (bestIdx == hoverLineIdx) {
-            if (hoverStartMs > 0 && System.currentTimeMillis() - hoverStartMs > 1000L) {
-                selectGroupOnLine(bestIdx)
-                hoverStartMs = 0L
+    /** Groupes spatiaux depuis GroupManager (source unique), avec cache. */
+    private fun getSpatialGroups(): List<List<Int>> {
+        val gm = groupManager ?: return emptyList()
+        val fullSize = gm.allGroupsFull().size
+        if (cachedGMCacheSize != fullSize) {
+            val full = gm.allGroupsFull()
+            cachedSpatialGroups = full.mapNotNull { group ->
+                group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+                    .ifEmpty { null }
             }
-        } else {
-            hoverLineIdx = bestIdx
-            hoverStartMs = System.currentTimeMillis()
+            // Calculer les bounds
+            cachedSpatialBounds = cachedSpatialGroups!!.map { group ->
+                val r = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
+                for (idx in group) {
+                    if (idx >= strokeRegistry.size) continue
+                    for ((px, py) in strokeRegistry[idx].points) {
+                        if (px < r.left) r.left = px; if (px > r.right) r.right = px
+                        if (py < r.top) r.top = py; if (py > r.bottom) r.bottom = py
+                    }
+                }
+                r
+            }
+            cachedGMCacheSize = fullSize
         }
+        return cachedSpatialGroups ?: emptyList()
     }
 
-    /** Sélectionne le groupe sur une ligne de portée. */
-    private fun selectGroupOnLine(lineIdx: Int) {
-        val groupId = lineToGroup[lineIdx] ?: return
-        if (groupId == selectedGroupId) return
+    /** Bounds précalculés des groupes spatiaux. */
+    private fun getSpatialBounds(): List<android.graphics.RectF> {
+        getSpatialGroups()  // assure le cache
+        return cachedSpatialBounds ?: emptyList()
+    }
+
+    /** Détection du groupe sous le stylet — identique à CaptureView. */
+    private fun updateHover(x: Float, y: Float) {
+        hoverX = x; hoverY = y
+        isHovering = true
+        val spatialGroups = getSpatialGroups()
+        val spatialBounds = getSpatialBounds()
+        val found = spatialGroups.withIndex().firstOrNull { (gi, group) ->
+            val r = spatialBounds[gi]
+            val groupLine = snapToLine((r.top + r.bottom) / 2f)
+            r.left < Float.MAX_VALUE && x >= r.left && x <= r.right && Math.abs(y - groupLine) < 50f
+        }
+        hoverWordGroup = found?.value
+        hoverStrokeIndex = found?.value?.firstOrNull()
+        // Survol long → sélection
+        checkLongHoverReactivation()
+    }
+
+    /** Survol long — sélectionne le groupe après le délai. Identique à CaptureView. */
+    private fun checkLongHoverReactivation() {
+        if (!isHovering) { longHoverStartMs = 0; longHoverFirstStroke = -1; return }
+        val targetIndices = hoverWordGroup ?: run {
+            longHoverStartMs = 0; longHoverFirstStroke = -1; return
+        }
+        val firstStroke = targetIndices.firstOrNull() ?: run {
+            longHoverStartMs = 0; longHoverFirstStroke = -1; return
+        }
+        if (firstStroke != longHoverFirstStroke) {
+            longHoverFirstStroke = firstStroke
+            longHoverStartMs = System.currentTimeMillis()
+            return
+        }
+        val delayMs = CalibrationActivity.getLongHoverDelay(this)
+        if (System.currentTimeMillis() - longHoverStartMs < delayMs) return
+        // Déclencher
+        longHoverStartMs = Long.MAX_VALUE
         val gm = groupManager ?: return
+        val anyStrokeId = inkStrokeIdToRegistryIndex.entries
+            .firstOrNull { it.value == firstStroke }?.key ?: return
+        val g = gm.reactivateGroup(anyStrokeId) ?: return
+        // Désélectionner l'ancien
         selectedGroupId?.let { gm.deselectGroup(it) }
-        selectedGroupId = groupId
-        gm.selectGroup(groupId)
-        updateBlobCache()
-        throttledInvalidate()
-        Log.i(TAG, "Groupe sélectionné sur ligne $lineIdx: $groupId")
+        if (gm.selectGroup(g.id)) {
+            selectedGroupId = g.id
+            updateBlobCache()
+            throttledInvalidate()
+            Log.i(TAG, "Survol long — groupe ${g.id} SELECTED")
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -690,22 +729,17 @@ class MiroirIME : InputMethodService() {
 
     /** Dessine les labels de groupe à leur position d'interligne */
     private fun drawGroupLabels(canvas: Canvas) {
-        if (groupLabels.isEmpty() || cachedTemplateLines.isEmpty()) return
+        if (groupLabels.isEmpty()) return
+        val groups = getSpatialGroups()
+        val bounds = getSpatialBounds()
         for ((firstIdx, label) in groupLabels) {
-            // Trouver l'interligne de ce groupe via son groupId
-            val gm = groupManager ?: continue
-            val groupId = gm.allGroups().firstOrNull { g ->
-                val sid = g.strokeIds.firstOrNull() ?: return@firstOrNull false
-                inkStrokeIdToRegistryIndex[sid] == firstIdx
-            }?.id ?: continue
-            val lineIdx = groupToLine[groupId] ?: continue
-            if (lineIdx >= cachedTemplateLines.size) continue
-            val y = cachedTemplateLines[lineIdx] + 6f
-            // Position X: premier point du premier stroke
-            val sr = strokeRegistry.getOrNull(firstIdx) ?: continue
-            if (sr.points.isEmpty()) continue
-            val x = sr.points.first().first
-            canvas.drawText(label, x, y, labelPaint)
+            // Trouver le groupe spatial contenant ce firstIdx
+            val gi = groups.indexOfFirst { it.firstOrNull() == firstIdx }
+            if (gi < 0 || gi >= bounds.size) continue
+            val r = bounds[gi]
+            if (r.left >= Float.MAX_VALUE) continue
+            val y = snapToLine((r.top + r.bottom) / 2f) + 6f
+            canvas.drawText(label, r.left, y, labelPaint)
         }
     }
 }
