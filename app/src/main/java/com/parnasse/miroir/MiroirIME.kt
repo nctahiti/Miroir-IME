@@ -974,70 +974,37 @@ class MiroirIME : InputMethodService() {
             val sr = strokeRegistry.getOrNull(idx) ?: continue
             for ((x, y) in sr.points) pts.add(Pair(x, y))
         }
-        if (pts.size < 3) return  // pas assez de points pour une enveloppe
+        if (pts.size < 3) return
 
-        // Convex hull (Andrew's monotone chain)
-        val sorted = pts.sortedWith(compareBy({ it.first }, { it.second }))
-        val hull = mutableListOf<Pair<Float, Float>>()
-        // Lower hull
-        for (p in sorted) {
-            while (hull.size >= 2) {
-                val a = hull[hull.size - 2]; val b = hull.last()
-                if ((b.first - a.first) * (p.second - a.second) - (b.second - a.second) * (p.first - a.first) <= 0)
-                    hull.removeAt(hull.size - 1) else break
-            }
-            hull.add(p)
-        }
-        // Upper hull
-        val lowerSize = hull.size
-        for (i in sorted.size - 2 downTo 0) {
-            val p = sorted[i]
-            while (hull.size > lowerSize) {
-                val a = hull[hull.size - 2]; val b = hull.last()
-                if ((b.first - a.first) * (p.second - a.second) - (b.second - a.second) * (p.first - a.first) <= 0)
-                    hull.removeAt(hull.size - 1) else break
-            }
-            hull.add(p)
-        }
-        hull.removeAt(hull.size - 1)  // dernier = premier
-        if (hull.size < 3) return
-
-        // Centroid
+        // Centroïd du groupe
         var cx = 0f; var cy = 0f
-        for ((hx, hy) in hull) { cx += hx; cy += hy }
-        cx /= hull.size; cy /= hull.size
+        for ((px, py) in pts) { cx += px; cy += py }
+        cx /= pts.size; cy /= pts.size
 
-        // Expansion : pousser chaque sommet vers l'extérieur
+        // Échantillonner les points, les expandre, et les trier par angle
         val expand = (rx + ry) / 2f
-        val expanded = hull.map { (hx, hy) ->
-            val dx = hx - cx; val dy = hy - cy
+        val step = (pts.size / 40).coerceAtLeast(1)  // ~40 points max
+        val expanded = mutableListOf<Pair<Float, Float>>()
+        for (i in pts.indices step step) {
+            val (px, py) = pts[i]
+            val dx = px - cx; val dy = py - cy
             val dist = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
-            if (dist < 1f) Pair(hx, hy)
-            else Pair(hx + dx / dist * expand, hy + dy / dist * expand)
+            val ex = if (dist < 1f) px else px + dx / dist * expand
+            val ey = if (dist < 1f) py else py + dy / dist * expand
+            expanded.add(Pair(ex, ey))
         }
+        // Trier par angle autour du centroïd (pour créer une enveloppe sans croisement)
+        expanded.sortBy { Math.atan2((it.second - cy).toDouble(), (it.first - cx).toDouble()) }
 
-        // Créer le chemin avec subdivision pour résolution
-        // Nombre de subdivisions par arête (proportionnel à la longueur)
+        // Créer le chemin
         var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
         var maxX = Float.MIN_VALUE; var maxY = Float.MIN_VALUE
         cachedBlobPath.moveTo(expanded[0].first, expanded[0].second)
-        for (i in 0 until expanded.size) {
-            val (x1, y1) = expanded[i]
-            val (x2, y2) = expanded[(i + 1) % expanded.size]
-            // Subdivisions : plus il y a de distance, plus on subdivise
-            val edgeLen = Math.sqrt(((x2-x1)*(x2-x1) + (y2-y1)*(y2-y1)).toDouble()).toFloat()
-            val subdivs = (edgeLen / 20f).toInt().coerceIn(2, 6)
-            for (s in 1..subdivs) {
-                val t = s.toFloat() / (subdivs + 1)
-                val sx = x1 + (x2 - x1) * t
-                val sy = y1 + (y2 - y1) * t
-                cachedBlobPath.lineTo(sx, sy)
-                if (sx < minX) minX = sx; if (sx > maxX) maxX = sx
-                if (sy < minY) minY = sy; if (sy > maxY) maxY = sy
-            }
-            if (x2 < minX) minX = x2; if (x2 > maxX) maxX = x2
-            if (y2 < minY) minY = y2; if (y2 > maxY) maxY = y2
-            cachedBlobPath.lineTo(x2, y2)
+        for (i in 1 until expanded.size) {
+            val (ex, ey) = expanded[i]
+            cachedBlobPath.lineTo(ex, ey)
+            if (ex < minX) minX = ex; if (ex > maxX) maxX = ex
+            if (ey < minY) minY = ey; if (ey > maxY) maxY = ey
         }
         cachedBlobPath.close()
         cachedBlobBounds = android.graphics.RectF(minX, minY, maxX, maxY)
