@@ -659,17 +659,18 @@ class MiroirIME : InputMethodService() {
     private var lastPointRefresh = 0L
 
     private fun onStylusDown(x: Float, y: Float) {
-        // ═══ Annuler le timer du groupe en absorption (va être modifié) ═══
-        val absorbGroupId = activeBlobGroupId
-        if (absorbGroupId != null) {
-            val gm = groupManager
-            if (gm != null) {
-                val group = gm.allGroups().find { it.id == absorbGroupId }
-                if (group != null) {
-                    val firstIdx = inkStrokeIdToRegistryIndex[group.strokeIds.first()]
-                    if (firstIdx != null) {
-                        groupTimers.remove(firstIdx)?.cancel(false)
-                    }
+        // ═══ Trouver le groupe qui va absorber (via bounds spatiales) et annuler son timer ═══
+        val gm = groupManager
+        if (gm != null) {
+            val groups = getSpatialGroups()
+            val bounds = getSpatialBounds()
+            for ((gi, g) in groups.withIndex()) {
+                val r = bounds.getOrNull(gi) ?: continue
+                if (r.left < Float.MAX_VALUE && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+                    val firstIdx = g.firstOrNull() ?: continue
+                    groupTimers.remove(firstIdx)?.cancel(false)
+                    Log.d(TAG, "⬇️ Pen-down → timer annulé firstIdx=$firstIdx (bounds spatiales)")
+                    break
                 }
             }
         }
@@ -829,7 +830,7 @@ class MiroirIME : InputMethodService() {
                 armGroupInference(firstIdx)
             }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
             groupTimers[firstIdx] = timer
-            Log.d(TAG, "⏱️ Timer firstIdx=$firstIdx → ${inferDelay}ms (${strokeCount}s)")
+            Log.d(TAG, "⏱️ Timer armé firstIdx=$firstIdx → ${inferDelay}ms (${strokeCount}s)")
         }
     }
 
@@ -839,7 +840,7 @@ class MiroirIME : InputMethodService() {
         val armedAt = timerArmedAt[firstIdx] ?: return
         val lastMod = groupLastModifiedMs[firstIdx] ?: return
         if (lastMod > armedAt) {
-            Log.d(TAG, "⏭️ Timer ignoré firstIdx=$firstIdx — groupe modifié depuis armement")
+            Log.d(TAG, "⏭️ Timer ignoré firstIdx=$firstIdx — modifié (armed=${armedAt}ms, lastMod=${lastMod}ms)")
             return
         }
         if (firstIdx in inferredGroupFirstIdxs) return
@@ -864,6 +865,7 @@ class MiroirIME : InputMethodService() {
 
         inferenceQueue.add(indices)
         cachedGMCacheSize = -1
+        Log.i(TAG, "🔥 Timer TIRÉ firstIdx=$firstIdx → inférence groupe ${group.id} (${indices.size} strokes)")
         Log.i(TAG, "Groupe à inférer: ${group.id} (${indices.size} strokes)")
         startInferencePipeline()
     }
