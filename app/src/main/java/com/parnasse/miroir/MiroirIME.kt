@@ -59,6 +59,8 @@ class MiroirIME : InputMethodService() {
     // ── Reconnaissance ML Kit ──────────────────────────────────────────
     private var recognizer: DigitalInkWrapper? = null
     private val strokeRegistry = mutableListOf<StrokeRecord>()
+    private val inkStrokeIdToRegistryIndex = mutableMapOf<Long, Int>()
+    private var inkStrokeIdCounter = 0L
     private val uiHandler = Handler(Looper.getMainLooper())
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
         Thread(r, "miroir-ime-infer").apply {
@@ -67,6 +69,17 @@ class MiroirIME : InputMethodService() {
     }
     private var pendingRecognition = false
     private var accumulatedText = ""  // texte déjà commité
+
+    // ── GroupManager — groupement spatial par blob ─────────────────────
+    private var groupManager: GroupManager? = null
+    // Map firstIdx → texte reconnu (labels)
+    private val groupLabels = mutableMapOf<Int, String>()
+    private val labelPaint = Paint().apply {
+        color = Color.argb(180, 80, 80, 80)
+        textSize = 28f
+        isAntiAlias = true
+        typeface = Typeface.DEFAULT_BOLD
+    }
 
     // ── Vue IME ────────────────────────────────────────────────────────
     private var imeView: CaptureSurfaceView? = null
@@ -95,6 +108,22 @@ class MiroirIME : InputMethodService() {
         Log.i(TAG, "MiroirIME — Portail d'écriture universel — création")
         recognizer = DigitalInkWrapper(this)
         recognizer?.load()
+
+        // GroupManager — groupement spatial par blob
+        groupManager = GroupManager({ group ->
+            // Groupe complété → reconnaissance individuelle
+            val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+            if (indices.isEmpty()) return@GroupManager
+            Log.i(TAG, "Groupe STORED: ${group.id} (${indices.size} strokes)")
+            inferExecutor.submit {
+                recognizeGroup(indices, group.strokeIds.firstOrNull() ?: 0L)
+            }
+        }).also {
+            it.pointProvider = { strokeId ->
+                inkStrokeIdToRegistryIndex[strokeId]
+                    ?.let { idx -> strokeRegistry.getOrNull(idx)?.points }
+            }
+        }
     }
 
     override fun onCreateInputView(): View {
@@ -174,6 +203,8 @@ class MiroirIME : InputMethodService() {
             if (t is Template.HorizontalStaff) {
                 t.draw(canvas, width, height)
             }
+            // Dessiner les labels de groupe
+            drawGroupLabels(canvas)
             canvas.drawPath(currentPath, strokePaint)
         }
         override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -319,58 +350,69 @@ class MiroirIME : InputMethodService() {
 
         // Ajouter au registre
         strokeRegistry.add(stroke)
+        val registryIdx = strokeRegistry.size - 1
+        val inkId = ++inkStrokeIdCounter
+        inkStrokeIdToRegistryIndex[inkId] = registryIdx
+
+        // ═══ GroupManager : groupement spatial ═══
+        val inkStroke = strokeRecordToInkStroke(stroke, inkId)
+        groupManager?.onStrokeSealed(inkStroke)
+
         imeView?.invalidate()
-
-        // Lancer la reconnaissance
-        scheduleRecognition()
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // RECONNAISSANCE ML KIT
-    // ═══════════════════════════════════════════════════════════════════
-
-    private fun scheduleRecognition() {
-        if (pendingRecognition) return
-        pendingRecognition = true
-
-        // Debounce sur le thread UI, puis inférence en background
-        uiHandler.postDelayed({
-            pendingRecognition = false
-            inferExecutor.submit {
-                doRecognition()
-            }
-        }, 800)
-    }
-
-    private fun doRecognition() {
-        val recognizer = recognizer ?: return
-        if (!recognizer.isLoaded) {
-            Log.d(TAG, "Modèle ML Kit pas encore chargé — reconnaissance différée")
-            uiHandler.postDelayed({ scheduleRecognition() }, 2000)
-            return
+    /** Convertit un StrokeRecord en InkStroke (format GroupManager) */
+    private fun strokeRecordToInkStroke(sr: StrokeRecord, id: Long): InkStroke {
+        val inkStroke = InkStroke(id = id, sessionId = 0L)
+        val t0 = sr.timestamps.firstOrNull() ?: System.currentTimeMillis()
+        for (i in sr.points.indices) {
+            val (x, y) = sr.points[i]
+            val t = sr.timestamps.getOrElse(i) { t0 + i * 16L }
+            val p = sr.pressures.getOrElse(i) { 1.0f }
+            val action = if (i == 0) InkPoint.ACTION_DOWN
+                else if (i == sr.points.size - 1) InkPoint.ACTION_UP
+                else InkPoint.ACTION_MOVE
+            inkStroke.points.add(InkPoint(
+                x = x, y = y,
+                pressure = p,
+                tilt = 0f, orientation = 0f, distance = 0f,
+                timestamp = t,
+                action = action,
+                toolType = InkPoint.TOOL_STYLUS
+            ))
         }
-        if (strokeRegistry.isEmpty()) return
+        inkStroke.endNano = sr.timestamps.lastOrNull() ?: t0
+        inkStroke.isSealed = true
+        return inkStroke
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // RECONNAISSANCE PAR GROUPE (via GroupManager)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Reconnaît un groupe individuel (appelé depuis le thread background).
+     */
+    private fun recognizeGroup(indices: List<Int>, firstStrokeId: Long) {
+        val recognizer = recognizer ?: return
+        if (!recognizer.isLoaded) return
 
         try {
             val strokesCopy = strokeRegistry.toList()
-            val indices = strokesCopy.indices.toList()
             val result = recognizer.recognize(strokesCopy, indices)
             if (!result.isNullOrBlank()) {
-                Log.i(TAG, "Reconnaissance: \"$result\"")
-                // Commit seulement le texte nouveau (delta textuel)
-                val newText = result.removePrefix(accumulatedText).trim()
-                if (newText.isNotEmpty()) {
-                    uiHandler.post {
-                        commitText(newText)
-                        accumulatedText = if (accumulatedText.isEmpty()) result
-                            else "$accumulatedText $newText"
-                    }
+                Log.i(TAG, "Reconnaissance groupe: \"$result\" (${indices.size} strokes)")
+                uiHandler.post {
+                    // Stocker le label
+                    val firstIdx = indices.firstOrNull() ?: return@post
+                    groupLabels[firstIdx] = result
+                    // Commit le nouveau texte
+                    commitText(result)
+                    imeView?.invalidate()
                 }
-                // ⚠️ NE PAS effacer les strokes — ils restent visibles
-                // Les groupes se forment naturellement par accumulation
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Erreur reconnaissance: ${e.message}")
+            Log.e(TAG, "Erreur reconnaissance groupe: ${e.message}")
         }
     }
 
@@ -393,5 +435,28 @@ class MiroirIME : InputMethodService() {
         currentPath.reset()
         currentStroke = null
         imeView?.invalidate()
+    }
+
+    /** Dessine les labels de groupe sous leur emplacement spatial */
+    private fun drawGroupLabels(canvas: Canvas) {
+        if (groupLabels.isEmpty()) return
+        val gm = groupManager ?: return
+        val groups = gm.allGroups()
+        for (group in groups) {
+            val firstIdx = group.strokeIds.firstOrNull()
+                ?.let { inkStrokeIdToRegistryIndex[it] }
+                ?: continue
+            val label = groupLabels[firstIdx] ?: continue
+            // Calculer la position Y du label (sous le groupe)
+            val registryIdx = firstIdx
+            val sr = strokeRegistry.getOrNull(registryIdx) ?: continue
+            if (sr.points.isEmpty()) continue
+            // Centre Y du stroke + 30px
+            var sumY = 0f
+            for (pt in sr.points) sumY += pt.second
+            val centerY = sumY / sr.points.size
+            val x = sr.points.first().first
+            canvas.drawText(label, x, centerY + 30f, labelPaint)
+        }
     }
 }
