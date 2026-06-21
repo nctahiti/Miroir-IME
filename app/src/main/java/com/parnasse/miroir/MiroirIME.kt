@@ -169,23 +169,16 @@ class MiroirIME : InputMethodService() {
         recognizer = DigitalInkWrapper(this)
         recognizer?.load()
 
-        // GroupManager — groupement spatial par blob
-        // Timer GroupManager → STORED → callback → file d'attente → inférence après inactivité
+        // ── GroupManager — groupement spatial par blob
         groupManager = GroupManager({ group ->
-            val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
-            if (indices.isEmpty()) return@GroupManager
-            Log.i(TAG, "Groupe complet: ${group.id} (${indices.size} strokes)")
-            // Invalider le cache spatial (nouveau groupe)
-            cachedGMCacheSize = -1
-            scheduleInferenceForGroup(indices)
+            // ⚠️ Callback vide — l'inférence est déclenchée par inactivité stylet.
+            // Les groupes restent LOADED → absorption toujours active (comme Miroir).
         }).also {
-            it.params = it.params.copy(transcriptionTimeoutMs = 3000L)
             it.pointProvider = { strokeId ->
                 inkStrokeIdToRegistryIndex[strokeId]
                     ?.let { idx -> strokeRegistry.getOrNull(idx)?.points }
             }
             // ═══ Persistance en mémoire (fichier temporaire) ═══
-            // Sans persistance, evictGroup() supprime définitivement les groupes.
             val tmpDir = java.io.File(cacheDir, "ime-groups")
             tmpDir.mkdirs()
             it.persistence = GroupPersistence(java.io.File(tmpDir, "current.groups"))
@@ -311,7 +304,8 @@ class MiroirIME : InputMethodService() {
         val calY = CalibrationActivity.getSpatialDistanceY(this)
         gm.params = gm.params.copy(
             spatialDistancePx = calX,
-            spatialDistanceY = calY
+            spatialDistanceY = calY,
+            transcriptionTimeoutMs = Long.MAX_VALUE  // jamais fermer — comme le Miroir
         )
         Log.d(TAG, "Params calibration: blobRx=$calX blobRy=$calY")
     }
@@ -634,6 +628,8 @@ class MiroirIME : InputMethodService() {
     private val inferenceQueue = java.util.concurrent.ConcurrentLinkedQueue<List<Int>>()
     /** true si une inférence est en cours (évite les chevauchements). */
     private var isInferring = false
+    /** Groupes déjà inférés (groupId → true). */
+    private val inferredGroups = mutableSetOf<String>()
 
     /** Appelé à chaque stroke — enregistre l'activité stylet. */
     private fun markStylusActive() {
@@ -641,49 +637,59 @@ class MiroirIME : InputMethodService() {
         scheduleInactivityCheck()
     }
 
-    /** Programme une vérification d'inactivité (debounce 1.5s). */
+    /** Programme une vérification d'inactivité (debounce 800ms). */
     private fun scheduleInactivityCheck() {
         if (inactivityCheckScheduled) return
         inactivityCheckScheduled = true
         uiHandler.postDelayed({
             inactivityCheckScheduled = false
             val idle = System.currentTimeMillis() - lastStylusActivity
-            if (idle >= 1500 && inferenceQueue.isNotEmpty()) {
-                startInferencePipeline()
-            } else if (inferenceQueue.isNotEmpty()) {
+            if (idle >= 800) {
+                scanAndInferGroups()
+            } else {
                 scheduleInactivityCheck()
             }
-        }, 1500)
+        }, 800)
     }
 
-    /** Ajoute un groupe à la file d'attente d'inférence. */
-    private fun scheduleInferenceForGroup(indices: List<Int>) {
-        inferenceQueue.add(indices)
-        scheduleInactivityCheck()
+    /** Scan les groupes non inférés → file d'attente → pipeline. */
+    private fun scanAndInferGroups() {
+        val gm = groupManager ?: return
+        val groups = gm.allGroups()
+        for (group in groups) {
+            if (group.id in inferredGroups) continue
+            if (group.strokeIds.isEmpty()) continue
+            val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+            if (indices.isEmpty()) continue
+            inferredGroups.add(group.id)
+            inferenceQueue.add(indices)
+            cachedGMCacheSize = -1
+            Log.i(TAG, "Groupe à inférer: ${group.id} (${indices.size} strokes)")
+        }
+        if (inferenceQueue.isNotEmpty()) {
+            startInferencePipeline()
+        }
     }
 
-    /** Démarre le pipeline d'inférence séquentielle (si pas déjà en cours). */
+    /** Démarre le pipeline (si pas déjà en cours). */
     private fun startInferencePipeline() {
         if (isInferring) return
         if (inferenceQueue.isEmpty()) return
         isInferring = true
-        Log.i(TAG, "Pipeline inférence: ${inferenceQueue.size} groupe(s) en file")
+        Log.i(TAG, "Pipeline inférence: ${inferenceQueue.size} groupe(s)")
         processNextInference()
     }
 
     /** Traite un groupe, puis enchaîne sur le suivant. */
     private fun processNextInference() {
         val indices = inferenceQueue.poll() ?: run {
-            // File vide → pipeline terminé
             isInferring = false
             Log.i(TAG, "Pipeline inférence: terminé")
             return
         }
         inferExecutor.submit {
             recognizeGroup(indices)
-            // Respiration entre deux inférences (évite de surcharger le modèle)
             try { Thread.sleep(80) } catch (_: InterruptedException) {}
-            // Enchaîner sur le groupe suivant (sur le même thread background)
             processNextInference()
         }
     }
@@ -774,15 +780,20 @@ class MiroirIME : InputMethodService() {
         if (groupLabels.isEmpty()) return
         val groups = getSpatialGroups()
         val bounds = getSpatialBounds()
+        var drawn = 0
         for ((firstIdx, label) in groupLabels) {
             val gi = groups.indexOfFirst { it.firstOrNull() == firstIdx }
-            if (gi < 0 || gi >= bounds.size) continue
+            if (gi < 0 || gi >= bounds.size) {
+                Log.d(TAG, "Label '$label' (firstIdx=$firstIdx) — groupe spatial introuvable parmi ${groups.size} groupes")
+                continue
+            }
             val r = bounds[gi]
             if (r.left >= Float.MAX_VALUE) continue
             val lineY = snapToLine((r.top + r.bottom) / 2f)
-            // Label juste sous l'interligne (là où le phare se pose)
             val y = lineY + labelPaint.textSize + 4f
             canvas.drawText(label, r.left, y, labelPaint)
+            drawn++
         }
+        if (drawn > 0) Log.d(TAG, "Labels dessinés: $drawn/${groupLabels.size}")
     }
 }
