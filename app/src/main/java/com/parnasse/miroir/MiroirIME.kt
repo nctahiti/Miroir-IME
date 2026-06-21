@@ -112,13 +112,13 @@ class MiroirIME : InputMethodService() {
         val elapsed = now - lastInvalidate
         if (elapsed >= 30) {
             lastInvalidate = now
-            imeView?.invalidate()
+            imeView?.postInvalidate()
         } else {
             pendingInvalidate = true
             uiHandler.postDelayed({
                 pendingInvalidate = false
                 lastInvalidate = System.currentTimeMillis()
-                imeView?.invalidate()
+                imeView?.postInvalidate()
             }, 30 - elapsed)
         }
     }
@@ -180,9 +180,9 @@ class MiroirIME : InputMethodService() {
             orientation = android.widget.LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT)  // plein écran
-            // Fond transparent — l'app en dessous reste visible
-            setBackgroundColor(Color.TRANSPARENT)
+                ViewGroup.LayoutParams.MATCH_PARENT)
+            // Fond opaque — évite la composition coûteuse avec l'app en dessous
+            setBackgroundColor(Color.WHITE)
         }
 
         // ── Barre d'outils EN HAUT ──────────────────────────────────
