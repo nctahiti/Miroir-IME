@@ -59,7 +59,12 @@ class MiroirIME : InputMethodService() {
     // ── Reconnaissance ML Kit ──────────────────────────────────────────
     private var recognizer: DigitalInkWrapper? = null
     private val strokeRegistry = mutableListOf<StrokeRecord>()
-    private val handler = Handler(Looper.getMainLooper())
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val inferExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "miroir-ime-infer").apply {
+            priority = Thread.NORM_PRIORITY - 1
+        }
+    }
     private var pendingRecognition = false
 
     // ── Vue IME ────────────────────────────────────────────────────────
@@ -127,6 +132,7 @@ class MiroirIME : InputMethodService() {
     override fun onDestroy() {
         releaseTouchHelper()
         recognizer?.close()
+        inferExecutor.shutdown()
         bitmap?.recycle()
         super.onDestroy()
     }
@@ -305,9 +311,12 @@ class MiroirIME : InputMethodService() {
         if (pendingRecognition) return
         pendingRecognition = true
 
-        handler.postDelayed({
+        // Debounce sur le thread UI, puis inférence en background
+        uiHandler.postDelayed({
             pendingRecognition = false
-            doRecognition()
+            inferExecutor.submit {
+                doRecognition()
+            }
         }, 800)
     }
 
@@ -315,19 +324,24 @@ class MiroirIME : InputMethodService() {
         val recognizer = recognizer ?: return
         if (!recognizer.isLoaded) {
             Log.d(TAG, "Modèle ML Kit pas encore chargé — reconnaissance différée")
-            handler.postDelayed({ scheduleRecognition() }, 2000)
+            uiHandler.postDelayed({ scheduleRecognition() }, 2000)
             return
         }
         if (strokeRegistry.isEmpty()) return
 
         try {
-            val indices = strokeRegistry.indices.toList()
-            val result = recognizer.recognize(strokeRegistry, indices)
+            // Copie défensive pour le thread background
+            val strokesCopy = strokeRegistry.toList()
+            val indices = strokesCopy.indices.toList()
+            val result = recognizer.recognize(strokesCopy, indices)
             if (!result.isNullOrBlank()) {
-                Log.i(TAG, "Reconnaissance: \"$result\" (${strokeRegistry.size} strokes)")
-                commitText(result)
-                clearCanvas()
-                strokeRegistry.clear()
+                Log.i(TAG, "Reconnaissance: \"$result\" (${strokesCopy.size} strokes)")
+                // Commit sur le thread UI
+                uiHandler.post {
+                    commitText(result)
+                    clearCanvas()
+                    strokeRegistry.clear()
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Erreur reconnaissance: ${e.message}")
