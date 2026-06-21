@@ -689,13 +689,10 @@ class CaptureView(context: Context) : View(context) {
         checkLongHoverReactivation()
     }
 
-    // ── Cache spatial (évite de recalculer computeWordGroups à chaque frame) ──
+    // ── Cache spatial (évite de recalculer à chaque frame) ──
     private var cachedSpatialGroups: List<List<Int>>? = null
     private var cachedSpatialBounds: List<android.graphics.RectF>? = null
     private var cachedGMCacheSize: Int = -1
-    // Groupes chargés depuis .groups — si non-null, computeWordGroups() les restitue
-    // sans recalcul spatial. null = mode écriture live (blob 2D normal).
-    private var seedGroups: List<List<Int>>? = null
 
     /** Retourne les groupes spatiaux depuis GroupManager (source unique), avec cache. */
     internal fun getSpatialGroups(): List<List<Int>> {
@@ -1971,10 +1968,6 @@ class CaptureView(context: Context) : View(context) {
             }
             Log.i(TAG, "Note chargee: ${loadedGroups.size} groupes enregistres dans GroupManager")
 
-            // ═══ seedGroups : identité préservée au rechargement ═══
-            seedGroups = loadedGroups.toList()
-            invalidateSpatialCache()
-
             // ═══ Peupler inferredGroups + groupTranscriptions depuis le .note ═══
             for (wi in 0 until words.length()) {
                 val word = words.getJSONObject(wi)
@@ -1989,8 +1982,8 @@ class CaptureView(context: Context) : View(context) {
             }
             Log.i(TAG, "Note chargée: ${inferredGroups.size} groupes marqués inférés, ${groupTranscriptions.size} transcriptions")
 
-            // Log : ordre des seedGroups après chargement
-            val seedPreview = seedGroups?.take(8)?.mapIndexed { i, g ->
+            // Log : ordre des groupes après chargement
+            val seedPreview = loadedGroups.take(8).mapIndexed { i, g ->
                 val fi = g.firstOrNull()
                 val tx = if (fi != null) groupTranscriptions[fi] else "?"
                 "[$i]${g.size}s:$tx"
@@ -2811,235 +2804,6 @@ class CaptureView(context: Context) : View(context) {
         rebuildBitmap()
     }
 
-    /** Groupement spatial UNIFIÉ — source unique pour blob/survol/EDIT/sauvegarde.
-     *  seedGroups (non-null au rechargement) = contrainte, pas contournement :
-     *  les strokes d'un seedGroup restent ensemble, le blob 2D groupe les orphelins. */
-    private fun computeWordGroups(): List<List<Int>> {
-        val seed = seedGroups
-        if (seed == null) {
-            // ── MODE ÉCRITURE LIVE : blob 2D spatial + absorption SELECTED ──
-            return absorbSelectedGroup(computeSpatialGroupsRaw())
-        }
-        // ── MODE RECHARGEMENT : seedGroups = contrainte ──
-        // La note chargée est une photographie : les groupes sont préservés
-        // tels que sauvegardés. Pas d'absorption automatique entre groupes
-        // existants — la fusion reste manuelle (bouton 🔗).
-        val covered = seed.flatten().toSet()
-        val allIndices = strokeRegistry.indices.toSet()
-        if (allIndices == covered) return seed
-
-        // Nouveaux strokes forment leurs propres groupes (pas d'absorption)
-        val newIndices = (allIndices - covered).toList()
-        val newGroups = computeSpatialGroupsFor(newIndices)
-
-        // Pas d'absorption entre seedGroups et newGroups.
-        // Les nouveaux strokes restent indépendants jusqu'à ce que
-        // l'utilisateur les sélectionne (hover long → SELECTED → absorption live).
-        val allGroups = (seed.map { it.toMutableList() } + newGroups.map { it.toMutableList() }).toMutableList()
-        return absorbSelectedGroup(allGroups)
-    }
-
-    /** Vrai si les bounds (RectF) des deux groupes se chevauchent avec les marges blob 2D. */
-    private fun blobIntersects(groupA: List<Int>, groupB: List<Int>): Boolean {
-        val distX = CalibrationActivity.getSpatialDistanceX(context) * 0.5f
-        val distY = CalibrationActivity.getSpatialDistanceY(context)
-        val marginX = maxOf(distX, 5f)
-        val marginY = maxOf(distY * 0.3f, 5f)
-        fun boundsOf(indices: List<Int>): android.graphics.RectF {
-            var l = Float.MAX_VALUE; var t = Float.MAX_VALUE
-            var r = Float.MIN_VALUE; var b = Float.MIN_VALUE
-            for (idx in indices) {
-                if (idx >= strokeRegistry.size) continue
-                for ((px, py) in strokeRegistry[idx].points.take(strokeRegistry[idx].activePoints)) {
-                    if (px < l) l = px; if (px > r) r = px
-                    if (py < t) t = py; if (py > b) b = py
-                }
-            }
-            return android.graphics.RectF(l, t, r, b)
-        }
-        val ba = boundsOf(groupA); if (ba.isEmpty) return false
-        val bb = boundsOf(groupB); if (bb.isEmpty) return false
-        val expanded = android.graphics.RectF(
-            ba.left - marginX, ba.top - marginY,
-            ba.right + marginX, ba.bottom + marginY
-        )
-        return android.graphics.RectF.intersects(expanded, bb)
-    }
-
-    /** Blob 2D restreint à un sous-ensemble d'indices (strokes orphelins au rechargement). */
-    private fun computeSpatialGroupsFor(indices: List<Int>): List<MutableList<Int>> {
-        if (indices.isEmpty()) return emptyList()
-        if (indices.size == 1) return mutableListOf(mutableListOf(indices[0]))
-        // Rayons DIRECTS du blob — identiques à l'absorption et au groupement
-        val rx = CalibrationActivity.getSpatialDistanceX(context)
-        val ry = CalibrationActivity.getSpatialDistanceY(context)
-        val idxToBounds = mutableMapOf<Int, android.graphics.RectF>()
-        for (i in indices) {
-            val s = strokeRegistry[i]
-            var l = Float.MAX_VALUE; var t = Float.MAX_VALUE
-            var r = Float.MIN_VALUE; var b = Float.MIN_VALUE
-            for ((px, py) in s.points.take(s.activePoints)) {
-                if (px < l) l = px; if (px > r) r = px
-                if (py < t) t = py; if (py > b) b = py
-            }
-            idxToBounds[i] = android.graphics.RectF(l, t, r, b)
-        }
-        // Test point-contre-point avec le blob (rx, ry)
-        fun isNear(idx: Int, groupIndices: List<Int>): Boolean {
-            val sp = strokeRegistry.getOrNull(idx) ?: return false
-            for ((sx, sy) in sp.points.take(sp.activePoints)) {
-                for (gi in groupIndices) {
-                    val gs = strokeRegistry.getOrNull(gi) ?: continue
-                    for ((gx, gy) in gs.points.take(gs.activePoints)) {
-                        val dx = (sx - gx) / rx
-                        val dy = (sy - gy) / ry
-                        if (dx * dx + dy * dy <= 1.0f) return true
-                    }
-                }
-            }
-            return false
-        }
-        val sorted = indices.toList()
-        var current = mutableListOf(sorted[0])
-        var gLeft = idxToBounds[sorted[0]]!!.left; var gTop = idxToBounds[sorted[0]]!!.top
-        var gRight = idxToBounds[sorted[0]]!!.right; var gBottom = idxToBounds[sorted[0]]!!.bottom
-        val groups = mutableListOf<MutableList<Int>>()
-        for (k in 1 until sorted.size) {
-            val idx = sorted[k]
-            // Fast-reject rectangulaire : les bounds gonflees (rx, ry) se touchent-elles ?
-            val expanded = android.graphics.RectF(gLeft - rx, gTop - ry, gRight + rx, gBottom + ry)
-            if (!android.graphics.RectF.intersects(expanded, idxToBounds[idx]!!)) {
-                groups.add(current)
-                current = mutableListOf(idx)
-                gLeft = idxToBounds[idx]!!.left; gRight = idxToBounds[idx]!!.right
-                gTop = idxToBounds[idx]!!.top; gBottom = idxToBounds[idx]!!.bottom
-            } else if (isNear(idx, current)) {
-                current.add(idx)
-                if (idxToBounds[idx]!!.left < gLeft) gLeft = idxToBounds[idx]!!.left
-                if (idxToBounds[idx]!!.right > gRight) gRight = idxToBounds[idx]!!.right
-                if (idxToBounds[idx]!!.top < gTop) gTop = idxToBounds[idx]!!.top
-                if (idxToBounds[idx]!!.bottom > gBottom) gBottom = idxToBounds[idx]!!.bottom
-            } else {
-                groups.add(current)
-                current = mutableListOf(idx)
-                gLeft = idxToBounds[idx]!!.left; gRight = idxToBounds[idx]!!.right
-                gTop = idxToBounds[idx]!!.top; gBottom = idxToBounds[idx]!!.bottom
-            }
-        }
-        groups.add(current)
-        return groups
-    }
-
-    /** Groupement spatial pur (distance horizontale + retour à la ligne). */
-    /** Groupement spatial 2D par blob — les bounds des strokes qui se chevauchent
-     *  (avec marge = distX horizontal, distY*0.4 vertical) sont groupés ensemble.
-     *  Indépendant de l'ordre d'écriture — une croix (+) est toujours un seul groupe. */
-    /** Groupement spatial 2D par blob, trié par X, séquentiel (pas de fermeture transitive).
-     *  marginX = distX plafonné à 25px (assez pour les lettres, pas pour l.espace entre mots). */
-    private fun computeSpatialGroupsRaw(): List<MutableList<Int>> {
-        if (strokeRegistry.isEmpty()) return emptyList()
-        if (strokeRegistry.size == 1) return mutableListOf(mutableListOf(0))
-
-        // Rayons DIRECTS du blob — mêmes rx, ry que l'absorption (isStrokeNearGroup)
-        val rx = CalibrationActivity.getSpatialDistanceX(context)
-        val ry = CalibrationActivity.getSpatialDistanceY(context)
-
-        // Précalculer les bounds et points de chaque stroke
-        val bounds = Array(strokeRegistry.size) { i ->
-            val s = strokeRegistry[i]
-            var l = Float.MAX_VALUE; var t = Float.MAX_VALUE
-            var r = Float.MIN_VALUE; var b = Float.MIN_VALUE
-            for ((px, py) in s.points.take(s.activePoints)) {
-                if (px < l) l = px; if (px > r) r = px
-                if (py < t) t = py; if (py > b) b = py
-            }
-            android.graphics.RectF(l, t, r, b)
-        }
-
-        // Test point-contre-point : le nouveau stroke touche-t-il le blob du groupe courant ?
-        fun isNearGroup(strokeIdx: Int, groupIndices: List<Int>): Boolean {
-            if (strokeIdx >= strokeRegistry.size) return false
-            val sp = strokeRegistry[strokeIdx]
-            for ((sx, sy) in sp.points.take(sp.activePoints)) {
-                for (gi in groupIndices) {
-                    val gs = strokeRegistry.getOrNull(gi) ?: continue
-                    for ((gx, gy) in gs.points.take(gs.activePoints)) {
-                        val dx = (sx - gx) / rx
-                        val dy = (sy - gy) / ry
-                        if (dx * dx + dy * dy <= 1.0f) return true
-                    }
-                }
-            }
-            return false
-        }
-
-        // Ordre d.écriture (chronologique) — les strokes d.une même ligne
-        // sont écrits ensemble, puis on passe à la ligne suivante.
-        // Pas de tri X (casserait les groupes quand un stroke de L2
-        // s.intercale horizontalement entre deux strokes de L1).
-        val sortedIndices = strokeRegistry.indices.toList()
-        var current = mutableListOf(sortedIndices[0])
-        var gLeft = bounds[current[0]].left; var gTop = bounds[current[0]].top
-        var gRight = bounds[current[0]].right; var gBottom = bounds[current[0]].bottom
-
-        val groups = mutableListOf<MutableList<Int>>()
-        for (k in 1 until sortedIndices.size) {
-            val idx = sortedIndices[k]
-            // Fast-reject rectangulaire : les bounds gonflees (rx, ry) se touchent-elles ?
-            val expanded = android.graphics.RectF(gLeft - rx, gTop - ry, gRight + rx, gBottom + ry)
-            if (!android.graphics.RectF.intersects(expanded, bounds[idx])) {
-                // Trop loin → nouveau groupe, sans test point-contre-point
-                groups.add(current)
-                current = mutableListOf(idx)
-                gLeft = bounds[idx].left; gRight = bounds[idx].right
-                gTop = bounds[idx].top; gBottom = bounds[idx].bottom
-            } else if (isNearGroup(idx, current)) {
-                current.add(idx)
-                if (bounds[idx].left < gLeft) gLeft = bounds[idx].left
-                if (bounds[idx].right > gRight) gRight = bounds[idx].right
-                if (bounds[idx].top < gTop) gTop = bounds[idx].top
-                if (bounds[idx].bottom > gBottom) gBottom = bounds[idx].bottom
-            } else {
-                groups.add(current)
-                current = mutableListOf(idx)
-                gLeft = bounds[idx].left; gRight = bounds[idx].right
-                gTop = bounds[idx].top; gBottom = bounds[idx].bottom
-            }
-        }
-        groups.add(current)
-
-        Log.d(TAG, "computeSpatialGroupsRaw (blob point-contre-point, rx=$rx ry=$ry): ${groups.size} groupes")
-        return groups
-    }
-    /** Fusionne les groupes spatiaux proches du groupe SELECTED (correction/absorption). */
-    /** Fusionne les groupes spatiaux contenant des strokes du SELECTED (coherence visuelle).
-     *  Ne fusionne PAS les groupes voisins — seule l.appartenance au SELECTED compte.
-     *  La fusion entre groupes existants reste manuelle (bouton 🔗). */
-    private fun absorbSelectedGroup(spatialGroups: List<MutableList<Int>>): List<List<Int>> {
-        val selectedGroups = groupManager.groupsInState(GroupState.SELECTED)
-        if (selectedGroups.isEmpty()) return spatialGroups
-
-        val result = spatialGroups.map { it.toMutableList() }.toMutableList()
-        for (sel in selectedGroups) {
-            val selIndices = sel.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
-            if (selIndices.isEmpty()) continue
-
-            // Fusionner les groupes qui contiennent des strokes du SELECTED (appartenance, pas geometrie)
-            val toMerge = mutableListOf<Int>()
-            for (gi in result.indices) {
-                if (result[gi].any { it in selIndices }) {
-                    toMerge.add(gi)
-                }
-            }
-            if (toMerge.size > 1) {
-                val merged = toMerge.flatMap { result[it] }.distinct().toMutableList()
-                for (gi in toMerge.sortedDescending()) { result.removeAt(gi) }
-                result.add(toMerge.first(), merged)
-                Log.d(TAG, "Absorption SELECTED (stroke membership): ${toMerge.size} groupes fusionnes")
-            }
-        }
-        return result
-    }
 
     /** Trouve le groupe spatial contenant le stroke (cache unifié). */
     private fun findWordGroup(strokeIndex: Int): List<Int>? {
@@ -3781,8 +3545,8 @@ class CaptureView(context: Context) : View(context) {
         // ═══ Nettoyer les maps GroupManager (sinon accumulation → lag) ═══
         inkStrokeIdToRegistryIndex.clear()
         registryIndexToInkStrokeId.clear()
-        // ═══ seedGroups : retour au mode écriture live ═══
-        seedGroups = null
+        // ═══ Mode écriture live ═══
+        invalidateSpatialCache()
         inferredGroups.clear()
         groupTranscriptions.clear()
         // Nettoyer les timers par groupe
