@@ -480,10 +480,13 @@ class MiroirIME : InputMethodService() {
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             if (showOverlays) {
-                // Blobs des groupes inférés (en absorption active)
+                // Blobs des groupes SÉLECTIONNÉS uniquement
                 if (showOverlays) {
-                    for ((_, data) in groupBlobs) {
-                        canvas.drawPath(data.path, blobPaint)
+                    val gm = groupManager
+                    if (gm != null) {
+                        for (g in gm.groupsInState(GroupState.SELECTED)) {
+                            groupBlobs[g.id]?.let { canvas.drawPath(it.path, blobPaint) }
+                        }
                     }
                 }
             }
@@ -503,18 +506,24 @@ class MiroirIME : InputMethodService() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> { /* ignoré — IME ne reçoit pas ces événements */ }
                 MotionEvent.ACTION_DOWN -> {
-                    // ═══ Détecter absorption : le stylet touche-t-il un blob existant ? ═══
+                    // ═══ Sélection / absorption : détecter le blob sous le stylet ═══
                     activeBlobGroupId = null
                     for ((gid, data) in groupBlobs) {
                         if (data.bounds.contains(event.x, event.y)) {
                             activeBlobGroupId = gid
+                            // Sélectionner le groupe pour absorption/correction
+                            val gm = groupManager
+                            if (gm != null) {
+                                gm.allGroups().find { it.id == gid }?.let { gm.selectGroup(it.id) }
+                            }
                             break
                         }
                     }
-                    // Si hors de tout blob → nouveau groupe → masquer les anciens blobs
+                    // Si hors blob → désélectionner tous les groupes
                     if (activeBlobGroupId == null) {
-                        groupBlobs.clear()
-                        refreshAll()
+                        groupManager?.let { gm ->
+                            gm.groupsInState(GroupState.SELECTED).forEach { gm.deselectGroup(it.id) }
+                        }
                     }
                     onStylusDown(event.x, event.y)
                 }
