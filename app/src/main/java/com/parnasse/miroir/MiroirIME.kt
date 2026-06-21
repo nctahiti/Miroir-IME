@@ -659,9 +659,6 @@ class MiroirIME : InputMethodService() {
     private var lastPointRefresh = 0L
 
     private fun onStylusDown(x: Float, y: Float) {
-        // ═══ Annuler tous les timers d'inférence (un nouveau stroke commence) ═══
-        for ((_, timer) in groupTimers) timer.cancel(false)
-        groupTimers.clear()
         currentPath.reset()
         currentPath.moveTo(x, y)
         currentStroke = StrokeRecord(
