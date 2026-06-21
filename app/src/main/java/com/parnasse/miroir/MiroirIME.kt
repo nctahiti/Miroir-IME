@@ -630,7 +630,9 @@ class MiroirIME : InputMethodService() {
     private val groupTimers = mutableMapOf<Int, java.util.concurrent.ScheduledFuture<*>>()
     private val groupStrokeCountAtInference = mutableMapOf<Int, Int>()
     private val groupLastModifiedMs = mutableMapOf<Int, Long>()
-    private val inferredGroupFirstIdxs = mutableSetOf<Int>()  // firstIdx des groupes inférés
+    private val timerArmedAt = mutableMapOf<Int, Long>()  // timestamp d'armement du timer
+    private val timerArmedStrokeCount = mutableMapOf<Int, Int>()  // strokes à l'armement
+    private val inferredGroupFirstIdxs = mutableSetOf<Int>()
 
     /** Appelé après chaque stroke pour armer le timer du groupe modifié. */
     private fun scheduleGroupInference() {
@@ -638,32 +640,41 @@ class MiroirIME : InputMethodService() {
         val inferDelay = CalibrationActivity.getAutoInferDelay(this)
         val now = System.currentTimeMillis()
 
-        // Trouver les groupes LOADED (actifs) qui ont changé
         val loadedGroups = gm.groupsInState(GroupState.LOADED)
         for (group in loadedGroups) {
             if (group.strokeIds.isEmpty()) continue
             val firstIdx = inkStrokeIdToRegistryIndex[group.strokeIds.first()] ?: continue
+            val strokeCount = group.strokeIds.size
             groupLastModifiedMs[firstIdx] = now
 
             // Groupe déjà inféré et inchangé → skip
             val infCount = groupStrokeCountAtInference[firstIdx]
-            if (firstIdx in inferredGroupFirstIdxs && infCount != null && group.strokeIds.size == infCount) {
+            if (firstIdx in inferredGroupFirstIdxs && infCount != null && strokeCount == infCount) {
                 continue
             }
 
-            // Réarmer le timer
+            // Annuler l'ancien timer et armer le nouveau
             groupTimers.remove(firstIdx)?.cancel(false)
+            timerArmedAt[firstIdx] = now
+            timerArmedStrokeCount[firstIdx] = strokeCount
             val timer = inferExecutor.schedule({
                 armGroupInference(firstIdx)
             }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
             groupTimers[firstIdx] = timer
-            Log.d(TAG, "⏱️ Timer groupe firstIdx=$firstIdx → ${inferDelay}ms (${group.strokeIds.size} strokes)")
         }
     }
 
-    /** Appelé par le timer — vérifie et déclenche l'inférence. */
+    /** Appelé par le timer — vérifie que le groupe n'a pas changé depuis l'armement. */
     private fun armGroupInference(firstIdx: Int) {
+        // ═══ Garde-fou : groupe modifié depuis l'armement du timer → ignorer ═══
+        val armedAt = timerArmedAt[firstIdx] ?: return
+        val lastMod = groupLastModifiedMs[firstIdx] ?: return
+        if (lastMod > armedAt) {
+            Log.d(TAG, "⏭️ Timer ignoré firstIdx=$firstIdx — groupe modifié depuis armement")
+            return
+        }
         if (firstIdx in inferredGroupFirstIdxs) return
+
         val gm = groupManager ?: return
         val group = gm.allGroups().find { g ->
             inkStrokeIdToRegistryIndex[g.strokeIds.firstOrNull() ?: return@find false] == firstIdx
@@ -671,9 +682,15 @@ class MiroirIME : InputMethodService() {
         val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
         if (indices.isEmpty()) return
 
+        // Vérifier que le nombre de strokes n'a pas changé
+        val armedCount = timerArmedStrokeCount[firstIdx]
+        if (armedCount != null && group.strokeIds.size != armedCount) {
+            Log.d(TAG, "⏭️ Timer ignoré firstIdx=$firstIdx — strokes ${armedCount}→${group.strokeIds.size}")
+            return
+        }
+
         inferredGroupFirstIdxs.add(firstIdx)
         groupStrokeCountAtInference[firstIdx] = group.strokeIds.size
-        groupLastModifiedMs[firstIdx] = System.currentTimeMillis()
         groupTimers.remove(firstIdx)
 
         inferenceQueue.add(indices)
