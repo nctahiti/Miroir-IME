@@ -535,6 +535,8 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
 
     private fun onStylusDown(x: Float, y: Float) {
+        // ═══ Invalider tous les timers d'inférence (nouveau stroke) ═══
+        cancelAllGroupTimers()
         currentPath.reset()
         currentPath.moveTo(x, y)
         currentStroke = StrokeRecord(
@@ -633,6 +635,14 @@ class MiroirIME : InputMethodService() {
     private val timerArmedAt = mutableMapOf<Int, Long>()  // timestamp d'armement du timer
     private val timerArmedStrokeCount = mutableMapOf<Int, Int>()  // strokes à l'armement
     private val inferredGroupFirstIdxs = mutableSetOf<Int>()
+
+    /** Annule tous les timers d'inférence en attente. */
+    private fun cancelAllGroupTimers() {
+        for ((_, timer) in groupTimers) {
+            timer.cancel(false)
+        }
+        groupTimers.clear()
+    }
 
     /** Appelé après chaque stroke pour armer le timer du groupe modifié. */
     private fun scheduleGroupInference() {
