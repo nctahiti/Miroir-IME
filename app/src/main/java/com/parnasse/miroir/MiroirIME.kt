@@ -57,7 +57,7 @@ class MiroirIME : InputMethodService() {
     private val inkStrokeIdToRegistryIndex = mutableMapOf<Long, Int>()
     private var inkStrokeIdCounter = 0L
     private val uiHandler = Handler(Looper.getMainLooper())
-    private val inferExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+    private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "miroir-ime-infer").apply {
             priority = Thread.NORM_PRIORITY - 1
         }
@@ -75,11 +75,7 @@ class MiroirIME : InputMethodService() {
         // Fond blanc léger derrière le texte pour lisibilité
         setShadowLayer(3f, 1f, 1f, Color.argb(200, 255, 255, 255))
     }
-    // Timer d'inactivité stylet global (pour différer l'inférence)
-    private var lastStylusActivity = 0L
-    private var inactivityCheckScheduled = false
-
-    // ── Vue IME ────────────────────────────────────────────────────────
+    // ── Dessin ────────────────────────────────────────────────────────
     private var imeView: CaptureSurfaceView? = null
 
     // ── Barre d'outils ─────────────────────────────────────────────────
@@ -539,7 +535,6 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
 
     private fun onStylusDown(x: Float, y: Float) {
-        markStylusActive()
         currentPath.reset()
         currentPath.moveTo(x, y)
         currentStroke = StrokeRecord(
@@ -592,6 +587,9 @@ class MiroirIME : InputMethodService() {
         // Mettre à jour le cache du blob
         updateBlobCache()
 
+        // Armer le timer d'inférence pour les groupes modifiés
+        scheduleGroupInference()
+
         throttledInvalidate()
     }
 
@@ -621,54 +619,67 @@ class MiroirIME : InputMethodService() {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // INFÉRENCE DIFFÉRÉE — flux asynchrone séquencé
+    // INFÉRENCE PAR GROUPE — timers indépendants (comme Miroir V4)
     // ═══════════════════════════════════════════════════════════════════
 
     /** File d'attente FIFO de groupes à reconnaître. */
     private val inferenceQueue = java.util.concurrent.ConcurrentLinkedQueue<List<Int>>()
-    /** true si une inférence est en cours (évite les chevauchements). */
     private var isInferring = false
-    /** Groupes déjà inférés (groupId → true). */
-    private val inferredGroups = mutableSetOf<String>()
 
-    /** Appelé à chaque stroke — enregistre l'activité stylet. */
-    private fun markStylusActive() {
-        lastStylusActivity = System.currentTimeMillis()
-        scheduleInactivityCheck()
-    }
+    // ═══ Timers par groupe (comme CaptureView) ═══
+    private val groupTimers = mutableMapOf<Int, java.util.concurrent.ScheduledFuture<*>>()
+    private val groupStrokeCountAtInference = mutableMapOf<Int, Int>()
+    private val groupLastModifiedMs = mutableMapOf<Int, Long>()
+    private val inferredGroupFirstIdxs = mutableSetOf<Int>()  // firstIdx des groupes inférés
 
-    /** Programme une vérification d'inactivité (debounce 800ms). */
-    private fun scheduleInactivityCheck() {
-        if (inactivityCheckScheduled) return
-        inactivityCheckScheduled = true
-        uiHandler.postDelayed({
-            inactivityCheckScheduled = false
-            val idle = System.currentTimeMillis() - lastStylusActivity
-            if (idle >= 800) {
-                scanAndInferGroups()
-            } else {
-                scheduleInactivityCheck()
-            }
-        }, 800)
-    }
-
-    /** Scan les groupes non inférés → file d'attente → pipeline. */
-    private fun scanAndInferGroups() {
+    /** Appelé après chaque stroke pour armer le timer du groupe modifié. */
+    private fun scheduleGroupInference() {
         val gm = groupManager ?: return
-        val groups = gm.allGroups()
-        for (group in groups) {
-            if (group.id in inferredGroups) continue
+        val inferDelay = CalibrationActivity.getAutoInferDelay(this)
+        val now = System.currentTimeMillis()
+
+        // Trouver les groupes LOADED (actifs) qui ont changé
+        val loadedGroups = gm.groupsInState(GroupState.LOADED)
+        for (group in loadedGroups) {
             if (group.strokeIds.isEmpty()) continue
-            val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
-            if (indices.isEmpty()) continue
-            inferredGroups.add(group.id)
-            inferenceQueue.add(indices)
-            cachedGMCacheSize = -1
-            Log.i(TAG, "Groupe à inférer: ${group.id} (${indices.size} strokes)")
+            val firstIdx = inkStrokeIdToRegistryIndex[group.strokeIds.first()] ?: continue
+            groupLastModifiedMs[firstIdx] = now
+
+            // Groupe déjà inféré et inchangé → skip
+            val infCount = groupStrokeCountAtInference[firstIdx]
+            if (firstIdx in inferredGroupFirstIdxs && infCount != null && group.strokeIds.size == infCount) {
+                continue
+            }
+
+            // Réarmer le timer
+            groupTimers.remove(firstIdx)?.cancel(false)
+            val timer = inferExecutor.schedule({
+                armGroupInference(firstIdx)
+            }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
+            groupTimers[firstIdx] = timer
+            Log.d(TAG, "⏱️ Timer groupe firstIdx=$firstIdx → ${inferDelay}ms (${group.strokeIds.size} strokes)")
         }
-        if (inferenceQueue.isNotEmpty()) {
-            startInferencePipeline()
-        }
+    }
+
+    /** Appelé par le timer — vérifie et déclenche l'inférence. */
+    private fun armGroupInference(firstIdx: Int) {
+        if (firstIdx in inferredGroupFirstIdxs) return
+        val gm = groupManager ?: return
+        val group = gm.allGroups().find { g ->
+            inkStrokeIdToRegistryIndex[g.strokeIds.firstOrNull() ?: return@find false] == firstIdx
+        } ?: return
+        val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
+        if (indices.isEmpty()) return
+
+        inferredGroupFirstIdxs.add(firstIdx)
+        groupStrokeCountAtInference[firstIdx] = group.strokeIds.size
+        groupLastModifiedMs[firstIdx] = System.currentTimeMillis()
+        groupTimers.remove(firstIdx)
+
+        inferenceQueue.add(indices)
+        cachedGMCacheSize = -1
+        Log.i(TAG, "Groupe à inférer: ${group.id} (${indices.size} strokes)")
+        startInferencePipeline()
     }
 
     /** Démarre le pipeline (si pas déjà en cours). */
