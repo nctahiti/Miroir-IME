@@ -98,16 +98,6 @@ class MiroirIME : InputMethodService() {
     // Une fois fixé, le mot ne bouge que par déplacement, pas par recalcul.
     private val groupAnchor = mutableMapOf<String, Pair<Float, Float>>()  // groupId → (x, y)
 
-    /** Enregistre l'ancre d'un groupe à sa création. */
-    private fun anchorGroup(groupId: String) {
-        val gm = groupManager ?: return
-        val group = gm.allGroups().find { it.id == groupId } ?: return
-        val firstStrokeId = group.strokeIds.firstOrNull() ?: return
-        val idx = inkStrokeIdToRegistryIndex[firstStrokeId] ?: return
-        val sr = strokeRegistry.getOrNull(idx) ?: return
-        val pt = sr.points.firstOrNull() ?: return
-        groupAnchor[groupId] = pt
-    }
     private var currentPageIndex = 0
     private val pagesDir by lazy { java.io.File(cacheDir, "ime-pages").also { it.mkdirs() } }
 
@@ -314,7 +304,6 @@ class MiroirIME : InputMethodService() {
         groupManager = GroupManager({ group ->
             // ⚠️ Callback vide — l'inférence est déclenchée par inactivité stylet.
             // Les groupes restent LOADED → absorption toujours active (comme Miroir).
-            anchorGroup(group.id)
         }).also {
             it.pointProvider = { strokeId ->
                 inkStrokeIdToRegistryIndex[strokeId]
@@ -813,6 +802,13 @@ class MiroirIME : InputMethodService() {
             // ═══ Réarmer : chaque nouveau trait dans le groupe reset le compte à rebours ═══
             // Le timer ne tire qu'après inferDelay d'inactivité DANS CE GROUPE.
             groupTimers.remove(firstIdx)?.cancel(false)
+            // Ancrer le groupe si nouveau (premier timer)
+            if (groupAnchor[group.id] == null) {
+                val sid = group.strokeIds.firstOrNull()
+                val idx = sid?.let { inkStrokeIdToRegistryIndex[it] }
+                val sr = idx?.let { strokeRegistry.getOrNull(it) }
+                sr?.points?.firstOrNull()?.let { groupAnchor[group.id] = it }
+            }
             timerArmedAt[firstIdx] = now
             timerArmedStrokeCount[firstIdx] = strokeCount
             val timer = inferExecutor.schedule({
