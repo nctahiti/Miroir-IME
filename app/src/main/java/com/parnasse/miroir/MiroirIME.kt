@@ -659,6 +659,20 @@ class MiroirIME : InputMethodService() {
     private var lastPointRefresh = 0L
 
     private fun onStylusDown(x: Float, y: Float) {
+        // ═══ Annuler le timer du groupe en absorption (va être modifié) ═══
+        val absorbGroupId = activeBlobGroupId
+        if (absorbGroupId != null) {
+            val gm = groupManager
+            if (gm != null) {
+                val group = gm.allGroups().find { it.id == absorbGroupId }
+                if (group != null) {
+                    val firstIdx = inkStrokeIdToRegistryIndex[group.strokeIds.first()]
+                    if (firstIdx != null) {
+                        groupTimers.remove(firstIdx)?.cancel(false)
+                    }
+                }
+            }
+        }
         currentPath.reset()
         currentPath.moveTo(x, y)
         currentStroke = StrokeRecord(
