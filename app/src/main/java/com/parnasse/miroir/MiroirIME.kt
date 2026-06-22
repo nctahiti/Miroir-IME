@@ -562,10 +562,13 @@ class MiroirIME : InputMethodService() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> { /* ignoré — IME ne reçoit pas ces événements */ }
                 MotionEvent.ACTION_DOWN -> {
-                    // ═══ Suivi du tap (pour les boutons) ═══
+                    // ═══ Suivi du tap (pour les boutons) — on diffère onStylusDown ═══
+                    // On ne sait pas encore si c'est un tap ou un tracé.
+                    // onStylusDown sera appelé au premier MOVE (si tracé) ou pas du tout (si tap).
                     tapStartX = event.x; tapStartY = event.y
                     tapStartTime = System.currentTimeMillis()
                     tapMoved = false
+                    tapStrokeStarted = false
                     // ═══ Sélection visuelle (sans transition GroupManager) ═══
                     activeBlobGroupId = null
                     for ((gid, data) in groupBlobs) {
@@ -574,9 +577,14 @@ class MiroirIME : InputMethodService() {
                             break
                         }
                     }
-                    onStylusDown(event.x, event.y)
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    // Premier mouvement → c'est un tracé, pas un tap
+                    if (!tapStrokeStarted) {
+                        tapStrokeStarted = true
+                        tapMoved = true
+                        onStylusDown(tapStartX, tapStartY)  // utiliser la position du DOWN
+                    }
                     // Détecter si le stylet a bougé (pour distinguer tap vs tracé)
                     if (Math.abs(event.x - tapStartX) > 15f || Math.abs(event.y - tapStartY) > 15f) {
                         tapMoved = true
@@ -591,9 +599,11 @@ class MiroirIME : InputMethodService() {
                     // ═══ Détection de tap (clic court sans mouvement) → boutons ═══
                     if (!tapMoved && System.currentTimeMillis() - tapStartTime < 300) {
                         if (handleToolbarTap(event.x, event.y)) {
-                            return true  // tap consommé par un bouton
+                            return true  // tap consommé par un bouton — pas de stroke
                         }
                     }
+                    // Si le stroke n'a jamais commencé (UP sans MOVE), ne rien faire
+                    if (!tapStrokeStarted) return true
                     onStylusUp()
                     // Si absorption active → rafraîchir le blob du groupe absorbeur
                     activeBlobGroupId?.let { gid ->
@@ -613,6 +623,7 @@ class MiroirIME : InputMethodService() {
         // ── Détection de tap stylet ────────────────────────────────────
         private var tapStartX = 0f; private var tapStartY = 0f
         private var tapStartTime = 0L; private var tapMoved = false
+        private var tapStrokeStarted = false  // true si onStylusDown a été appelé
 
         /** Vérifie si le tap est dans la toolbar et déclenche l'action. */
         private fun handleToolbarTap(x: Float, y: Float): Boolean {
