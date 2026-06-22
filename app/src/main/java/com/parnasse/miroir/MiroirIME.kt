@@ -685,7 +685,7 @@ class MiroirIME : InputMethodService() {
 
     // (fireLongPress, armLongPress, cancelLongPress définis plus haut)
 
-    /** Cale Y sur la ligne de portée la plus proche — 70% au-dessus, 30% en dessous. */
+    /** Cale Y sur la ligne de portée la plus proche — 80% au-dessus, 20% en dessous. */
     private fun snapToLine(y: Float): Float {
         if (cachedTemplateLines.isEmpty()) return y
         // Trouver les deux lignes qui encadrent le point
@@ -696,9 +696,10 @@ class MiroirIME : InputMethodService() {
             if (line >= y && line < lower) lower = line
         }
         if (upper == lower) return upper
-        // Frontière à 70% depuis la ligne du haut
+        // Frontière à 80% depuis la ligne du haut (20% en dessous)
+        // Donne plus de marge pour les hampes et le centre de la boîte englobante.
         val spacing = lower - upper
-        val boundary = upper + spacing * 0.7f
+        val boundary = upper + spacing * 0.8f
         return if (y <= boundary) upper else lower
     }
 
