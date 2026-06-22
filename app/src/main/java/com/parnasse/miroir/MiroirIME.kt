@@ -605,7 +605,7 @@ class MiroirIME : InputMethodService() {
                     }
                     // ═══ Armer le long-press (500ms) pour sélection + absorption ═══
                     // Si le stylet reste immobile sur un blob → selectGroup()
-                    cancelLongPress()
+                    cancelLongPressRunnable()
                     if (activeBlobGroupId != null) {
                         val gid = activeBlobGroupId!!
                         longPressRunnable = Runnable {
@@ -624,7 +624,7 @@ class MiroirIME : InputMethodService() {
                 MotionEvent.ACTION_MOVE -> {
                     // Annuler le long-press si on bouge
                     if (Math.abs(event.x - tapStartX) > 10f || Math.abs(event.y - tapStartY) > 10f) {
-                        cancelLongPress()
+                        cancelLongPressRunnable()
                         tapMoved = true
                     }
                     // Premier mouvement → c'est un tracé, pas un tap
@@ -639,7 +639,7 @@ class MiroirIME : InputMethodService() {
                     onStylusPoint(event.x, event.y, event.pressure)
                 }
                 MotionEvent.ACTION_UP -> {
-                    cancelLongPress()
+                    cancelLongPressRunnable()
                     // ═══ Si long-press déclenché → absorption active, ne pas traiter comme stroke ═══
                     if (longPressTriggered) {
                         // Le groupe est déjà SELECTED, ne rien faire d'autre
@@ -672,7 +672,7 @@ class MiroirIME : InputMethodService() {
         // ── Long-press (clic long pour sélection + absorption) ──────────
         private var longPressRunnable: Runnable? = null
         private var longPressTriggered: Boolean = false
-        private fun cancelLongPress() {
+        private fun cancelLongPressRunnable() {
             longPressRunnable?.let { uiHandler.removeCallbacks(it) }
             longPressRunnable = null
         }
