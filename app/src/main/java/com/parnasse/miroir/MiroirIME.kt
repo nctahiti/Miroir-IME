@@ -311,14 +311,17 @@ class MiroirIME : InputMethodService() {
     }
 
     // ═══ Jonglage de modes EPD ═══
+    private var isWriteMode = true  // true = DU (écriture), false = REGAL/GU (vue)
 
     /** Active le mode écriture (DU) — tracé fluide 16ms, overlays invisibles. */
     private fun enterWriteMode() {
+        if (isWriteMode) return  // déjà en DU, ne pas rafraîchir inutilement
         val v = imeView ?: return
         try {
             EpdController.setScreenHandWritingPenState(v, 1)
             EpdController.enablePost(v, 0)
             EpdController.setViewDefaultUpdateMode(v, UpdateMode.DU)
+            isWriteMode = true
         } catch (e: Exception) {
             Log.w(TAG, "enterWriteMode: EpdController error: ${e.message}")
         }
@@ -326,12 +329,14 @@ class MiroirIME : InputMethodService() {
 
     /** Active le mode vue (REGAL) — overlays visibles, texte optimisé ~120ms. */
     private fun enterViewMode() {
+        if (!isWriteMode) return  // déjà en vue
         val v = imeView ?: return
         try {
             EpdController.setScreenHandWritingPenState(v, 0)
             EpdController.enablePost(v, 1)
             EpdController.setViewDefaultUpdateMode(v, UpdateMode.REGAL)
-            v.postInvalidate()  // déclencher onDraw avec les overlays
+            v.postInvalidate()
+            isWriteMode = false
         } catch (e: Exception) {
             Log.w(TAG, "enterViewMode: EpdController error: ${e.message}")
         }
@@ -1091,10 +1096,10 @@ class MiroirIME : InputMethodService() {
                     // ═══ Injection en ordre de lecture (tri spatial) ═══
                     injectReadingOrder()
                     Log.i(TAG, "Texte injecté: \"$result\"")
-                    // ═══ Basculer en mode vue pour afficher les overlays ═══
-                    // Après l'inférence, les labels/blob doivent être visibles.
-                    // enterViewMode() passe en REGAL (120ms, texte optimisé) et rafraîchit.
-                    enterViewMode()
+                    // ═══ Rafraîchir les overlays SANS changer le mode par défaut ═══
+                    // refreshAll() fait un refreshScreen(GU) ponctuel → labels visibles
+                    // Le mode DU reste actif pour le prochain stroke → pas de jonglage
+                    refreshAll()
                 }
             }
         } catch (e: Exception) {
