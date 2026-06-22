@@ -589,13 +589,12 @@ class MiroirIME : InputMethodService() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> { /* ignoré — IME ne reçoit pas ces événements */ }
                 MotionEvent.ACTION_DOWN -> {
-                    // ═══ Suivi du tap (pour les boutons) — on diffère onStylusDown ═══
-                    // On ne sait pas encore si c'est un tap ou un tracé.
-                    // onStylusDown sera appelé au premier MOVE (si tracé) ou pas du tout (si tap).
+                    // ═══ Suivi du tap et long-press — on diffère onStylusDown ═══
                     tapStartX = event.x; tapStartY = event.y
                     tapStartTime = System.currentTimeMillis()
                     tapMoved = false
                     tapStrokeStarted = false
+                    longPressTriggered = false
                     // ═══ Sélection visuelle (sans transition GroupManager) ═══
                     activeBlobGroupId = null
                     for ((gid, data) in groupBlobs) {
@@ -604,17 +603,34 @@ class MiroirIME : InputMethodService() {
                             break
                         }
                     }
+                    // ═══ Armer le long-press (500ms) pour sélection + absorption ═══
+                    // Si le stylet reste immobile sur un blob → selectGroup()
+                    cancelLongPress()
+                    if (activeBlobGroupId != null) {
+                        val gid = activeBlobGroupId!!
+                        longPressRunnable = Runnable {
+                            if (!tapMoved && activeBlobGroupId == gid) {
+                                longPressTriggered = true
+                                val gm = groupManager
+                                if (gm != null && gm.selectGroup(gid)) {
+                                    Log.i(TAG, "Long-press: groupe ${gid.take(8)} SELECTED → absorption active")
+                                    enterViewMode()  // afficher le blob
+                                }
+                            }
+                        }
+                        uiHandler.postDelayed(longPressRunnable!!, 500)
+                    }
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    // Annuler le long-press si on bouge
+                    if (Math.abs(event.x - tapStartX) > 10f || Math.abs(event.y - tapStartY) > 10f) {
+                        cancelLongPress()
+                        tapMoved = true
+                    }
                     // Premier mouvement → c'est un tracé, pas un tap
                     if (!tapStrokeStarted) {
                         tapStrokeStarted = true
-                        tapMoved = true
                         onStylusDown(tapStartX, tapStartY)  // utiliser la position du DOWN
-                    }
-                    // Détecter si le stylet a bougé (pour distinguer tap vs tracé)
-                    if (Math.abs(event.x - tapStartX) > 15f || Math.abs(event.y - tapStartY) > 15f) {
-                        tapMoved = true
                     }
                     val historySize = event.historySize
                     for (i in 0 until historySize) {
@@ -623,6 +639,12 @@ class MiroirIME : InputMethodService() {
                     onStylusPoint(event.x, event.y, event.pressure)
                 }
                 MotionEvent.ACTION_UP -> {
+                    cancelLongPress()
+                    // ═══ Si long-press déclenché → absorption active, ne pas traiter comme stroke ═══
+                    if (longPressTriggered) {
+                        // Le groupe est déjà SELECTED, ne rien faire d'autre
+                        return true
+                    }
                     // ═══ Détection de tap (clic court sans mouvement) → boutons ═══
                     if (!tapMoved && System.currentTimeMillis() - tapStartTime < 300) {
                         if (handleToolbarTap(event.x, event.y)) {
@@ -645,6 +667,14 @@ class MiroirIME : InputMethodService() {
                 }
             }
             return true
+        }
+
+        // ── Long-press (clic long pour sélection + absorption) ──────────
+        private var longPressRunnable: Runnable? = null
+        private var longPressTriggered: Boolean = false
+        private fun cancelLongPress() {
+            longPressRunnable?.let { uiHandler.removeCallbacks(it) }
+            longPressRunnable = null
         }
 
         // ── Détection de tap stylet ────────────────────────────────────
