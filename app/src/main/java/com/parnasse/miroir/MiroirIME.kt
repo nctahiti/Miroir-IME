@@ -102,6 +102,7 @@ class MiroirIME : InputMethodService() {
 
     // ── Barre d'outils ─────────────────────────────────────────────────
     private var showOverlays = true  // 👁 toggle
+    private var toolbarHeightPx = 120f  // estimé, sera mesuré après layout
 
     // ── Blob par groupe inféré ─────────────────────────────────────────
     // Chaque groupe inféré a son blob (chemin + bounds), calculé UNE fois.
@@ -445,6 +446,8 @@ class MiroirIME : InputMethodService() {
         root.addView(surface)
 
         root.post {
+            // Mesurer la toolbar pour les taps stylet
+            if (toolbar.height > 0) toolbarHeightPx = toolbar.height.toFloat()
             if (surface.width > 0 && surface.height > 0) {
                 bitmap = Bitmap.createBitmap(surface.width, surface.height, Bitmap.Config.ARGB_8888)
                 bitmapCanvas = Canvas(bitmap!!)
@@ -559,6 +562,10 @@ class MiroirIME : InputMethodService() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> { /* ignoré — IME ne reçoit pas ces événements */ }
                 MotionEvent.ACTION_DOWN -> {
+                    // ═══ Suivi du tap (pour les boutons) ═══
+                    tapStartX = event.x; tapStartY = event.y
+                    tapStartTime = System.currentTimeMillis()
+                    tapMoved = false
                     // ═══ Sélection visuelle (sans transition GroupManager) ═══
                     activeBlobGroupId = null
                     for ((gid, data) in groupBlobs) {
@@ -570,6 +577,10 @@ class MiroirIME : InputMethodService() {
                     onStylusDown(event.x, event.y)
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    // Détecter si le stylet a bougé (pour distinguer tap vs tracé)
+                    if (Math.abs(event.x - tapStartX) > 15f || Math.abs(event.y - tapStartY) > 15f) {
+                        tapMoved = true
+                    }
                     val historySize = event.historySize
                     for (i in 0 until historySize) {
                         onStylusPoint(event.getHistoricalX(i), event.getHistoricalY(i), event.getHistoricalPressure(i))
@@ -577,6 +588,12 @@ class MiroirIME : InputMethodService() {
                     onStylusPoint(event.x, event.y, event.pressure)
                 }
                 MotionEvent.ACTION_UP -> {
+                    // ═══ Détection de tap (clic court sans mouvement) → boutons ═══
+                    if (!tapMoved && System.currentTimeMillis() - tapStartTime < 300) {
+                        if (handleToolbarTap(event.x, event.y)) {
+                            return true  // tap consommé par un bouton
+                        }
+                    }
                     onStylusUp()
                     // Si absorption active → rafraîchir le blob du groupe absorbeur
                     activeBlobGroupId?.let { gid ->
@@ -588,6 +605,36 @@ class MiroirIME : InputMethodService() {
                             refreshRect(b.left.toInt()-pad, b.top.toInt()-pad, b.right.toInt()+pad, b.bottom.toInt()+pad)
                         }
                     }
+                }
+            }
+            return true
+        }
+
+        // ── Détection de tap stylet ────────────────────────────────────
+        private var tapStartX = 0f; private var tapStartY = 0f
+        private var tapStartTime = 0L; private var tapMoved = false
+
+        /** Vérifie si le tap est dans la toolbar et déclenche l'action. */
+        private fun handleToolbarTap(x: Float, y: Float): Boolean {
+            if (y > toolbarHeightPx) return false  // pas dans la toolbar
+            // 4 boutons : ✓ ⚙ 👁 + puis ✕
+            val btnWidth = width / 4f
+            val index = (x / btnWidth).toInt().coerceIn(0, 3)
+            Log.i(TAG, "Tap stylet bouton #$index (x=$x, y=$y)")
+            when (index) {
+                0 -> { savePage(); currentInputConnection?.commitText("\n", 1); requestHideSelf(0) }
+                1 -> {
+                    val intent = android.content.Intent(this@MiroirIME, CalibrationActivity::class.java)
+                    intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                }
+                2 -> { showOverlays = !showOverlays; refreshAll() }
+                3 -> {
+                    currentInputConnection?.let { ic ->
+                        ic.performContextMenuAction(android.R.id.selectAll)
+                        ic.commitText("", 1)
+                    }
+                    clearPage(); refreshAll(); requestHideSelf(0)
                 }
             }
             return true
