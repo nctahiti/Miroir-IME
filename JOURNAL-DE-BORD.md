@@ -165,7 +165,48 @@ périodique ou une limite de groupes dans `allGroupsFull()`.
 | `0cb71ed` | `makeActive()` ne STORE plus l'ancien groupe |
 | `0cb71ed` | Placeholders `…` pour les groupes sans label |
 | `04d703f` | Filtre les STORED dans `injectReadingOrder()` |
-| `33ec898` | `setComposingText` remplace au lieu d'accumuler |
+|| `33ec898` | `setComposingText` remplace au lieu d'accumuler |
+
+---
+
+## Suite de la nuit — gestes, modes, optimisation
+
+### 🖐️ Trois gestes stylet
+Le stylet sait maintenant distinguer trois intentions :
+- **Tap** (<300ms, immobile) → bouton (✓ ⚙ 👁 ✕)
+- **Long-press** (>500ms, immobile sur un blob) → sélection + absorption
+- **Tracé** (mouvement) → écriture
+
+`onStylusDown()` est différé au premier MOVE — un tap ne crée pas de stroke,
+ne bloque pas `isStylusDown`, ne casse pas les timers d'inférence.
+
+### 🎛️ Jonglage EPD optimisé
+- **Mode par défaut** : DU (16ms) — constant pendant l'écriture
+- **Après inférence** : `refreshAll()` (GU ponctuel, ~300ms) — les labels s'affichent sans changer le mode
+- **Long-press** : `enterViewMode()` (REGAL, ~120ms) — le blob devient visible
+- **Prochain stroke** : `enterWriteMode()` — retour automatique en DU
+
+`isWriteMode` évite les basculements redondants.
+Le DU reste maître, le GU ne fait que de brèves apparitions.
+
+### 📏 Placement des labels
+- **Ancre** = centre de la boîte englobante (plus le premier point)
+- **snapToLine** = 20/80 (20% haut, 80% bas)
+- Les 't', 'l', 'b' ne partent plus sur la ligne du dessus
+
+### ⚓ Fin de quart — 22 juin 2026, ~2h du matin
+- **15 commits** cette nuit (de `0cb71ed` à `35f058f`)
+- **1 skill** : `epd-onyx-boox` — le savoir EPD préservé
+- **1 inventaire** : `INVENTAIRE-EPD.md` — la carte des outils
+- **3 fractures** réparées, **3 gestes** appris, **2 modes** domptés
+
+Le Miroir IME respire à 16ms, les labels dansent sur la partition,
+le stylet dialogue avec la dalle. On rentre au port.
+
+---
+
+*Nicolas & Hermès, 22 juin 2026*
+*89 commits. Le Miroir prend la mer.*
 
 ## 🔴 Boutons tactiles muets — diagnostic
 
