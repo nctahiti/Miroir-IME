@@ -310,6 +310,33 @@ class MiroirIME : InputMethodService() {
         }
     }
 
+    // ═══ Jonglage de modes EPD ═══
+
+    /** Active le mode écriture (DU) — tracé fluide 16ms, overlays invisibles. */
+    private fun enterWriteMode() {
+        val v = imeView ?: return
+        try {
+            EpdController.setScreenHandWritingPenState(v, 1)
+            EpdController.enablePost(v, 0)
+            EpdController.setViewDefaultUpdateMode(v, UpdateMode.DU)
+        } catch (e: Exception) {
+            Log.w(TAG, "enterWriteMode: EpdController error: ${e.message}")
+        }
+    }
+
+    /** Active le mode vue (REGAL) — overlays visibles, texte optimisé ~120ms. */
+    private fun enterViewMode() {
+        val v = imeView ?: return
+        try {
+            EpdController.setScreenHandWritingPenState(v, 0)
+            EpdController.enablePost(v, 1)
+            EpdController.setViewDefaultUpdateMode(v, UpdateMode.REGAL)
+            v.postInvalidate()  // déclencher onDraw avec les overlays
+        } catch (e: Exception) {
+            Log.w(TAG, "enterViewMode: EpdController error: ${e.message}")
+        }
+    }
+
     // ── Template (partition) ───────────────────────────────────────────
     // L'espacement est calculé dynamiquement selon la hauteur du canvas
     // pour garantir ~4-6 lignes visibles quelle que soit la densité d'écran.
@@ -453,8 +480,8 @@ class MiroirIME : InputMethodService() {
                 bitmapCanvas = Canvas(bitmap!!)
                 bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)  // transparent
                 updateTemplateSpacing(surface.height)
-                // ═══ Premier rafraîchissement — le template et les overlays sont prêts ═══
-                refreshAll()
+                // ═══ Premier affichage — mode vue pour voir le template ═══
+                enterViewMode()
             }
         }
 
@@ -731,15 +758,7 @@ class MiroirIME : InputMethodService() {
             touchHelper!!.setPostInputEvent(true)  // forward vers onTouchEvent
             Log.i(TAG, "TouchHelper actif")
 
-            // Mode écriture EPD
-            try {
-                EpdController.setScreenHandWritingPenState(target, 1)
-                EpdController.enablePost(target, 0)
-                EpdController.setViewDefaultUpdateMode(target, UpdateMode.DU)
-                Log.i(TAG, "EPD handwriting mode ON")
-            } catch (e: Exception) {
-                Log.w(TAG, "EPD handwriting mode indisponible: ${e.message}")
-            }
+            enterWriteMode()  // mode DU pour l'écriture
         } catch (e: Exception) {
             touchHelper = null
             Log.w(TAG, "TouchHelper indisponible: ${e.message} — fallback onTouchEvent")
@@ -752,11 +771,7 @@ class MiroirIME : InputMethodService() {
             touchHelper?.setRawDrawingEnabled(false)
         } catch (_: Exception) {}
         imeView?.let { v ->
-            try {
-                EpdController.setViewDefaultUpdateMode(v, UpdateMode.GU)
-                EpdController.enablePost(v, 1)
-                EpdController.setScreenHandWritingPenState(v, 0)
-            } catch (_: Exception) {}
+            enterViewMode()  // mode REGAL pour voir les overlays
         }
         touchHelper = null
     }
@@ -770,6 +785,7 @@ class MiroirIME : InputMethodService() {
 
     private fun onStylusDown(x: Float, y: Float) {
         isStylusDown = true
+        enterWriteMode()  // basculer en DU pour le tracé fluide
         currentPath.reset()
         currentPath.moveTo(x, y)
         currentStroke = StrokeRecord(
@@ -1038,24 +1054,10 @@ class MiroirIME : InputMethodService() {
                     // ═══ Injection en ordre de lecture (tri spatial) ═══
                     injectReadingOrder()
                     Log.i(TAG, "Texte injecté: \"$result\"")
-                    // ═══ Rafraîchissement LOCALISÉ sur la zone du label ═══
-                    // Pas de refreshAll() — on rafraîchit UNIQUEMENT le label qui vient de naître.
-                    // Le mode DU (16ms) n'a besoin que de savoir quels pixels ont changé.
-                    val anchor = groupAnchor[firstIdx]
-                    if (anchor != null) {
-                        val labelY = snapToLine(anchor.second) + labelPaint.textSize + 2f
-                        // Rectangle englobant le texte (estimation : 40px par caractère)
-                        val labelW = (result.length * 32f).toInt().coerceAtLeast(80)
-                        val pad = 10
-                        refreshRect(
-                            (anchor.first - 30f).toInt() - pad,
-                            (labelY - labelPaint.textSize).toInt() - pad,
-                            (anchor.first - 30f + labelW).toInt() + pad,
-                            (labelY + pad).toInt() + pad
-                        )
-                    } else {
-                        refreshAll()  // fallback si pas d'ancre
-                    }
+                    // ═══ Basculer en mode vue pour afficher les overlays ═══
+                    // Après l'inférence, les labels/blob doivent être visibles.
+                    // enterViewMode() passe en REGAL (120ms, texte optimisé) et rafraîchit.
+                    enterViewMode()
                 }
             }
         } catch (e: Exception) {
