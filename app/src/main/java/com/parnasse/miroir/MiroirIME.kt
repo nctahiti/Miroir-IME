@@ -938,11 +938,16 @@ class MiroirIME : InputMethodService() {
             groupLastModifiedMs[firstIdx] = now
             groupTimers.remove(firstIdx)?.cancel(false)
             // Ancrer le groupe si nouveau (premier timer)
+            // ═══ Utiliser le CENTRE de la boîte englobante, pas le premier point ═══
+            // Le premier point du premier stroke est trop sensible aux hampes :
+            // un 't' commence haut → label placé sur la ligne du dessus.
+            // Le centre des bounds est stable, comme dans le Miroir classique.
             if (groupAnchor[firstIdx] == null) {
-                val sid = group.strokeIds.firstOrNull()
-                val idx = sid?.let { inkStrokeIdToRegistryIndex[it] }
-                val sr = idx?.let { strokeRegistry.getOrNull(it) }
-                sr?.points?.firstOrNull()?.let { groupAnchor[firstIdx] = it }
+                val cx = if (!group.bounds.isEmpty) group.bounds.centerX()
+                         else strokeRegistry.getOrNull(firstIdx)?.points?.firstOrNull()?.first ?: 0f
+                val cy = if (!group.bounds.isEmpty) group.bounds.centerY()
+                         else strokeRegistry.getOrNull(firstIdx)?.points?.firstOrNull()?.second ?: 0f
+                groupAnchor[firstIdx] = Pair(cx, cy)
             }
             timerArmedAt[firstIdx] = now
             timerArmedStrokeCount[firstIdx] = strokeCount
