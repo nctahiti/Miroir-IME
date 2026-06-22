@@ -450,6 +450,8 @@ class MiroirIME : InputMethodService() {
                 bitmapCanvas = Canvas(bitmap!!)
                 bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)  // transparent
                 updateTemplateSpacing(surface.height)
+                // ═══ Premier rafraîchissement — le template et les overlays sont prêts ═══
+                refreshAll()
             }
         }
 
