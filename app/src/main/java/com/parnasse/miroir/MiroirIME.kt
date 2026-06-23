@@ -100,6 +100,9 @@ class MiroirIME : InputMethodService() {
     // ── Dessin ────────────────────────────────────────────────────────
     private var imeView: CaptureSurfaceView? = null
 
+     /** Séquenceur de modes EPD (État A) — initialisé quand la surface IME est créée. */
+     private var displayController: DisplayController? = null
+
     // ── Barre d'outils ─────────────────────────────────────────────────
     private var showOverlays = true  // 👁 toggle
     private var toolbarHeightPx = 120f  // estimé, sera mesuré après layout
@@ -475,6 +478,8 @@ class MiroirIME : InputMethodService() {
                 0, 1f)  // weight=1 → prend tout l'espace restant
         }
         imeView = surface
+         // Initialisation du séquenceur de modes (État A) — la surface IME est la cible EPD
+         displayController = DisplayController(OnyxEpdPort(surface))
         root.addView(surface)
 
         root.post {
@@ -892,6 +897,11 @@ class MiroirIME : InputMethodService() {
                 (minX - 10).toInt(), (minY - 10).toInt(),
                 (maxX + 10).toInt(), (maxY + 10).toInt(), isStroke = true)
         }
+        // ═══ Maintenir le DU après le lever du stylet si on était en écriture ═══
+        // (ne pas forcer DU sur un geste d'édition / clic long)
+        if (isWriteMode) {
+            displayController?.reasserterDU()
+        }
     }
 
     /** Convertit un StrokeRecord en InkStroke (format GroupManager) */
@@ -1099,7 +1109,9 @@ class MiroirIME : InputMethodService() {
                     // ═══ Rafraîchir les overlays SANS changer le mode par défaut ═══
                     // refreshAll() fait un refreshScreen(GU) ponctuel → labels visibles
                     // Le mode DU reste actif pour le prochain stroke → pas de jonglage
-                    refreshAll()
+                     // ═══ Rafraîchir les overlays PUIS revenir en DU (garanti) ═══
+                     // poserLabelPuisDU atomise le refresh GU et le retour DU — fracture A colmatée
+                     displayController?.poserLabelPuisDU(DisplayMode.GU)
                 }
             }
         } catch (e: Exception) {
