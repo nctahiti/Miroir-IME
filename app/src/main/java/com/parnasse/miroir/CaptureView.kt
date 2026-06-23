@@ -48,6 +48,9 @@ class CaptureView(context: Context) : View(context) {
 
     private val TAG = "Miroir/Capture"
 
+    /** Séquenceur de modes EPD (État A) — la View (this) est la cible EPD. */
+    private val displayController = DisplayController(OnyxEpdPort(this))
+
     // =========================================================================
     // DEBUG MODE — enregistre les coordonnees brutes TouchHelper AVANT encodage
     // =========================================================================
@@ -506,9 +509,7 @@ class CaptureView(context: Context) : View(context) {
 
             // ═══ ONYX EPD — mode écriture optimisé ═══
             try {
-                EpdController.setScreenHandWritingPenState(this, 1)
-                EpdController.enablePost(this, 0)
-                EpdController.setViewDefaultUpdateMode(this, UpdateMode.DU)
+                displayController.entrerEcriture()
                 Log.i(TAG, "EPD handwriting mode ON (DU, enablePost=0)")
             } catch (e: Exception) {
                 Log.w(TAG, "EPD handwriting mode échoué: ${e.message}")
@@ -528,9 +529,7 @@ class CaptureView(context: Context) : View(context) {
         } catch (_: Exception) {}
         // ═══ ONYX EPD — désactiver le mode écriture ═══
         try {
-            EpdController.setViewDefaultUpdateMode(this, UpdateMode.GU)  // retour au mode normal
-            EpdController.enablePost(this, 1)
-            EpdController.setScreenHandWritingPenState(this, 0)
+            displayController.entrerVue(DisplayMode.GU)  // retour au mode normal
             Log.i(TAG, "EPD handwriting mode OFF")
         } catch (e: Exception) {
             Log.w(TAG, "EPD release échoué: ${e.message}")
@@ -1721,8 +1720,7 @@ class CaptureView(context: Context) : View(context) {
                 // ═══ Maintenir le mode DU après lever du stylet ═══
                 // Le driver Onyx bascule GU→500ms sur penUp. On le force à rester en DU.
                 try {
-                    EpdController.setScreenHandWritingPenState(this, 1)
-                    EpdController.enablePost(this, 0)
+                    displayController.reasserterDU()
                 } catch (e: Exception) {
                     Log.w(TAG, "EPD re-assert échoué: ${e.message}")
                 }
