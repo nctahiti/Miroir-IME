@@ -502,9 +502,11 @@ class MiroirIME : InputMethodService() {
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         Log.i(TAG, "onStartInputView — champ: ${info?.fieldName ?: "inconnu"}")
+        // ═══ Forcer la réinitialisation du TouchHelper à chaque ouverture ═══
+        touchHelper = null
+        isWriteMode = false
         syncGroupManagerParams()
         rebuildBitmap()
-        // ═══ Rouvrir le raw drawing à chaque ouverture (fermé par releaseTouchHelper) ═══
         val v = imeView
         if (v != null) initTouchHelper(v)
         rebuildBitmap()
@@ -615,10 +617,6 @@ class MiroirIME : InputMethodService() {
                             activeBlobGroupId = gid
                             break
                         }
-                    }
-                    // ═══ Pas de blob sous le stylet → désélection → retour écriture (DU) ═══
-                    if (activeBlobGroupId == null) {
-                        enterWriteMode()
                     }
                     // ═══ Armer le long-press (500ms) pour sélection + absorption ═══
                     // Si le stylet reste immobile sur un blob → selectGroup()
@@ -790,7 +788,11 @@ class MiroirIME : InputMethodService() {
         try {
             touchHelper = TouchHelper.create(target, TouchHelper.FEATURE_APP_TOUCH_RENDER,
                 object : RawInputCallback() {
-                    override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {}
+                    override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
+                        // ═══ Activer DU au premier contact du stylet (quel que soit le chemin d'accès) ═══
+                        // Ne pas dupliquer si onStylusDown déjà déclenché par onTouchEvent
+                        if (!isStylusDown) onStylusDown(p1.x, p1.y)
+                    }
                     override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {}
                     override fun onRawDrawingTouchPointListReceived(list: TouchPointList?) {}
                     override fun onEndRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {}
@@ -822,6 +824,7 @@ class MiroirIME : InputMethodService() {
         imeView?.let { v ->
             enterViewMode()  // mode REGAL pour voir les overlays
         }
+        isWriteMode = false  // ⚠️ forcer GU même si enterViewMode n'a pas été appelé (vue détruite)
         touchHelper = null
     }
 
