@@ -790,7 +790,6 @@ class MiroirIME : InputMethodService() {
                 val idx = inkStrokeIdToRegistryIndex[sid]
                 if (idx != null && idx < strokeRegistry.size) idx to strokeRegistry[idx] else null
             }.filter { (idx, sr) -> idx !in erasedStrokes && sr.points.size >= 2 }
-            if (strokes.isEmpty()) { exitEditMode(); return }
             var remaining = dx.toDouble()
             for ((idx, sr) in strokes.reversed()) {
                 if (remaining <= 0.0) break
@@ -861,16 +860,21 @@ class MiroirIME : InputMethodService() {
             editMode = EditMode.NONE
             longPressTriggered = false
             // ═══ Effacement définitif des strokes neutralisés ═══
+            val erasedSids = mutableListOf<Long>()
             if (erasedStrokes.isNotEmpty()) {
                 val gm = groupManager
                 val animatedGroupId = activeBlobGroupId
-                val erasedSids = mutableListOf<Long>()
+                // val erasedSids = mutableListOf<Long>()  ← déplacé avant le bloc
                 // Parcourir les strokes du registre pour trouver les vidés
                 for ((sid, idx) in inkStrokeIdToRegistryIndex.entries.toList()) {
                     if (idx in erasedStrokes && idx < strokeRegistry.size) {
                         strokeRegistry[idx] = StrokeRecord(id = "")  // vider
-                        inkStrokeIdToRegistryIndex.remove(sid)
                         erasedSids.add(sid)
+                        // ═══ Nettoyer le label du groupe (avant de retirer de la map) ═══
+                        groupLabels.remove(idx)
+                        inferredGroupFirstIdxs.remove(idx)
+                        groupStrokeCountAtInference.remove(idx)
+                        inkStrokeIdToRegistryIndex.remove(sid)
                     }
                 }
                 // Retirer les strokeIds effacés du groupe (GroupManager)
@@ -879,6 +883,25 @@ class MiroirIME : InputMethodService() {
                 }
                 erasedStrokes.clear()
                 Log.i(TAG, "🧹 ${erasedSids.size} strokes définitivement effacés")
+            }
+            // ═══ Si le groupe est vidé de tous ses strokes → supprimer label + blob ═══
+            val erasedGroupId = activeBlobGroupId
+            if (erasedGroupId != null) {
+            val g = groupManager?.allGroups()?.find { it.id == erasedGroupId }
+            if (g == null || g.strokeIds.isEmpty()) {
+                groupBlobs.remove(erasedGroupId)
+                // Nettoyer les labels AVANT d'avoir retiré inkStrokeIdToRegistryIndex
+                for (sid in erasedSids) {
+                    val firstIdxInMap = inkStrokeIdToRegistryIndex[sid]
+                    if (firstIdxInMap != null) {
+                        groupLabels.remove(firstIdxInMap)
+                        inferredGroupFirstIdxs.remove(firstIdxInMap)
+                        groupStrokeCountAtInference.remove(firstIdxInMap)
+                    }
+                }
+                scrubbedGroupFirstIdx = null
+                Log.i(TAG, "🗑️ Groupe ${erasedGroupId.take(8)} vidé → supprimé")
+            }
             }
             // ═══ Réactiver le groupe modifié comme SELECTED pour GroupManager ═══
             val reactivateId = activeBlobGroupId
