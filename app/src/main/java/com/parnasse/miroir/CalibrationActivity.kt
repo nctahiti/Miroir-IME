@@ -26,6 +26,7 @@ class CalibrationActivity : Activity() {
         const val DEFAULT_SPATIAL_DISTANCE_Y = 70f
         const val DEFAULT_AUTO_INFER_DELAY = 1500L
         const val DEFAULT_LONG_HOVER_DELAY = 1000L
+        const val DEFAULT_LONG_PRESS_DELAY = 500L
         const val DEFAULT_REFRESH_INTERVAL = 16L
         const val DEFAULT_BLOB_RAY_COUNT = 90
         const val DEFAULT_TEMPLATE_SPACING = 120f
@@ -42,6 +43,8 @@ class CalibrationActivity : Activity() {
             prefs(ctx).getLong(KEY_AUTO_INFER_DELAY, DEFAULT_AUTO_INFER_DELAY)
         fun getLongHoverDelay(ctx: Context): Long =
             prefs(ctx).getLong(KEY_LONG_HOVER_DELAY, DEFAULT_LONG_HOVER_DELAY)
+        fun getLongPressDelay(ctx: Context): Long =
+            prefs(ctx).getLong(KEY_LONG_PRESS_DELAY, DEFAULT_LONG_PRESS_DELAY)
         fun getRefreshInterval(ctx: Context): Long =
             prefs(ctx).getLong(KEY_REFRESH_INTERVAL, DEFAULT_REFRESH_INTERVAL)
         fun getBlobRayCount(ctx: Context): Int =
@@ -53,6 +56,7 @@ class CalibrationActivity : Activity() {
 
         fun getTemporalDistance(ctx: Context): Long = 800L
         fun getBlobColor(ctx: Context): Int = 0xFFC0C0C0.toInt()
+        const val KEY_LONG_PRESS_DELAY = "long_press_delay"
     }
 
     private lateinit var spatialXSeek: SeekBar
@@ -69,6 +73,7 @@ class CalibrationActivity : Activity() {
         val currentY = p.getFloat(KEY_SPATIAL_DISTANCE_Y, DEFAULT_SPATIAL_DISTANCE_Y)
         val currentDelay = p.getLong(KEY_AUTO_INFER_DELAY, DEFAULT_AUTO_INFER_DELAY)
         val currentHover = p.getLong(KEY_LONG_HOVER_DELAY, DEFAULT_LONG_HOVER_DELAY)
+        val currentLongPress = p.getLong(KEY_LONG_PRESS_DELAY, DEFAULT_LONG_PRESS_DELAY)
 
         val scroll = ScrollView(this).apply { setBackgroundColor(Color.WHITE) }
         val root = LinearLayout(this).apply {
@@ -128,6 +133,14 @@ class CalibrationActivity : Activity() {
         hoverSeek.setOnSeekBarChangeListener(simpleListener { v ->
             hoverLabel.text = "Appui long (sélection) : ${v + 500} ms"
             prefs(this).edit().putLong(KEY_LONG_HOVER_DELAY, (v + 500).toLong()).apply()
+        })
+
+        // ═══ Clic long (édition IME) ═══
+        val pressLabel = addSlider(root, "Clic long (édition)", 300, 2000, currentLongPress.toInt(), "ms")
+        val pressSeek = root.getChildAt(root.childCount - 1) as SeekBar
+        pressSeek.setOnSeekBarChangeListener(simpleListener { v ->
+            pressLabel.text = "Clic long (édition) : ${v + 300} ms"
+            prefs(this).edit().putLong(KEY_LONG_PRESS_DELAY, (v + 300).toLong()).apply()
         })
 
         // ═══ 🖊️ Écriture ═══

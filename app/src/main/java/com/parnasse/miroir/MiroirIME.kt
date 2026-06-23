@@ -672,7 +672,7 @@ class MiroirIME : InputMethodService() {
                                 }
                             }
                         }
-                        uiHandler.postDelayed(longPressRunnable!!, 500)
+                        uiHandler.postDelayed(longPressRunnable!!, CalibrationActivity.getLongPressDelay(this@MiroirIME))
                     }
                 }
                 MotionEvent.ACTION_MOVE -> {
