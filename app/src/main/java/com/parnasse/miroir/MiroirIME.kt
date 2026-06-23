@@ -535,6 +535,7 @@ class MiroirIME : InputMethodService() {
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         for ((idx, sr) in strokeRegistry.withIndex()) {
             if (idx in erasedStrokes) continue  // ═══ stroke neutralisé visuellement ═══
+            if (sr.points.size < 2) continue    // point isolé (tap dans le vide)
             if (sr.points.size < 2) {
                 if (sr.points.isNotEmpty()) {
                     val p = sr.points.first()
@@ -672,7 +673,7 @@ class MiroirIME : InputMethodService() {
                                 }
                             }
                         }
-                        uiHandler.postDelayed(longPressRunnable!!, CalibrationActivity.getLongPressDelay(this@MiroirIME))
+                        uiHandler.postDelayed(longPressRunnable!!, CalibrationActivity.getSelectionDelay(this@MiroirIME))
                     }
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -725,9 +726,14 @@ class MiroirIME : InputMethodService() {
                     if (longPressTriggered) {
                         when (editMode) {
                             EditMode.ERASE -> {
-                                // Mettre à jour la position de départ pour le prochain geste
-                                gestureStartX = event.x
-                                rebuildBitmap()
+                                if (!tapMoved) {
+                                    // ═══ Tap dans le vide (pas de geste) → sortie du mode ═══
+                                    exitEditMode()
+                                } else {
+                                    // Mettre à jour la position de départ pour le prochain geste
+                                    gestureStartX = event.x
+                                    rebuildBitmap()
+                                }
                             }
                             EditMode.MOVE -> {
                                 gestureStartX = event.x; gestureStartY = event.y
@@ -921,6 +927,9 @@ class MiroirIME : InputMethodService() {
                 Log.i(TAG, "🔄 Groupe ${reactivateId.take(8)} réactivé comme SELECTED")
             }
             activeBlobGroupId = null
+            // ═══ Nettoyer le stroke en cours (évite un tracé de sortie parasite) ═══
+            currentStroke = null
+            currentPath.reset()
             // ═══ Recalculer le blob et forcer la ré-inférence ═══
             val firstIdx = scrubbedGroupFirstIdx
             if (firstIdx != null) {
@@ -1136,6 +1145,11 @@ class MiroirIME : InputMethodService() {
         val stroke = currentStroke
         currentStroke = null
         if (stroke == null || stroke.points.isEmpty()) return
+        // ═══ Ignorer les taps dans le vide (un seul point) ═══
+        if (stroke.points.size < 2) {
+            currentPath.reset()
+            return
+        }
 
         // Rastériser le stroke dans le bitmap
         val canvas = bitmapCanvas ?: return
