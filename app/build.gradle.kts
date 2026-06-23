@@ -79,4 +79,7 @@ dependencies {
 
     // Google ML Kit Digital Ink — reconnaissance écriture manuscrite
     implementation("com.google.mlkit:digital-ink-recognition:18.1.0")
+
+    // Tests unitaires JVM (Règle d'Or — régression du séquenceur, sans tablette)
+    testImplementation("junit:junit:4.13.2")
 }
