@@ -490,8 +490,8 @@ class MiroirIME : InputMethodService() {
                 bitmapCanvas = Canvas(bitmap!!)
                 bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)  // transparent
                 updateTemplateSpacing(surface.height)
-                // ═══ Premier affichage — mode vue pour voir le template ═══
-                enterViewMode()
+                // ═══ Premier affichage — le template est visible en DU (raw drawing déjà ouvert par initTouchHelper) ═══
+                surface.postInvalidate()  // forcer le dessin du template
             }
         }
 
@@ -503,7 +503,10 @@ class MiroirIME : InputMethodService() {
         super.onStartInputView(info, restarting)
         Log.i(TAG, "onStartInputView — champ: ${info?.fieldName ?: "inconnu"}")
         syncGroupManagerParams()
-        // Reconstruire le bitmap depuis les strokes existants
+        rebuildBitmap()
+        // ═══ Rouvrir le raw drawing à chaque ouverture (fermé par releaseTouchHelper) ═══
+        val v = imeView
+        if (v != null) initTouchHelper(v)
         rebuildBitmap()
     }
 
@@ -612,6 +615,10 @@ class MiroirIME : InputMethodService() {
                             activeBlobGroupId = gid
                             break
                         }
+                    }
+                    // ═══ Pas de blob sous le stylet → désélection → retour écriture (DU) ═══
+                    if (activeBlobGroupId == null) {
+                        enterWriteMode()
                     }
                     // ═══ Armer le long-press (500ms) pour sélection + absorption ═══
                     // Si le stylet reste immobile sur un blob → selectGroup()
