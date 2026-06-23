@@ -75,12 +75,7 @@ class GroupManager(
                 Log.i(TAG, "Absorption ACTIVE " + active.id + " (stroke proche)")
                 active
             } else {
-                // ═══ 3. Aucun blob ne touche → nouveau groupe ═══
-                if (selected != null) {
-                    machine.transition(selected, GroupState.STORED)
-                    onGroupAutoDeselected?.invoke()
-                    evictGroup(selected.id)
-                }
+                // ═══ 3. Aucun blob ne touche → nouveau groupe (le SELECTED reste intact si présent) ═══
                 getOrCreateActiveGroup()
             }
         }
@@ -129,13 +124,12 @@ class GroupManager(
     }
     fun getOrCreateActiveGroup(): InkGroup {
         val selectedId = machine.pendingGroupId
+        // ═══ Si un groupe est SELECTED, NE PAS le désélectionner (l'utilisateur l'a choisi) ═══
+        // Le nouveau stroke non-absorbé crée un nouveau groupe, mais le SELECTED reste.
         if (selectedId != null) {
             val selectedGroup = groups[selectedId]
             if (selectedGroup != null && selectedGroup.state == GroupState.SELECTED) {
-                machine.transition(selectedGroup, GroupState.STORED)
-                Log.i(TAG, "Groupe " + selectedGroup.id + " deselecte SELECTED->STORED")
-                onGroupAutoDeselected?.invoke()
-                evictGroup(selectedGroup.id)
+                Log.i(TAG, "SELECTED present (${selectedId.take(8)}), pas de deselec automatique")
             }
         }
         evictAllStored()

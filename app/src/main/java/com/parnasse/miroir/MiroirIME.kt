@@ -106,6 +106,9 @@ class MiroirIME : InputMethodService() {
      /** Témoin de mode dans la barre d'outils (✍ plume · ⌛ montre · ↕ déplacement). */
      private var modeIndicator: android.widget.TextView? = null
 
+     /** Index des strokes neutralisés visuellement pendant le scrub. Accessible depuis le rendu et les gestes. */
+     private var erasedStrokes = mutableSetOf<Int>()
+
     // ── Barre d'outils ─────────────────────────────────────────────────
     private var showOverlays = true  // 👁 toggle
     private var toolbarHeightPx = 120f  // estimé, sera mesuré après layout
@@ -530,7 +533,8 @@ class MiroirIME : InputMethodService() {
     private fun rebuildBitmap() {
         val canvas = bitmapCanvas ?: return
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-        for (sr in strokeRegistry) {
+        for ((idx, sr) in strokeRegistry.withIndex()) {
+            if (idx in erasedStrokes) continue  // ═══ stroke neutralisé visuellement ═══
             if (sr.points.size < 2) {
                 if (sr.points.isNotEmpty()) {
                     val p = sr.points.first()
@@ -633,6 +637,7 @@ class MiroirIME : InputMethodService() {
                         }
                         // On reste dans le blob → mode édition immédiat, pas de new long-press
                         gestureStartX = event.x; gestureStartY = event.y
+                        if (editMode == EditMode.ERASE) scrubBaseX = event.x
                         longPressTriggered = true  // réactiver le mode pour le geste suivant
                         return true
                     }
@@ -652,10 +657,15 @@ class MiroirIME : InputMethodService() {
                         val gid = activeBlobGroupId!!
                         longPressRunnable = Runnable {
                             if (!tapMoved && activeBlobGroupId == gid) {
+                                val gid = activeBlobGroupId ?: return@Runnable
                                 longPressTriggered = true
                                 val gm = groupManager
-                                if (gm != null && gm.selectGroup(gid)) {
-                                    Log.i(TAG, "Long-press: groupe ${gid.take(8)} SELECTED → absorption active")
+                                if (gm != null) {
+                                    if (gm.selectGroup(gid)) {
+                                        Log.i(TAG, "Long-press: groupe ${gid.take(8)} SELECTED")
+                                    } else {
+                                        Log.i(TAG, "Long-press: groupe ${gid.take(8)} déjà actif")
+                                    }
                                     gestureStartX = tapStartX; gestureStartY = tapStartY
                                     editMode = EditMode.NONE
                                     enterViewMode()  // afficher le blob
@@ -681,6 +691,7 @@ class MiroirIME : InputMethodService() {
                             if (dx < -SWIPE_THRESHOLD) {
                                 editMode = EditMode.ERASE
                                 scrubBaseX = event.x
+                                scrubTimelinePos = 1f
                                 updateModeIndicator()
                                 Log.i(TAG, "→ Mode EFFACEMENT (←)")
                             } else if (dy > SWIPE_THRESHOLD) {
@@ -763,34 +774,66 @@ class MiroirIME : InputMethodService() {
         private var gestureStartY = 0f
         private val SWIPE_THRESHOLD = 30f  // px minimum pour détecter un glissement
         private var scrubBaseX = 0f        // début du geste d'effacement (pour le scrub proportionnel)
+        private var scrubTimelinePos = 1f  // 0=rien gardé, 1=tout visible
+        private var scrubbedGroupFirstIdx: Int? = null  // groupe modifié → ré-inférence à la sortie
 
         // ═══ États B/C — effacement et déplacement ═══
         private fun scrubGroup(currentX: Float) {
             val gid = activeBlobGroupId ?: return
             val group = groupManager?.allGroups()?.find { it.id == gid } ?: return
             if (group.strokeIds.isEmpty()) return
-            // Distance parcourue vers la gauche depuis le début du geste d'effacement
-            val scrubbed = (scrubBaseX - currentX).coerceAtLeast(0f)
-            if (scrubbed < 5f) return  // seuil minimum pour éviter les micro-mouvements
-            // Largeur approximative du groupe (boîte englobante ou estimation)
-            val bounds = group.bounds
-            val groupWidth = if (!bounds.isEmpty) bounds.width() else 100f
-            if (groupWidth <= 0f) return
-            // Proportion de strokes à neutraliser (1:1 avec la distance en pixels)
-            val proportion = (scrubbed / groupWidth).coerceIn(0f, 1f)
-            val total = group.strokeIds.size
-            val keepCount = (total * (1f - proportion)).toInt().coerceIn(0, total)
-            val removeCount = total - keepCount
-            if (removeCount <= 0) return
-            // Supprimer les strokes les plus récents (ordre chronologique inverse)
-            val toRemove = group.strokeIds.toList().takeLast(removeCount)
-            for (sid in toRemove) {
-                val idx = inkStrokeIdToRegistryIndex.remove(sid) ?: continue
-                if (idx < strokeRegistry.size) strokeRegistry[idx] = StrokeRecord(id = "")
+            val dx = scrubBaseX - currentX  // delta depuis la dernière frame (non cumulé)
+            if (dx < 3f) return
+            scrubBaseX = currentX  // le delta est consommé, la base avance
+            // ═══ Effacement à rebours : chaque pixel de mouvement supprime un pixel de tracé ═══
+            val strokes = group.strokeIds.mapNotNull { sid ->
+                val idx = inkStrokeIdToRegistryIndex[sid]
+                if (idx != null && idx < strokeRegistry.size) idx to strokeRegistry[idx] else null
+            }.filter { (idx, sr) -> idx !in erasedStrokes && sr.points.size >= 2 }
+            if (strokes.isEmpty()) { exitEditMode(); return }
+            var remaining = dx.toDouble()
+            for ((idx, sr) in strokes.reversed()) {
+                if (remaining <= 0.0) break
+                if (idx in erasedStrokes) continue
+                val pts = sr.points
+                // Longueur totale du stroke (pour le ratio 1:1)
+                var strokeLen = 0.0
+                for (i in 1 until pts.size)
+                    strokeLen += Math.hypot(
+                        (pts[i].first - pts[i-1].first).toDouble(),
+                        (pts[i].second - pts[i-1].second).toDouble())
+                if (strokeLen <= remaining) {
+                    // Stroke entièrement effacé
+                    sr.points.clear(); sr.timestamps.clear(); sr.pressures.clear()
+                    erasedStrokes.add(idx)
+                    remaining -= strokeLen
+                } else {
+                    // Effacement partiel : supprimer les points les plus récents par la fin
+                    var accum = 0.0; var cutIdx = pts.size
+                    for (i in pts.size - 1 downTo 1) {
+                        accum += Math.hypot(
+                            (pts[i].first - pts[i-1].first).toDouble(),
+                            (pts[i].second - pts[i-1].second).toDouble())
+                        if (accum >= remaining) { cutIdx = i; break }
+                    }
+                    if (cutIdx > 0) {
+                        val kept = pts.take(cutIdx)
+                        sr.points.clear(); sr.points.addAll(kept)
+                        sr.timestamps.clear(); sr.timestamps.addAll(sr.timestamps.take(cutIdx))
+                        sr.pressures.clear(); sr.pressures.addAll(sr.pressures.take(cutIdx))
+                    }
+                    remaining = 0.0
+                }
             }
-            Log.i(TAG, "⏳ scrub: $removeCount/$total strokes effacés (proportion=${"%.2f".format(proportion)})")
+            Log.i(TAG, "⏳ ${"%.0f".format(dx - remaining)}px effacés (delta=dx)")
+            if (scrubbedGroupFirstIdx == null) {
+                scrubbedGroupFirstIdx = gid.let { groupId ->
+                    val g = groupManager?.allGroups()?.find { it.id == groupId }
+                    g?.strokeIds?.firstOrNull()
+                        ?.let { sid -> inkStrokeIdToRegistryIndex[sid] }
+                }
+            }
             rebuildBitmap()
-            if (group.strokeIds.isEmpty()) exitEditMode()
         }
 
         private fun moveGroup(endX: Float, endY: Float) {
@@ -817,7 +860,60 @@ class MiroirIME : InputMethodService() {
         private fun exitEditMode() {
             editMode = EditMode.NONE
             longPressTriggered = false
+            // ═══ Effacement définitif des strokes neutralisés ═══
+            if (erasedStrokes.isNotEmpty()) {
+                val gm = groupManager
+                val animatedGroupId = activeBlobGroupId
+                val erasedSids = mutableListOf<Long>()
+                // Parcourir les strokes du registre pour trouver les vidés
+                for ((sid, idx) in inkStrokeIdToRegistryIndex.entries.toList()) {
+                    if (idx in erasedStrokes && idx < strokeRegistry.size) {
+                        strokeRegistry[idx] = StrokeRecord(id = "")  // vider
+                        inkStrokeIdToRegistryIndex.remove(sid)
+                        erasedSids.add(sid)
+                    }
+                }
+                // Retirer les strokeIds effacés du groupe (GroupManager)
+                animatedGroupId?.let { gid ->
+                    gm?.allGroups()?.find { it.id == gid }?.strokeIds?.removeAll(erasedSids)
+                }
+                erasedStrokes.clear()
+                Log.i(TAG, "🧹 ${erasedSids.size} strokes définitivement effacés")
+            }
+            // ═══ Réactiver le groupe modifié comme SELECTED pour GroupManager ═══
+            val reactivateId = activeBlobGroupId
+            if (reactivateId != null) {
+                try { groupManager?.selectGroup(reactivateId) } catch (_: Exception) {}
+                // ═══ Étendre les bounds du groupe pour couvrir le blob visuel (plus large que le rectangle strict) ═══
+                groupBlobs[reactivateId]?.bounds?.let { blobBounds ->
+                    val gm = groupManager
+                    val g = gm?.allGroups()?.find { it.id == reactivateId }
+                    if (g != null && !blobBounds.isEmpty) {
+                        val rx = gm?.params?.spatialDistancePx?.toFloat() ?: 40f
+                        val ry = gm?.params?.spatialDistanceY?.toFloat() ?: 40f
+                        g.bounds.union(blobBounds.left - rx, blobBounds.top - ry)
+                        g.bounds.union(blobBounds.right + rx, blobBounds.bottom + ry)
+                    }
+                }
+                Log.i(TAG, "🔄 Groupe ${reactivateId.take(8)} réactivé comme SELECTED")
+            }
             activeBlobGroupId = null
+            // ═══ Recalculer le blob et forcer la ré-inférence ═══
+            val firstIdx = scrubbedGroupFirstIdx
+            if (firstIdx != null) {
+                inferredGroupFirstIdxs.remove(firstIdx)
+                groupStrokeCountAtInference.remove(firstIdx)
+                val gm = groupManager
+                val group = gm?.allGroups()?.find { g ->
+                    g.strokeIds.firstOrNull()?.let { sid -> inkStrokeIdToRegistryIndex[sid] } != null
+                }
+                if (group != null) {
+                    computeBlobPath(group)?.let { blob -> groupBlobs[group.id] = blob }
+                    Log.i(TAG, "🔄 Blob recalculé pour ${group.id.take(8)}")
+                }
+                uiHandler.post { scheduleGroupInference() }
+            }
+            scrubbedGroupFirstIdx = null
             displayController?.poserLabelPuisDU(DisplayMode.GU)
             rebuildBitmap()
             updateModeIndicator()
