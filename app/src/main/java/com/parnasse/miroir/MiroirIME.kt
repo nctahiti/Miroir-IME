@@ -103,6 +103,9 @@ class MiroirIME : InputMethodService() {
      /** Séquenceur de modes EPD (État A) — initialisé quand la surface IME est créée. */
      private var displayController: DisplayController? = null
 
+     /** Témoin de mode dans la barre d'outils (✍ plume · ⌛ montre · ↕ déplacement). */
+     private var modeIndicator: android.widget.TextView? = null
+
     // ── Barre d'outils ─────────────────────────────────────────────────
     private var showOverlays = true  // 👁 toggle
     private var toolbarHeightPx = 120f  // estimé, sera mesuré après layout
@@ -468,6 +471,17 @@ class MiroirIME : InputMethodService() {
             refreshAll()
             requestHideSelf(0)
         })
+        // ═══ Témoin de mode (plume/montre/déplacement) ═══
+        toolbar.addView(android.widget.TextView(this).apply {
+            text = "✍"
+            textSize = 22f
+            gravity = android.view.Gravity.CENTER
+            setTextColor(Color.DKGRAY)
+            setBackgroundColor(Color.TRANSPARENT)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            modeIndicator = this
+        })
 
         root.addView(toolbar)  // barre EN HAUT
 
@@ -610,6 +624,19 @@ class MiroirIME : InputMethodService() {
                     tapMoved = false
                     tapStrokeStarted = false
                     longPressTriggered = false
+
+                    // ═══ Si on était en mode édition, vérifier si on reste dans le blob ═══
+                    if (editMode != EditMode.NONE) {
+                        if (!isInBlob(event.x, event.y)) {
+                            exitEditMode()  // tap dans le vide → pose la montre, reprend la plume
+                            return true
+                        }
+                        // On reste dans le blob → mode édition immédiat, pas de new long-press
+                        gestureStartX = event.x; gestureStartY = event.y
+                        longPressTriggered = true  // réactiver le mode pour le geste suivant
+                        return true
+                    }
+
                     // ═══ Sélection visuelle (sans transition GroupManager) ═══
                     activeBlobGroupId = null
                     for ((gid, data) in groupBlobs) {
@@ -629,6 +656,8 @@ class MiroirIME : InputMethodService() {
                                 val gm = groupManager
                                 if (gm != null && gm.selectGroup(gid)) {
                                     Log.i(TAG, "Long-press: groupe ${gid.take(8)} SELECTED → absorption active")
+                                    gestureStartX = tapStartX; gestureStartY = tapStartY
+                                    editMode = EditMode.NONE
                                     enterViewMode()  // afficher le blob
                                 }
                             }
@@ -637,15 +666,41 @@ class MiroirIME : InputMethodService() {
                     }
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    // Annuler le long-press si on bouge
+                    // Annuler le long-press si on bouge (sauf si déjà déclenché → geste d'édition)
                     if (Math.abs(event.x - tapStartX) > 10f || Math.abs(event.y - tapStartY) > 10f) {
-                        cancelLongPressRunnable()
-                        tapMoved = true
+                        if (!longPressTriggered) {
+                            cancelLongPressRunnable()
+                            tapMoved = true
+                        }
+                    }
+                    // ═══ Détection de geste après long-press (États B/C) ═══
+                    if (longPressTriggered) {
+                        val dx = event.x - gestureStartX
+                        val dy = event.y - gestureStartY
+                        if (editMode == EditMode.NONE) {
+                            if (dx < -SWIPE_THRESHOLD) {
+                                editMode = EditMode.ERASE
+                                scrubBaseX = event.x
+                                updateModeIndicator()
+                                Log.i(TAG, "→ Mode EFFACEMENT (←)")
+                            } else if (dy > SWIPE_THRESHOLD) {
+                                editMode = EditMode.MOVE
+                                updateModeIndicator()
+                                Log.i(TAG, "→ Mode DÉPLACEMENT (↓)")
+                            }
+                        } else if (editMode == EditMode.ERASE && dx < 0f) {
+                            // ═══ Effacement proportionnel (scrub) — comme remonter l'aiguille ═══
+                            scrubGroup(event.x)
+                        } else if (editMode == EditMode.MOVE) {
+                            // ═══ Déplacement continu ═══
+                            moveGroup(event.x, event.y)
+                        }
+                        return true  // pas de tracé pendant le geste d'édition
                     }
                     // Premier mouvement → c'est un tracé, pas un tap
                     if (!tapStrokeStarted) {
                         tapStrokeStarted = true
-                        onStylusDown(tapStartX, tapStartY)  // utiliser la position du DOWN
+                        onStylusDown(tapStartX, tapStartY)
                     }
                     val historySize = event.historySize
                     for (i in 0 until historySize) {
@@ -655,9 +710,23 @@ class MiroirIME : InputMethodService() {
                 }
                 MotionEvent.ACTION_UP -> {
                     cancelLongPressRunnable()
-                    // ═══ Si long-press déclenché → absorption active, ne pas traiter comme stroke ═══
+                    // ═══ Gestes d'édition : le mode tient après pen-up ═══
                     if (longPressTriggered) {
-                        // Le groupe est déjà SELECTED, ne rien faire d'autre
+                        when (editMode) {
+                            EditMode.ERASE -> {
+                                // Mettre à jour la position de départ pour le prochain geste
+                                gestureStartX = event.x
+                                rebuildBitmap()
+                            }
+                            EditMode.MOVE -> {
+                                gestureStartX = event.x; gestureStartY = event.y
+                                rebuildBitmap()
+                            }
+                            EditMode.NONE -> {
+                                // Tap sans mouvement → désactiver
+                                exitEditMode()
+                            }
+                        }
                         return true
                     }
                     // ═══ Détection de tap (clic court sans mouvement) → boutons ═══
@@ -687,6 +756,83 @@ class MiroirIME : InputMethodService() {
         // ── Long-press (clic long pour sélection + absorption) ──────────
         private var longPressRunnable: Runnable? = null
         private var longPressTriggered: Boolean = false
+
+        // ═══ États B/C — édition par gestes ═══
+        private var editMode = EditMode.NONE
+        private var gestureStartX = 0f
+        private var gestureStartY = 0f
+        private val SWIPE_THRESHOLD = 30f  // px minimum pour détecter un glissement
+        private var scrubBaseX = 0f        // début du geste d'effacement (pour le scrub proportionnel)
+
+        // ═══ États B/C — effacement et déplacement ═══
+        private fun scrubGroup(currentX: Float) {
+            val gid = activeBlobGroupId ?: return
+            val group = groupManager?.allGroups()?.find { it.id == gid } ?: return
+            if (group.strokeIds.isEmpty()) return
+            // Distance parcourue vers la gauche depuis le début du geste d'effacement
+            val scrubbed = (scrubBaseX - currentX).coerceAtLeast(0f)
+            if (scrubbed < 5f) return  // seuil minimum pour éviter les micro-mouvements
+            // Largeur approximative du groupe (boîte englobante ou estimation)
+            val bounds = group.bounds
+            val groupWidth = if (!bounds.isEmpty) bounds.width() else 100f
+            if (groupWidth <= 0f) return
+            // Proportion de strokes à neutraliser (1:1 avec la distance en pixels)
+            val proportion = (scrubbed / groupWidth).coerceIn(0f, 1f)
+            val total = group.strokeIds.size
+            val keepCount = (total * (1f - proportion)).toInt().coerceIn(0, total)
+            val removeCount = total - keepCount
+            if (removeCount <= 0) return
+            // Supprimer les strokes les plus récents (ordre chronologique inverse)
+            val toRemove = group.strokeIds.toList().takeLast(removeCount)
+            for (sid in toRemove) {
+                val idx = inkStrokeIdToRegistryIndex.remove(sid) ?: continue
+                if (idx < strokeRegistry.size) strokeRegistry[idx] = StrokeRecord(id = "")
+            }
+            Log.i(TAG, "⏳ scrub: $removeCount/$total strokes effacés (proportion=${"%.2f".format(proportion)})")
+            rebuildBitmap()
+            if (group.strokeIds.isEmpty()) exitEditMode()
+        }
+
+        private fun moveGroup(endX: Float, endY: Float) {
+            val gid = activeBlobGroupId ?: run { Log.w(TAG, "move: pas de groupe actif"); return }
+            val dx = endX - gestureStartX; val dy = endY - gestureStartY
+            gestureStartX = endX; gestureStartY = endY  // continuer le mouvement
+            Log.i(TAG, "↕ Déplacement groupe ${gid.take(8)} dx=$dx dy=$dy")
+            val gm = groupManager
+            val group = gm?.allGroups()?.find { it.id == gid } ?: return
+            for (sid in group.strokeIds) {
+                val idx = inkStrokeIdToRegistryIndex[sid] ?: continue
+                if (idx < strokeRegistry.size) {
+                    strokeRegistry[idx].points.replaceAll { (x, y) -> Pair(x + dx, y + dy) }
+                }
+            }
+            rebuildBitmap()
+        }
+
+        private fun isInBlob(x: Float, y: Float): Boolean {
+            val gid = activeBlobGroupId ?: return false
+            return groupBlobs[gid]?.bounds?.contains(x, y) == true
+        }
+
+        private fun exitEditMode() {
+            editMode = EditMode.NONE
+            longPressTriggered = false
+            activeBlobGroupId = null
+            displayController?.poserLabelPuisDU(DisplayMode.GU)
+            rebuildBitmap()
+            updateModeIndicator()
+            Log.i(TAG, "🔚 Sortie édition → retour DU")
+        }
+
+        private fun updateModeIndicator() {
+            val symbol = when {
+                editMode == EditMode.ERASE -> "⌛"
+                editMode == EditMode.MOVE -> "↕"
+                else -> "✍"
+            }
+            modeIndicator?.text = symbol
+        }
+
         private fun cancelLongPressRunnable() {
             longPressRunnable?.let { uiHandler.removeCallbacks(it) }
             longPressRunnable = null
@@ -946,6 +1092,9 @@ class MiroirIME : InputMethodService() {
     /** File d'attente FIFO de groupes à reconnaître. */
     private val inferenceQueue = java.util.concurrent.ConcurrentLinkedQueue<List<Int>>()
     private var isInferring = false
+
+    // ═══ États d'édition B/C ═══
+    private enum class EditMode { NONE, ERASE, MOVE }
 
     // ═══ Timers par groupe (comme CaptureView) ═══
     private val groupTimers = mutableMapOf<Int, java.util.concurrent.ScheduledFuture<*>>()
