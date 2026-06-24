@@ -132,6 +132,7 @@ class MiroirIME : InputMethodService() {
 
     private var currentPageIndex = 0
     private val pagesDir by lazy { java.io.File(cacheDir, "ime-pages").also { it.mkdirs() } }
+    private var pageLabel: android.widget.TextView? = null
 
     /** Sauvegarde la page active et en crée une nouvelle. */
     private fun newPage() {
@@ -196,13 +197,22 @@ class MiroirIME : InputMethodService() {
             val labelsObj = org.json.JSONObject()
             for ((k, v) in groupLabels) labelsObj.put(k.toString(), v)
             json.put("labels", labelsObj)
+            // Anchors: firstIdx → (x, y)
+            val anchorsObj = org.json.JSONObject()
+            for ((k, v) in groupAnchor) {
+                val arr = org.json.JSONArray()
+                arr.put(v.first.toDouble())
+                arr.put(v.second.toDouble())
+                anchorsObj.put(k.toString(), arr)
+            }
+            json.put("anchors", anchorsObj)
             java.io.FileWriter(java.io.File(dir, "state.json")).use { it.write(json.toString()) }
             // Copier la persistance GroupManager
             val gmFile = java.io.File(cacheDir, "ime-groups/current.groups")
             if (gmFile.exists()) {
                 gmFile.copyTo(java.io.File(dir, "groups.json"), overwrite = true)
             }
-            Log.d(TAG, "Page $currentPageIndex sauvegardée: ${strokeRegistry.size} strokes")
+            Log.i(TAG, "Page $currentPageIndex sauvegardée: ${strokeRegistry.size} strokes, ${groupLabels.size} labels")
         } catch (e: Exception) {
             Log.w(TAG, "Erreur sauvegarde page: ${e.message}")
         }
@@ -253,6 +263,20 @@ class MiroirIME : InputMethodService() {
                         groupLabels[key.toInt()] = labelsObj.optString(key, "")
                     }
                 }
+                // Anchors: firstIdx → (x, y)
+                val anchorsObj = json.optJSONObject("anchors")
+                groupAnchor.clear()
+                if (anchorsObj != null) {
+                    for (key in anchorsObj.keys()) {
+                        val arr = anchorsObj.optJSONArray(key) ?: continue
+                        if (arr.length() >= 2) {
+                            groupAnchor[key.toInt()] = Pair(
+                                arr.optDouble(0).toFloat(),
+                                arr.optDouble(1).toFloat()
+                            )
+                        }
+                    }
+                }
             }
             // GroupManager: charger depuis persistance spécifique à la page
             val pageGroupsFile = java.io.File(dir, "groups.json")
@@ -262,7 +286,16 @@ class MiroirIME : InputMethodService() {
             }
             currentPageIndex = index
             rebuildBitmap()
-            Log.i(TAG, "Page $index chargée: ${strokeRegistry.size} strokes, ${groupLabels.size} labels")
+            // ═══ Recalculer tous les blobs pour les groupes chargés ═══
+            groupBlobs.clear()
+            groupManager?.allGroups()?.forEach { group ->
+                if (group.strokeIds.isNotEmpty()) {
+                    computeBlobPath(group)?.let { blob ->
+                        groupBlobs[group.id] = blob
+                    }
+                }
+            }
+            Log.i(TAG, "Page $index chargée: ${strokeRegistry.size} strokes, ${groupLabels.size} labels, ${groupBlobs.size} blobs")
             return true
         } catch (e: Exception) {
             Log.w(TAG, "Erreur chargement page $index: ${e.message}")
@@ -442,7 +475,10 @@ class MiroirIME : InputMethodService() {
         toolbar.addView(makeButton("✓") {
             savePage()
             val ic = currentInputConnection
-            if (ic != null) ic.commitText("\n", 1)
+            if (ic != null) {
+                val fullText = buildAllPagesText()
+                ic.commitText(fullText.ifEmpty { "\n" }, 1)
+            }
             requestHideSelf(0)
         })
 
@@ -453,14 +489,40 @@ class MiroirIME : InputMethodService() {
             startActivity(intent)
         })
 
-        toolbar.addView(makeButton("👁") {
-            showOverlays = !showOverlays
+        toolbar.addView(makeButton("◀") {
+            if (currentPageIndex > 0) {
+                savePage()
+                currentPageIndex--
+                loadPage(currentPageIndex)
+                refreshAll()
+                updatePageIndicator()
+            }
+        })
+
+        // ═══ Indicateur de page (numéro page courante / totale) ═══
+        val pageLabel = android.widget.TextView(this).apply {
+            text = "1/1"
+            textSize = 18f
+            gravity = android.view.Gravity.CENTER
+            setTextColor(Color.DKGRAY)
+            setBackgroundColor(Color.TRANSPARENT)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        }.also { this.pageLabel = it }
+        toolbar.addView(pageLabel)
+
+        toolbar.addView(makeButton("▶") {
+            savePage()
+            currentPageIndex++
+            clearPage()
             refreshAll()
+            updatePageIndicator()
         })
 
         toolbar.addView(makeButton("+") {
             newPage()
             refreshAll()
+            updatePageIndicator()
         })
 
         toolbar.addView(makeButton("✕") {
@@ -518,7 +580,7 @@ class MiroirIME : InputMethodService() {
 
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        Log.i(TAG, "onStartInputView — champ: ${info?.fieldName ?: "inconnu"}")
+        Log.i(TAG, "onStartInputView — app=${info?.packageName ?: "?"} field=${info?.fieldName ?: "?"} inputType=${info?.inputType ?: 0}")
         // ═══ Forcer la réinitialisation du TouchHelper à chaque ouverture ═══
         touchHelper = null
         isWriteMode = false
@@ -1479,8 +1541,7 @@ class MiroirIME : InputMethodService() {
                         // ═══ PAS de sélection auto — le blob est la vue de sélection,
                         // pas le témoin d'inférence. Le label EST le témoin. ═══
                     }
-                    // ═══ Injection en ordre de lecture (tri spatial) ═══
-                    injectReadingOrder()
+                    // ═══ Plus d'injection à l'inférence — le texte est poussé uniquement à la validation (✓) ═══
                     Log.i(TAG, "Texte injecte: " + result)
                     // ═══ Dessiner le label directement sur le BITMAP (pas seulement dans onDraw) ═══
                     // La couche stylet (handwritingRepaint) est la seule qui s'affiche en IME.
@@ -1530,65 +1591,112 @@ class MiroirIME : InputMethodService() {
     // ── Note synchronisée ─────────────────────────────────────────────
     private var syncedNoteText: String = ""  // copie de ce qui est dans le champ texte
 
-    /** Injecte tous les labels dans l'ordre de lecture. Ne transmet que si changé.
-     *  Les groupes sans label recoivent le placeholder \"…\" pour diagnostic. */
-    private fun injectReadingOrder() {
-        val ic = currentInputConnection
-        if (ic == null) { Log.w(TAG, "injectReadingOrder: pas d'InputConnection"); return }
-        val gm = groupManager ?: return
-        // Collecter (ligne, x, texte) pour chaque mot (label ou placeholder)
+    /** Construit le texte complet dans l'ordre de lecture (tri spatial).
+     *  N'inclut que les groupes avec label (les groupes sans reconnaissance sont ignorés).
+     *  Utilisé à la validation (bouton ✓) pour pousser le texte d'un coup. */
+    private fun buildReadingOrderText(): String {
+        if (groupLabels.isEmpty()) return ""
         data class Word(val line: Float, val x: Float, val text: String)
         val words = mutableListOf<Word>()
-        val seenFirstIdx = mutableSetOf<Int>()
-        // 1. Groupes avec label
         for ((firstIdx, text) in groupLabels) {
-            seenFirstIdx.add(firstIdx)
             val anchor = groupAnchor[firstIdx] ?: continue
             words.add(Word(snapToLine(anchor.second), anchor.first, text))
         }
-        // 2. Groupes sans label → placeholder \"…\" (diagnostic : blocage groupe ou inference ?)
-        // ═══ Ne prendre que les groupes LOADED/SELECTED (session courante) ═══
-        // Les groupes STORED sont dans la persistence (sessions antérieures) et polluent le diagnostic.
-        val activeGroups = gm.groupsInState(GroupState.LOADED) + gm.groupsInState(GroupState.SELECTED)
-        for (group in activeGroups) {
-            val firstIdx = group.strokeIds.firstOrNull()
-                ?.let { inkStrokeIdToRegistryIndex[it] } ?: continue
-            if (firstIdx in seenFirstIdx) continue  // deja traite avec label
-            val anchor = groupAnchor[firstIdx]
-            val (x, y) = if (anchor != null) {
-                Pair(anchor.first, snapToLine(anchor.second))
-            } else if (!group.bounds.isEmpty) {
-                Pair(group.bounds.centerX(), snapToLine(group.bounds.centerY()))
-            } else continue
-            words.add(Word(y, x, "\u2026"))  // … = U+2026
-            Log.d(TAG, "injectReadingOrder: placeholder pour firstIdx=$firstIdx (groupe ${group.id.take(8)}, ${group.strokeCount}s, state=${group.state})")
-        }
-        if (words.isEmpty()) return
-        // Trier par ligne (Y) puis par position horizontale (X)
+        if (words.isEmpty()) return ""
+        // Trier les mots par ligne (Y) puis X
         words.sortWith(compareBy<Word> { it.line }.thenBy { it.x })
-        // Construire le texte avec retours à la ligne entre interlignes
+        // ═══ Parcourir toutes les lignes de la portée, y compris les lignes vides ═══
+        // Une ligne vide = retour à la ligne simple. Deux lignes vides = saut de paragraphe.
         val sb = StringBuilder()
-        var currentLine = words.first().line
-        for (w in words) {
-            if (Math.abs(w.line - currentLine) > 10f) {
-                sb.append("\n")
-                currentLine = w.line
+        var emptyLineCount = 0
+        var wordIdx = 0
+        for (ly in cachedTemplateLines) {
+            val wordsOnThisLine = mutableListOf<Word>()
+            while (wordIdx < words.size && Math.abs(words[wordIdx].line - ly) < 1f) {
+                wordsOnThisLine.add(words[wordIdx])
+                wordIdx++
             }
-            sb.append(w.text).append(" ")
+            if (wordsOnThisLine.isEmpty()) {
+                // Ligne vide → compter
+                emptyLineCount++
+            } else {
+                // Ligne avec mots → vider le compteur de lignes vides
+                if (emptyLineCount > 0) {
+                    for (i in 0 until emptyLineCount) sb.append("\n")
+                    emptyLineCount = 0
+                }
+                for (w in wordsOnThisLine) {
+                    sb.append(w.text).append(" ")
+                }
+            }
         }
-        val newText = sb.toString()
-        // ═══ Ne transmettre que si le texte a changé ═══
-        if (newText == syncedNoteText) {
-            Log.d(TAG, "injectReadingOrder: texte inchangé, skip")
-            return
+        return sb.toString()
+    }
+
+    /** Met à jour l'indicateur de page (numéro page courante / totale). */
+    private fun updatePageIndicator() {
+        val total = maxOf(currentPageIndex + 1, countPages())
+        pageLabel?.text = "${currentPageIndex + 1}/$total"
+    }
+
+    /** Compte le nombre total de pages sauvegardées. */
+    private fun countPages(): Int {
+        val dir = pagesDir
+        if (!dir.exists()) return 0
+        return dir.listFiles()?.count { it.isDirectory && it.name.startsWith("page_") } ?: 0
+    }
+
+    /** Construit le texte de TOUTES les pages dans l'ordre de lecture. */
+    private fun buildAllPagesText(): String {
+        val dir = pagesDir
+        if (!dir.exists() || !dir.isDirectory) return buildReadingOrderText()
+        val pageDirs = dir.listFiles()
+            ?.filter { it.isDirectory && it.name.startsWith("page_") }
+            ?.sortedBy { it.name.removePrefix("page_").toIntOrNull() ?: -1 }
+            ?: emptyList()
+        val sb = StringBuilder()
+        // Parcourir toutes les pages dans l'ordre (0, 1, 2...)
+        for (pd in pageDirs) {
+            val pi = pd.name.removePrefix("page_").toIntOrNull() ?: continue
+            if (pi == currentPageIndex) {
+                // Page courante → texte depuis la mémoire (avec mise en forme)
+                val pageText = buildReadingOrderText()
+                Log.i(TAG, "buildAllPages: page $pi (courante) = ${groupLabels.size} labels -> \"${pageText.take(60)}\"")
+                if (pageText.isNotBlank()) {
+                    if (sb.isNotEmpty()) sb.append("\n")
+                    sb.append(pageText)
+                }
+            } else {
+                // Autre page → lire les labels depuis le JSON
+                val stateFile = java.io.File(pd, "state.json")
+                if (!stateFile.exists()) continue
+                try {
+                    val json = org.json.JSONObject(stateFile.readText())
+                    val labelsObj = json.optJSONObject("labels") ?: continue
+                    val words = mutableListOf<String>()
+                    for (key in labelsObj.keys()) {
+                        val text = labelsObj.optString(key, "")
+                        if (text.isBlank()) continue
+                        words.add(text)
+                    }
+                    val pageText = words.joinToString(" ")
+                    Log.i(TAG, "buildAllPages: page $pi (sauvegardée) = ${words.size} labels -> \"${pageText.take(60)}\"")
+                    if (pageText.isNotBlank()) {
+                        if (sb.isNotEmpty()) sb.append("\n")
+                        sb.append(pageText)
+                    }
+                } catch (_: Exception) {}
+            }
         }
-        syncedNoteText = newText
-        // ═══ Remplacer tout le bloc : setComposingText écrase le texte en composition ═══
-        // On ne commit JAMAIS (pas de commitText, pas de finishComposingText).
-        // Le texte reste en composition → chaque nouvelle inférence le remplace entièrement.
-        // Ainsi, pas d'accumulation, pas d'artefacts. Une seule version, toujours fraîche.
-        ic.setComposingText(newText, 1)
-        Log.i(TAG, "injectReadingOrder: transmit \"$newText\" (${words.size} mots, ${groupLabels.size} labels, ${words.size - groupLabels.size} placeholders)")
+        // Si aucune page sauvegardée → utiliser la page courante uniquement
+        if (sb.isEmpty()) return buildReadingOrderText()
+        return sb.toString()
+    }
+
+    /** Ancienne injection continue — remplacée par buildReadingOrderText() à la validation. */
+    private fun injectReadingOrder() {
+        // Conservé pour compatibilité mais plus appelé par l'inférence
+        // Le texte est maintenant poussé uniquement au clic sur ✓
     }
 
     /** Réinitialise la copie synchronisée (après clearPage ou ✕). */
