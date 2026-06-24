@@ -634,6 +634,7 @@ class MiroirIME : InputMethodService() {
                     if (editMode != EditMode.NONE) {
                         if (!isInBlob(event.x, event.y)) {
                             exitEditMode()  // tap dans le vide → pose la montre, reprend la plume
+                            tapStrokeStarted = true  // ═══ évite un stroke parasite au prochain MOVE ═══
                             return true
                         }
                         // On reste dans le blob → mode édition immédiat, pas de new long-press
@@ -645,11 +646,23 @@ class MiroirIME : InputMethodService() {
 
                     // ═══ Sélection visuelle (sans transition GroupManager) ═══
                     activeBlobGroupId = null
+                    val toRemove = mutableListOf<String>()
                     for ((gid, data) in groupBlobs) {
                         if (data.bounds.contains(event.x, event.y)) {
+                            // Vérifier que le groupe existe encore dans GroupManager
+                            // (un groupe auto-désélectionné → STORED → évincé → blob orphelin)
+                            val group = groupManager?.getGroup(gid)
+                            if (group == null) {
+                                toRemove.add(gid)
+                                continue
+                            }
                             activeBlobGroupId = gid
                             break
                         }
+                    }
+                    for (gid in toRemove) {
+                        groupBlobs.remove(gid)
+                        Log.d(TAG, "Blob orphelin nettoyé: ${gid.take(8)}")
                     }
                     // ═══ Armer le long-press (500ms) pour sélection + absorption ═══
                     // Si le stylet reste immobile sur un blob → selectGroup()
@@ -732,12 +745,16 @@ class MiroirIME : InputMethodService() {
                                 } else {
                                     // Mettre à jour la position de départ pour le prochain geste
                                     gestureStartX = event.x
-                                    rebuildBitmap()
+                                    currentPath.reset()  // ═══ nettoie le path fantôme ═══
+                                    redrawBitmapOnly()
+                                    imeView?.postInvalidate()
                                 }
                             }
                             EditMode.MOVE -> {
                                 gestureStartX = event.x; gestureStartY = event.y
-                                rebuildBitmap()
+                                currentPath.reset()  // ═══ nettoie le path fantôme ═══
+                                redrawBitmapOnly()
+                                imeView?.postInvalidate()
                             }
                             EditMode.NONE -> {
                                 // Tap sans mouvement → désactiver
@@ -762,7 +779,9 @@ class MiroirIME : InputMethodService() {
                         computeBlobPath(group)?.let { blob ->
                             groupBlobs[gid] = blob
                             val b = blob.bounds; val pad = 10
-                            refreshRect(b.left.toInt()-pad, b.top.toInt()-pad, b.right.toInt()+pad, b.bottom.toInt()+pad)
+                            imeView?.postInvalidate(
+                                (b.left - pad).toInt(), (b.top - pad).toInt(),
+                                (b.right + pad).toInt(), (b.bottom + pad).toInt())
                         }
                     }
                 }
@@ -838,7 +857,34 @@ class MiroirIME : InputMethodService() {
                         ?.let { sid -> inkStrokeIdToRegistryIndex[sid] }
                 }
             }
-            rebuildBitmap()
+            // ═══ Recalculer le blob après effacement (pour qu'isInBlob soit correct au prochain tap) ═══
+            groupManager?.allGroups()?.find { it.id == gid }?.let { group ->
+                computeBlobPath(group)?.let { blob ->
+                    groupBlobs[gid] = blob
+                    group.bounds.set(blob.bounds)
+                }
+            }
+            redrawBitmapOnly()
+            imeView?.postInvalidate()
+        }
+
+        /** Vrai si un geste d'édition est actif. */
+        fun isEditing(): Boolean = editMode != EditMode.NONE
+
+        /** Redessine tous les strokes dans le bitmap, SANS refreshScreen. */
+        private fun redrawBitmapOnly() {
+            val canvas = bitmapCanvas ?: return
+            canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+            for ((idx, sr) in strokeRegistry.withIndex()) {
+                if (idx in erasedStrokes) continue
+                if (sr.points.size < 2) continue
+                val path = Path()
+                path.moveTo(sr.points[0].first, sr.points[0].second)
+                for (i in 1 until sr.points.size) {
+                    path.lineTo(sr.points[i].first, sr.points[i].second)
+                }
+                canvas.drawPath(path, strokePaint.apply { style = Paint.Style.STROKE })
+            }
         }
 
         private fun moveGroup(endX: Float, endY: Float) {
@@ -854,7 +900,24 @@ class MiroirIME : InputMethodService() {
                     strokeRegistry[idx].points.replaceAll { (x, y) -> Pair(x + dx, y + dy) }
                 }
             }
-            rebuildBitmap()
+            // ═══ Déplacer l'ancre du label (groupAnchor) ═══
+            group.strokeIds.firstOrNull()
+                ?.let { sid -> inkStrokeIdToRegistryIndex[sid] }
+                ?.let { firstIdx ->
+                    groupAnchor[firstIdx]?.let { anchor ->
+                        groupAnchor[firstIdx] = Pair(anchor.first + dx, anchor.second + dy)
+                    }
+                }
+            // ═══ Déplacer les bounds du groupe (ordre de lecture) ═══
+            group.bounds.offset(dx, dy)
+            // ═══ Déplacer le blob visuel (sélection) ═══
+            groupBlobs[gid]?.let { blob ->
+                blob.path.offset(dx, dy)
+                blob.bounds.offset(dx, dy)
+            }
+            cachedGMCacheSize = -1
+            redrawBitmapOnly()
+            imeView?.postInvalidate()
         }
 
         private fun isInBlob(x: Float, y: Float): Boolean {
@@ -912,7 +975,19 @@ class MiroirIME : InputMethodService() {
             // ═══ Réactiver le groupe modifié comme SELECTED pour GroupManager ═══
             val reactivateId = activeBlobGroupId
             if (reactivateId != null) {
-                try { groupManager?.selectGroup(reactivateId) } catch (_: Exception) {}
+                // ═══ Laisser le groupe absorber (SELECTED) — fonctionnement normal ═══
+                // Le refresh des labels est géré par recognizeGroup() après l'inférence
+                // Synchroniser les bounds avec la position visuelle actuelle
+                val existingGroup = groupManager?.getGroup(reactivateId)
+                if (existingGroup != null) {
+                    groupBlobs[reactivateId]?.let { blob ->
+                        existingGroup.bounds.set(blob.bounds)
+                    }
+                    // Maintenir le groupe SELECTED pour l'absorption
+                    if (existingGroup.state != GroupState.SELECTED) {
+                        try { groupManager?.selectGroup(reactivateId) } catch (_: Exception) {}
+                    }
+                }
                 // ═══ Étendre les bounds du groupe pour couvrir le blob visuel (plus large que le rectangle strict) ═══
                 groupBlobs[reactivateId]?.bounds?.let { blobBounds ->
                     val gm = groupManager
@@ -930,6 +1005,7 @@ class MiroirIME : InputMethodService() {
             // ═══ Nettoyer le stroke en cours (évite un tracé de sortie parasite) ═══
             currentStroke = null
             currentPath.reset()
+            isStylusDown = false  // ═══ réinitialiser le flag du stylet (mode édition ne l'a pas reset) ═══
             // ═══ Recalculer le blob et forcer la ré-inférence ═══
             val firstIdx = scrubbedGroupFirstIdx
             if (firstIdx != null) {
@@ -946,8 +1022,11 @@ class MiroirIME : InputMethodService() {
                 uiHandler.post { scheduleGroupInference() }
             }
             scrubbedGroupFirstIdx = null
+            // ═══ Mettre à jour le bitmap AVANT le refresh unique ═══
+            // poserLabelPuisDU(GU) fait déjà un refreshScreen(GU) — inutile de le dupliquer
+            redrawBitmapOnly()
+            cachedGMCacheSize = -1
             displayController?.poserLabelPuisDU(DisplayMode.GU)
-            rebuildBitmap()
             updateModeIndicator()
             Log.i(TAG, "🔚 Sortie édition → retour DU")
         }
@@ -1065,7 +1144,8 @@ class MiroirIME : InputMethodService() {
                     override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
                         // ═══ Activer DU au premier contact du stylet (quel que soit le chemin d'accès) ═══
                         // Ne pas dupliquer si onStylusDown déjà déclenché par onTouchEvent
-                        if (!isStylusDown) onStylusDown(p1.x, p1.y)
+                        // Ne pas créer de stroke si on est en mode édition (geste de sortie)
+                        if (!isStylusDown && !(imeView?.isEditing() == true)) onStylusDown(p1.x, p1.y)
                     }
                     override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {}
                     override fun onRawDrawingTouchPointListReceived(list: TouchPointList?) {}
@@ -1186,8 +1266,7 @@ class MiroirIME : InputMethodService() {
                 (minX - 10).toInt(), (minY - 10).toInt(),
                 (maxX + 10).toInt(), (maxY + 10).toInt(), isStroke = true)
         }
-        // ═══ Maintenir le DU après le lever du stylet si on était en écriture ═══
-        // (ne pas forcer DU sur un geste d'édition / clic long)
+        // ═══ Maintenir le DU après le lever du stylet (l'inférence fera le refresh label) ═══
         if (isWriteMode) {
             displayController?.reasserterDU()
         }
@@ -1305,7 +1384,12 @@ class MiroirIME : InputMethodService() {
         // ═══ Ne pas inférer si le stylet est encore posé (écriture en cours) ═══
         if (isStylusDown) {
             groupTimers.remove(firstIdx)
-            Log.d(TAG, "TIMER DEFERRED firstIdx=$firstIdx — stylet posé")
+            // ═══ Réarmer après 800ms au lieu de perdre l'inférence ═══
+            val timer = inferExecutor.schedule({
+                armGroupInference(firstIdx)
+            }, 800L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            groupTimers[firstIdx] = timer
+            Log.d(TAG, "TIMER DEFERRED firstIdx=$firstIdx — réarmé dans 800ms")
             return
         }
         // ═══ Garde-fou : groupe modifié depuis l'armement du timer → ignorer ═══
@@ -1397,13 +1481,35 @@ class MiroirIME : InputMethodService() {
                     }
                     // ═══ Injection en ordre de lecture (tri spatial) ═══
                     injectReadingOrder()
-                    Log.i(TAG, "Texte injecté: \"$result\"")
-                    // ═══ Rafraîchir les overlays SANS changer le mode par défaut ═══
-                    // refreshAll() fait un refreshScreen(GU) ponctuel → labels visibles
-                    // Le mode DU reste actif pour le prochain stroke → pas de jonglage
-                     // ═══ Rafraîchir les overlays PUIS revenir en DU (garanti) ═══
-                     // poserLabelPuisDU atomise le refresh GU et le retour DU — fracture A colmatée
-                     displayController?.poserLabelPuisDU(DisplayMode.GU)
+                    Log.i(TAG, "Texte injecte: " + result)
+                    // ═══ Dessiner le label directement sur le BITMAP (pas seulement dans onDraw) ═══
+                    // La couche stylet (handwritingRepaint) est la seule qui s'affiche en IME.
+                    val anchor = groupAnchor[firstIdx]
+                    if (anchor != null) {
+                        val bc = bitmapCanvas
+                        if (bc != null) {
+                            val labelX = anchor.first - 30f
+                            val labelY = snapToLine(anchor.second) + labelPaint.textSize + 2f
+                            bc.drawText(result, labelX, labelY, labelPaint)
+                        }
+                    }
+                    // ═══ Rafraîchir les overlays PUIS revenir en DU ═══
+                    displayController?.poserLabelPuisDU(DisplayMode.GU)
+                    // ═══ handwritingRepaint ciblé sur la zone du label (pas tout l'écran !) ═══
+                    try {
+                        val v = imeView ?: return@post
+                        v.postInvalidate()
+                        if (anchor != null) {
+                            val pad = 10
+                            val labelX = (anchor.first - 30f - pad).toInt()
+                            val labelY = (snapToLine(anchor.second) - pad).toInt()
+                            val right = (labelX + labelPaint.measureText(result) + pad * 2).toInt()
+                            val bottom = (snapToLine(anchor.second) + labelPaint.textSize * 3 + pad).toInt()
+                            EpdController.handwritingRepaint(v, labelX, labelY, right, bottom)
+                        } else {
+                            EpdController.handwritingRepaint(v, 0, 0, v.width, v.height)
+                        }
+                    } catch (_: Exception) {}
                 }
             }
         } catch (e: Exception) {

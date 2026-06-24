@@ -184,15 +184,28 @@ class GroupManager(
 
     fun selectGroup(groupId: String): Boolean {
         // ═══ Garantir UN SEUL groupe SELECTED à la fois ═══
-        // La machine à états n'enforce pas cet invariant — pendingGroupId
-        // est juste écrasé, l'ancien groupe garde son état SELECTED.
         groupsInState(GroupState.SELECTED).forEach { g ->
             if (g.id != groupId) {
                 Log.i(TAG, "Auto-deselection: groupe " + g.id + " (double SELECTED detecte)")
                 deselectGroup(g.id)
             }
         }
-        val group = groups[groupId] ?: return false
+        var group = groups[groupId]
+        // ═══ Groupe STORD ou évincé → recharger depuis la persistence ═══
+        if (group == null || group.state == GroupState.STORED) {
+            if (group == null) {
+                persistence?.readGroup(groupId)?.let { loaded ->
+                    groups[groupId] = loaded
+                    group = loaded
+                    Log.i(TAG, "Groupe " + groupId + " rechargé depuis .groups (${loaded.strokeCount} strokes)")
+                }
+            }
+            if (group != null && group.state == GroupState.STORED) {
+                machine.transition(group, GroupState.LOADED)
+                Log.i(TAG, "Groupe " + group!!.id + " STORED->LOADED (réactivation)")
+            }
+        }
+        if (group == null) return false
         if (group.state != GroupState.LOADED) return false
         if (machine.transition(group, GroupState.SELECTED)) {
             Log.i(TAG, "Groupe " + group.id + " SELECTED (" + group.strokeCount + " strokes)")
@@ -206,6 +219,7 @@ class GroupManager(
         if (group.state != GroupState.SELECTED) return false
         if (machine.transition(group, GroupState.STORED)) {
             Log.i(TAG, "Groupe " + group.id + " SELECTED->STORED")
+            onGroupAutoDeselected?.invoke()
             evictGroup(group.id)
             return true
         }
