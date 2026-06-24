@@ -252,8 +252,9 @@ class CaptureView(context: Context) : View(context) {
         val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
         if (indices.isEmpty()) return@GroupManager
         val snapshot = strokeRegistry.toList()
-        val seq = groupSequenceCounter.getAndIncrement()
-        group.orderIndex = seq  // stocker dans l'InkGroup pour liaison transcription
+        // ═══ Utiliser l'orderIndex déjà assigné par GroupManager à la création ═══
+        // Fallback sur groupSequenceCounter pour les groupes legacy sans orderIndex
+        val seq = group.orderIndex ?: groupSequenceCounter.getAndIncrement().also { group.orderIndex = it }
         Log.i(TAG, "GroupManager -> STORED: groupe ${group.id} (${indices.size} strokes, seq=$seq)")
         onWordGroupCompleted?.invoke(snapshot, indices, seq)
         vstarWriter?.writeGroupSep()
@@ -2849,9 +2850,12 @@ class CaptureView(context: Context) : View(context) {
         }
 
         // Ré-inférence du groupe fusionné
-        val seq = groupSequenceCounter.getAndIncrement()
+        // ═══ Utiliser l'orderIndex du groupe fusionné (déjà assigné par GroupManager) ═══
+        val mergedGroup = groupManager.findGroupByStroke(
+            registryIndexToInkStrokeId[merged.firstOrNull()] ?: return
+        ) ?: return
+        val seq = mergedGroup.orderIndex ?: groupSequenceCounter.getAndIncrement().also { mergedGroup.orderIndex = it }
         val snapshot = strokeRegistry.toList()
-        mapSpatialGroupToSeq(merged, seq)
         Log.i(TAG, "🔗 MergeGroups: [${groupA.joinToString(",")}] + [${groupB.joinToString(",")}] → [${merged.joinToString(",")}] (seq=$seq)")
         onWordGroupCompleted?.invoke(snapshot, merged, seq)
 

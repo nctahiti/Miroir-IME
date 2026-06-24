@@ -24,6 +24,18 @@ class GroupManager(
             Thread(r, "GroupManager-timeout").apply { isDaemon = true }
         }
 
+    /** Compteur de séquence — assigne un orderIndex unique à chaque groupe créé.
+     *  Initialisé à 0 ; après chargement d'une page, appeler initSequenceCounter(max). */
+    var nextOrderIndex: Int = 0
+        private set
+
+    /** Initialise le compteur après chargement d'une page
+     *  pour éviter les collisions avec les orderIndex existants. */
+    fun initSequenceCounter(maxExisting: Int) {
+        nextOrderIndex = maxExisting + 1
+        Log.d(TAG, "SequenceCounter initialisé à $nextOrderIndex (max existant: $maxExisting)")
+    }
+
     private var timeoutFuture: ScheduledFuture<*>? = null
     private var timeoutGroupId: String? = null
 
@@ -136,9 +148,13 @@ class GroupManager(
         val currentActiveId = machine.activeGroupId
         val oldGroup = currentActiveId?.let { groups[it] }
         val newGroup = InkGroup.create()
+        // ═══ Assigner orderIndex à la CRÉATION (pas à la fermeture) ═══
+        // Principe : « La permissivité est le meilleur gage de stabilité. »
+        // Un groupe existe dès sa création avec son numéro d'ordre.
+        newGroup.orderIndex = nextOrderIndex++
         groups[newGroup.id] = newGroup
         machine.makeActive(newGroup.id, oldGroup)
-        Log.i(TAG, "Nouveau LOADED: " + newGroup.id + " | cache=" + groups.size)
+        Log.i(TAG, "Nouveau LOADED: " + newGroup.id + " | seq=${newGroup.orderIndex} | cache=" + groups.size)
         return newGroup
     }
 

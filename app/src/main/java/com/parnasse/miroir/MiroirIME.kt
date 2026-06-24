@@ -92,10 +92,9 @@ class MiroirIME : InputMethodService() {
     private val groupLabels = mutableMapOf<Int, String>()
     private val labelPaint = Paint().apply {
         color = Color.BLACK  // noir pur pour mode DU
-        textSize = 28f
+        textSize = 42f
         isAntiAlias = false  // mode DU : pas de gris
         typeface = Typeface.DEFAULT_BOLD
-        // Pas d'ombre — mode DU ignore le gris/blanc semi-transparent
     }
     // ── Dessin ────────────────────────────────────────────────────────
     private var imeView: CaptureSurfaceView? = null
@@ -134,6 +133,35 @@ class MiroirIME : InputMethodService() {
     private val pagesDir by lazy { java.io.File(cacheDir, "ime-pages").also { it.mkdirs() } }
     private var pageLabel: android.widget.TextView? = null
 
+    // ── Bloc / Session ────────────────────────────────────────────────
+    // Structure : blocks/<appName>_<timestamp>/page_<n>/
+    // Le bloc est créé à l'ouverture de l'IME et fermé au ✕.
+    private var hostAppName: String = "unknown"
+    private var blockTimestamp: Long = 0L
+    private var blockDir: java.io.File? = null  // null = pas de bloc actif
+
+    /** Initialise (ou réutilise) le bloc courant pour l'app hôte. */
+    private fun ensureBlockDir(appName: String, ts: Long): java.io.File {
+        if (blockDir == null || hostAppName != appName) {
+            hostAppName = appName
+            blockTimestamp = ts
+            val safeName = appName.replace(".", "_")
+            blockDir = java.io.File(cacheDir, "blocks/${safeName}_$ts").also { it.mkdirs() }
+            currentPageIndex = 0
+            Log.i(TAG, "Bloc ouvert: ${blockDir!!.name}")
+        }
+        return blockDir!!
+    }
+
+    /** Ferme le bloc courant — sauvegarde la page active et libère. */
+    private fun closeBlock() {
+        savePage()
+        currentPageIndex = 0
+        blockDir = null
+        hostAppName = "unknown"
+        Log.i(TAG, "Bloc fermé — pageIndex remis à 0")
+    }
+
     /** Sauvegarde la page active et en crée une nouvelle. */
     private fun newPage() {
         savePage()
@@ -168,8 +196,17 @@ class MiroirIME : InputMethodService() {
 
     /** Sauvegarde la page active sur disque (bitmap + strokes + labels). */
     private fun savePage() {
+        val bd = blockDir ?: run {
+            Log.w(TAG, "savePage: pas de bloc actif — ignoré")
+            return
+        }
+        // ═══ Ne pas sauvegarder une page vide (protège les pages existantes) ═══
+        if (strokeRegistry.isEmpty()) {
+            Log.d(TAG, "savePage: page $currentPageIndex vide — ignorée")
+            return
+        }
         try {
-            val dir = java.io.File(pagesDir, "page_$currentPageIndex")
+            val dir = java.io.File(bd, "page_$currentPageIndex")
             dir.mkdirs()
             // Bitmap
             bitmap?.let {
@@ -182,9 +219,12 @@ class MiroirIME : InputMethodService() {
             json.put("inkIdCounter", inkStrokeIdCounter)
             // strokeRegistry : liste de [points, timestamps, pressures]
             val strokesArr = org.json.JSONArray()
-            for (sr in strokeRegistry) {
+            for ((index, sr) in strokeRegistry.withIndex()) {
                 val obj = org.json.JSONObject()
                 obj.put("id", sr.id)
+                // Sauvegarder l'inkId pour restaurer inkStrokeIdToRegistryIndex
+                val inkId = inkStrokeIdToRegistryIndex.entries.find { it.value == index }?.key
+                if (inkId != null) obj.put("inkId", inkId)
                 val ptsArr = org.json.JSONArray()
                 for ((x, y) in sr.points) {
                     val pt = org.json.JSONArray(); pt.put(x.toDouble()); pt.put(y.toDouble()); ptsArr.put(pt)
@@ -207,12 +247,12 @@ class MiroirIME : InputMethodService() {
             }
             json.put("anchors", anchorsObj)
             java.io.FileWriter(java.io.File(dir, "state.json")).use { it.write(json.toString()) }
-            // Copier la persistance GroupManager
-            val gmFile = java.io.File(cacheDir, "ime-groups/current.groups")
-            if (gmFile.exists()) {
-                gmFile.copyTo(java.io.File(dir, "groups.json"), overwrite = true)
+            // Persister TOUS les groupes directement (pas de copie de fichier perime)
+            val allGroups = groupManager?.allGroups() ?: emptyList()
+            if (allGroups.isNotEmpty()) {
+                GroupPersistence(java.io.File(dir, "groups.json")).writeAllGroups(allGroups)
             }
-            Log.i(TAG, "Page $currentPageIndex sauvegardée: ${strokeRegistry.size} strokes, ${groupLabels.size} labels")
+            Log.i(TAG, "Page $currentPageIndex sauvegardée: ${strokeRegistry.size} strokes, ${groupLabels.size} labels, ${allGroups.size} groupes")
         } catch (e: Exception) {
             Log.w(TAG, "Erreur sauvegarde page: ${e.message}")
         }
@@ -220,9 +260,13 @@ class MiroirIME : InputMethodService() {
 
     /** Charge une page depuis le disque. */
     private fun loadPage(index: Int): Boolean {
+        val bd = blockDir ?: return false
         try {
-            val dir = java.io.File(pagesDir, "page_$index")
+            val dir = java.io.File(bd, "page_$index")
             if (!dir.exists()) return false
+            // Nettoyer l'etat avant de charger la nouvelle page
+            groupManager?.clearAll()
+            groupBlobs.clear()
             // Bitmap
             val bmpFile = java.io.File(dir, "bitmap.png")
             if (bmpFile.exists()) {
@@ -241,6 +285,7 @@ class MiroirIME : InputMethodService() {
                 // Strokes
                 val strokesArr = json.optJSONArray("strokes")
                 strokeRegistry.clear()
+                inkStrokeIdToRegistryIndex.clear()
                 if (strokesArr != null) {
                     for (i in 0 until strokesArr.length()) {
                         val obj = strokesArr.optJSONObject(i) ?: continue
@@ -252,7 +297,21 @@ class MiroirIME : InputMethodService() {
                                 sr.points.add(Pair(pt.optDouble(0).toFloat(), pt.optDouble(1).toFloat()))
                             }
                         }
-                        if (sr.points.isNotEmpty()) strokeRegistry.add(sr)
+                        if (sr.points.isNotEmpty()) {
+                            strokeRegistry.add(sr)
+                            // Restaurer le mapping inkId -> index (depuis le JSON)
+                            val savedInkId = obj.optLong("inkId", -1)
+                            if (savedInkId >= 0) {
+                                inkStrokeIdToRegistryIndex[savedInkId] = strokeRegistry.size - 1
+                            }
+                        }
+                    }
+                }
+                // Fallback pour les strokes sans inkId (format ancien) : mapping sequentiel
+                for (i in strokeRegistry.indices) {
+                    val inkId = (i + 1).toLong()
+                    if (!inkStrokeIdToRegistryIndex.containsKey(inkId)) {
+                        inkStrokeIdToRegistryIndex[inkId] = i
                     }
                 }
                 // Labels
@@ -278,11 +337,22 @@ class MiroirIME : InputMethodService() {
                     }
                 }
             }
-            // GroupManager: charger depuis persistance spécifique à la page
+            // GroupManager: charger depuis persistance specifique a la page
+            // ⚠️ NE PAS changer groupManager.persistence — le GM doit toujours
+            //    ecrire dans ime-groups/current.groups (fichier canonique).
+            //    On lit les groupes avec une persistence temporaire et on les
+            //    enregistre en memoire via registerLoadedGroup().
             val pageGroupsFile = java.io.File(dir, "groups.json")
             if (pageGroupsFile.exists()) {
-                groupManager?.persistence = GroupPersistence(pageGroupsFile)
+                val tempPersistence = GroupPersistence(pageGroupsFile)
+                val groups = tempPersistence.readAllGroups()
+                for (group in groups) {
+                    groupManager?.registerLoadedGroup(group)
+                }
                 cachedGMCacheSize = -1
+                // Initialiser le compteur de sequence apres chargement
+                val maxSeq = groups.mapNotNull { it.orderIndex }.maxOrNull() ?: -1
+                groupManager?.initSequenceCounter(maxSeq)
             }
             currentPageIndex = index
             rebuildBitmap()
@@ -514,7 +584,9 @@ class MiroirIME : InputMethodService() {
         toolbar.addView(makeButton("▶") {
             savePage()
             currentPageIndex++
-            clearPage()
+            if (!loadPage(currentPageIndex)) {
+                clearPage()  // page inexistante → page vierge
+            }
             refreshAll()
             updatePageIndicator()
         })
@@ -526,13 +598,14 @@ class MiroirIME : InputMethodService() {
         })
 
         toolbar.addView(makeButton("✕") {
-            // Vider le champ texte
+            // ═══ Fermer le bloc (vider le champ + sauvegarder + libérer) ═══
             val ic = currentInputConnection
             if (ic != null) {
                 ic.performContextMenuAction(android.R.id.selectAll)
                 ic.commitText("", 1)
             }
-            clearPage()
+            closeBlock()   // sauvegarde et ferme le bloc
+            clearPage()    // nettoie la RAM
             refreshAll()
             requestHideSelf(0)
         })
@@ -580,7 +653,11 @@ class MiroirIME : InputMethodService() {
 
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        Log.i(TAG, "onStartInputView — app=${info?.packageName ?: "?"} field=${info?.fieldName ?: "?"} inputType=${info?.inputType ?: 0}")
+        val app = info?.packageName ?: "unknown"
+        Log.i(TAG, "onStartInputView — app=$app field=${info?.fieldName ?: "?"} inputType=${info?.inputType ?: 0}")
+        // ═══ Ouvrir un bloc pour cette app ═══
+        ensureBlockDir(app, System.currentTimeMillis())
+        updatePageIndicator()
         // ═══ Forcer la réinitialisation du TouchHelper à chaque ouverture ═══
         touchHelper = null
         isWriteMode = false
@@ -1543,17 +1620,8 @@ class MiroirIME : InputMethodService() {
                     }
                     // ═══ Plus d'injection à l'inférence — le texte est poussé uniquement à la validation (✓) ═══
                     Log.i(TAG, "Texte injecte: " + result)
-                    // ═══ Dessiner le label directement sur le BITMAP (pas seulement dans onDraw) ═══
-                    // La couche stylet (handwritingRepaint) est la seule qui s'affiche en IME.
+                    // ═══ Label dessiné dans drawGroupLabels() — pas de doublon bitmap ═══
                     val anchor = groupAnchor[firstIdx]
-                    if (anchor != null) {
-                        val bc = bitmapCanvas
-                        if (bc != null) {
-                            val labelX = anchor.first - 30f
-                            val labelY = snapToLine(anchor.second) + labelPaint.textSize + 2f
-                            bc.drawText(result, labelX, labelY, labelPaint)
-                        }
-                    }
                     // ═══ Rafraîchir les overlays PUIS revenir en DU ═══
                     displayController?.poserLabelPuisDU(DisplayMode.GU)
                     // ═══ handwritingRepaint ciblé sur la zone du label (pas tout l'écran !) ═══
@@ -1641,14 +1709,14 @@ class MiroirIME : InputMethodService() {
 
     /** Compte le nombre total de pages sauvegardées. */
     private fun countPages(): Int {
-        val dir = pagesDir
+        val dir = blockDir ?: return 0
         if (!dir.exists()) return 0
         return dir.listFiles()?.count { it.isDirectory && it.name.startsWith("page_") } ?: 0
     }
 
     /** Construit le texte de TOUTES les pages dans l'ordre de lecture. */
     private fun buildAllPagesText(): String {
-        val dir = pagesDir
+        val dir = blockDir ?: return buildReadingOrderText()
         if (!dir.exists() || !dir.isDirectory) return buildReadingOrderText()
         val pageDirs = dir.listFiles()
             ?.filter { it.isDirectory && it.name.startsWith("page_") }
@@ -1775,15 +1843,21 @@ class MiroirIME : InputMethodService() {
         refreshAll()
     }
 
-    /** Dessine les labels à leur position d'ancre (premier point du premier stroke). */
+    /** Dessine les labels à la position du groupe. */
     private fun drawGroupLabels(canvas: Canvas) {
         if (groupLabels.isEmpty()) return
         var drawn = 0
         for ((firstIdx, label) in groupLabels) {
             val anchor = groupAnchor[firstIdx]
             if (anchor == null) { Log.d(TAG, "LABEL skip firstIdx=$firstIdx: anchor null"); continue }
-            val x = anchor.first - 30f
-            val y = snapToLine(anchor.second) + labelPaint.textSize + 2f
+            // Trouver le groupe correspondant pour aligner à gauche
+            val leftEdge = groupManager?.allGroups()?.firstOrNull { g ->
+                g.strokeIds.firstOrNull()?.let { sid ->
+                    inkStrokeIdToRegistryIndex[sid] == firstIdx
+                } ?: false
+            }?.bounds?.left ?: anchor.first
+            val x = leftEdge                               // aligné à gauche du groupe
+            val y = snapToLine(anchor.second) + labelPaint.textSize - 4f
             canvas.drawText(label, x, y, labelPaint)
             drawn++
         }

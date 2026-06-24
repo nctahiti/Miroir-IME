@@ -26,7 +26,8 @@ class CalibrationActivity : Activity() {
         const val DEFAULT_SPATIAL_DISTANCE_Y = 70f
         const val DEFAULT_AUTO_INFER_DELAY = 1500L
         const val DEFAULT_LONG_HOVER_DELAY = 1000L
-        const val DEFAULT_LONG_PRESS_DELAY = 500L
+        const val DEFAULT_SELECTION_DELAY = 300L
+        const val DEFAULT_EDIT_DELAY = 800L
         const val DEFAULT_REFRESH_INTERVAL = 16L
         const val DEFAULT_BLOB_RAY_COUNT = 90
         const val DEFAULT_TEMPLATE_SPACING = 120f
@@ -43,8 +44,10 @@ class CalibrationActivity : Activity() {
             prefs(ctx).getLong(KEY_AUTO_INFER_DELAY, DEFAULT_AUTO_INFER_DELAY)
         fun getLongHoverDelay(ctx: Context): Long =
             prefs(ctx).getLong(KEY_LONG_HOVER_DELAY, DEFAULT_LONG_HOVER_DELAY)
-        fun getLongPressDelay(ctx: Context): Long =
-            prefs(ctx).getLong(KEY_LONG_PRESS_DELAY, DEFAULT_LONG_PRESS_DELAY)
+        fun getSelectionDelay(ctx: Context): Long =
+            prefs(ctx).getLong(KEY_SELECTION_DELAY, DEFAULT_SELECTION_DELAY)
+        fun getEditDelay(ctx: Context): Long =
+            prefs(ctx).getLong(KEY_EDIT_DELAY, DEFAULT_EDIT_DELAY)
         fun getRefreshInterval(ctx: Context): Long =
             prefs(ctx).getLong(KEY_REFRESH_INTERVAL, DEFAULT_REFRESH_INTERVAL)
         fun getBlobRayCount(ctx: Context): Int =
@@ -56,7 +59,8 @@ class CalibrationActivity : Activity() {
 
         fun getTemporalDistance(ctx: Context): Long = 800L
         fun getBlobColor(ctx: Context): Int = 0xFFC0C0C0.toInt()
-        const val KEY_LONG_PRESS_DELAY = "long_press_delay"
+        const val KEY_SELECTION_DELAY = "selection_delay"
+        const val KEY_EDIT_DELAY = "edit_delay"
     }
 
     private lateinit var spatialXSeek: SeekBar
@@ -73,7 +77,8 @@ class CalibrationActivity : Activity() {
         val currentY = p.getFloat(KEY_SPATIAL_DISTANCE_Y, DEFAULT_SPATIAL_DISTANCE_Y)
         val currentDelay = p.getLong(KEY_AUTO_INFER_DELAY, DEFAULT_AUTO_INFER_DELAY)
         val currentHover = p.getLong(KEY_LONG_HOVER_DELAY, DEFAULT_LONG_HOVER_DELAY)
-        val currentLongPress = p.getLong(KEY_LONG_PRESS_DELAY, DEFAULT_LONG_PRESS_DELAY)
+        val currentSelection = p.getLong(KEY_SELECTION_DELAY, DEFAULT_SELECTION_DELAY)
+        val currentEdit = p.getLong(KEY_EDIT_DELAY, DEFAULT_EDIT_DELAY)
 
         val scroll = ScrollView(this).apply { setBackgroundColor(Color.WHITE) }
         val root = LinearLayout(this).apply {
@@ -135,12 +140,19 @@ class CalibrationActivity : Activity() {
             prefs(this).edit().putLong(KEY_LONG_HOVER_DELAY, (v + 500).toLong()).apply()
         })
 
-        // ═══ Clic long (édition IME) ═══
-        val pressLabel = addSlider(root, "Clic long (édition)", 300, 2000, currentLongPress.toInt(), "ms")
-        val pressSeek = root.getChildAt(root.childCount - 1) as SeekBar
-        pressSeek.setOnSeekBarChangeListener(simpleListener { v ->
-            pressLabel.text = "Clic long (édition) : ${v + 300} ms"
-            prefs(this).edit().putLong(KEY_LONG_PRESS_DELAY, (v + 300).toLong()).apply()
+        // ═══ Sélection vs Édition (double clic long) ═══
+        val selLabel = addSlider(root, "Sélection (court)", 100, 800, currentSelection.toInt(), "ms")
+        val selSeek = root.getChildAt(root.childCount - 1) as SeekBar
+        selSeek.setOnSeekBarChangeListener(simpleListener { v ->
+            selLabel.text = "Sélection (court) : ${v + 100} ms"
+            prefs(this).edit().putLong(KEY_SELECTION_DELAY, (v + 100).toLong()).apply()
+        })
+
+        val editLabel = addSlider(root, "Édition (long)", 400, 2000, currentEdit.toInt(), "ms")
+        val editSeek = root.getChildAt(root.childCount - 1) as SeekBar
+        editSeek.setOnSeekBarChangeListener(simpleListener { v ->
+            editLabel.text = "Édition (long) : ${v + 400} ms"
+            prefs(this).edit().putLong(KEY_EDIT_DELAY, (v + 400).toLong()).apply()
         })
 
         // ═══ 🖊️ Écriture ═══
