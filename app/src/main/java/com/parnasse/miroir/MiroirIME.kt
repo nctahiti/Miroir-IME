@@ -1510,12 +1510,15 @@ class MiroirIME : InputMethodService() {
             stroke.pressures.add(pressure.coerceIn(0f, 1f))
         }
         // Rafraîchir pendant le glissé (fréquence paramétrable via calibration)
-        val interval = CalibrationActivity.getRefreshInterval(this@MiroirIME)
-        val now = System.currentTimeMillis()
-        if (now - lastPointRefresh >= interval) {
-            lastPointRefresh = now
-            val r = 10
-            refreshRect(x.toInt() - r, y.toInt() - r, x.toInt() + r, y.toInt() + r, isStroke = true)
+        // En mode correction → pas de refreshRect (le cadre tampon gère l'affichage)
+        if (imeView?.isCorrecting() != true) {
+            val interval = CalibrationActivity.getRefreshInterval(this@MiroirIME)
+            val now = System.currentTimeMillis()
+            if (now - lastPointRefresh >= interval) {
+                lastPointRefresh = now
+                val r = 10
+                refreshRect(x.toInt() - r, y.toInt() - r, x.toInt() + r, y.toInt() + r, isStroke = true)
+            }
         }
     }
 
@@ -1557,7 +1560,7 @@ class MiroirIME : InputMethodService() {
         scheduleGroupInference()
 
         // ═══ Rafraîchir uniquement la zone du stroke ═══
-        // En mode correction → pas de refreshRect (le cadre tampon couvre), pas de reasserterDU (on reste en GU)
+        // En mode correction → pas de refreshRect (le cadre tampon gère l'affichage)
         if (imeView?.isCorrecting() != true) {
             if (stroke.points.size >= 2) {
                 var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
@@ -1570,7 +1573,6 @@ class MiroirIME : InputMethodService() {
                     (minX - 10).toInt(), (minY - 10).toInt(),
                     (maxX + 10).toInt(), (maxY + 10).toInt(), isStroke = true)
             }
-            // ═══ Maintenir le DU après le lever du stylet (l'inférence fera le refresh label) ═══
             if (isWriteMode) {
                 displayController?.reasserterDU()
             }
@@ -1800,23 +1802,7 @@ class MiroirIME : InputMethodService() {
                                 groupBlobs.remove(tempGroup.id)
                                 gm.removeGroup(tempGroup.id)
                             }
-                            // Rafraîchir uniquement la zone du caractère corrigé
-                            val anchor = groupAnchor[origFirstIdx]
-                            if (anchor != null) {
-                                val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
-                                val letterW = spacing * 0.7f
-                                val totalW = letterW * origLabel.length
-                                val startX = anchor.first - totalW / 2f
-                                val startY = snapToLine(anchor.second) - spacing * 0.8f
-                                val v = imeView ?: return@post
-                                val l = (startX + letterW * correctLetterIndex).toInt()
-                                val t = startY.toInt()
-                                val r = (startX + letterW * (correctLetterIndex + 1)).toInt()
-                                val b = (startY + letterW).toInt()
-                                try { EpdController.handwritingRepaint(v, l, t, r, b) } catch (_: Exception) {}
-                            } else {
-                                imeView?.postInvalidate()
-                            }
+                            imeView?.postInvalidate()
                         }
                         return@post
                     }
