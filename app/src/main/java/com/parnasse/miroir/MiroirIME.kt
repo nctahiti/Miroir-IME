@@ -1806,12 +1806,19 @@ class MiroirIME : InputMethodService() {
                     if (words.isEmpty()) continue
                     // Trier par ligne puis X
                     words.sortWith(compareBy<Word> { it.line }.thenBy { it.x })
-                    // Reconstruire avec sauts de ligne
+                    // Reconstruire avec la grammaire des interlignes
+                    // 1 interligne sauté → \n, 2+ interlignes sautés → \n\n (paragraphe)
+                    val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
                     val pageSb = StringBuilder()
                     var prevLine = words.first().line
                     for (w in words) {
                         if (w.line != prevLine) {
-                            pageSb.append("\n")
+                            val gap = w.line - prevLine
+                            if (gap > spacing * 1.5f) {
+                                pageSb.append("\n\n")  // saut de paragraphe
+                            } else {
+                                pageSb.append("\n")     // retour à la ligne
+                            }
                             prevLine = w.line
                         } else if (pageSb.isNotEmpty()) {
                             pageSb.append(" ")
