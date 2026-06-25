@@ -1776,7 +1776,7 @@ class MiroirIME : InputMethodService() {
                 val pageText = buildReadingOrderText()
                 Log.i(TAG, "buildAllPages: page $pi (courante) = ${groupLabels.size} labels -> \"${pageText.take(60)}\"")
                 if (pageText.isNotBlank()) {
-                    if (sb.isNotEmpty()) sb.append("\n")
+                    if (sb.isNotEmpty()) sb.append("\n\n")  // ligne vide entre deux pages
                     sb.append(pageText)
                 }
             } else {
@@ -1787,7 +1787,7 @@ class MiroirIME : InputMethodService() {
                     val json = org.json.JSONObject(stateFile.readText())
                     val labelsObj = json.optJSONObject("labels") ?: continue
                     val anchorsObj = json.optJSONObject("anchors")
-                    data class Word(val line: Float, val x: Float, val text: String)
+                    data class Word(val y: Float, val x: Float, val text: String)
                     val words = mutableListOf<Word>()
                     for (key in labelsObj.keys()) {
                         val text = labelsObj.optString(key, "")
@@ -1801,34 +1801,45 @@ class MiroirIME : InputMethodService() {
                                 y = arr.optDouble(1).toFloat()
                             }
                         }
-                        words.add(Word(snapToLine(y), x, text))
+                        words.add(Word(y, x, text))
                     }
                     if (words.isEmpty()) continue
-                    // Trier par ligne puis X
-                    words.sortWith(compareBy<Word> { it.line }.thenBy { it.x })
-                    // Reconstruire avec la grammaire des interlignes
-                    // 1 interligne sauté → \n, 2+ interlignes sautés → \n\n (paragraphe)
+                    // ═══ Reconstruire avec la grammaire des interlignes ═══
+                    // Basé sur les Y bruts (pas snapToLine) pour détecter les interlignes vides.
+                    // Regrouper en lignes (mots dont |Δy| < spacing*0.5), puis :
+                    //   1 interligne vide → \n, 2+ interlignes vides → \n\n
+                    words.sortWith(compareBy<Word> { it.y }.thenBy { it.x })
                     val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
                     val pageSb = StringBuilder()
-                    var prevLine = words.first().line
-                    for (w in words) {
-                        if (w.line != prevLine) {
-                            val gap = w.line - prevLine
-                            if (gap > spacing * 1.5f) {
-                                pageSb.append("\n\n")  // saut de paragraphe
-                            } else {
-                                pageSb.append("\n")     // retour à la ligne
-                            }
-                            prevLine = w.line
-                        } else if (pageSb.isNotEmpty()) {
-                            pageSb.append(" ")
+                    var lineIdx = 0
+                    var prevLineY = words.first().y
+                    while (lineIdx < words.size) {
+                        // Grouper tous les mots sur cette ligne (Y proche)
+                        val lineY = words[lineIdx].y
+                        val lineWords = mutableListOf<Word>()
+                        while (lineIdx < words.size && Math.abs(words[lineIdx].y - lineY) < spacing * 0.5f) {
+                            lineWords.add(words[lineIdx])
+                            lineIdx++
                         }
-                        pageSb.append(w.text)
+                        // Trier les mots de cette ligne par X
+                        lineWords.sortBy { it.x }
+                        // Ajouter un saut de ligne si ce n'est pas la première ligne
+                        if (pageSb.isNotEmpty()) {
+                            val gapRatio = (lineY - prevLineY) / spacing
+                            if (gapRatio > 1.5f) {
+                                pageSb.append("\n\n")  // 2+ interlignes → paragraphe
+                            } else {
+                                pageSb.append("\n")     // 1 interligne → retour ligne
+                            }
+                        }
+                        prevLineY = lineY
+                        // Joindre les mots de cette ligne
+                        pageSb.append(lineWords.joinToString(" ") { it.text })
                     }
                     val pageText = pageSb.toString()
                     Log.i(TAG, "buildAllPages: page $pi (sauvegardée) = ${words.size} labels -> \"${pageText.take(60)}\"")
                     if (pageText.isNotBlank()) {
-                        if (sb.isNotEmpty()) sb.append("\n")
+                        if (sb.isNotEmpty()) sb.append("\n\n")  // ligne vide entre deux pages
                         sb.append(pageText)
                     }
                 } catch (_: Exception) {}
