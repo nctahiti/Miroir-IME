@@ -805,6 +805,9 @@ class MiroirIME : InputMethodService() {
                     val startY = snapToLine(anchor.second) - spacing * 0.8f
                     val bgPaint = android.graphics.Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
                     canvas.drawRect(startX - 20f, startY - 10f, startX + totalW + 20f, startY + letterW + 10f, bgPaint)
+                    // Bordure fine autour de l'overlay
+                    val borderPaint = android.graphics.Paint().apply { color = Color.DKGRAY; style = Paint.Style.STROKE; strokeWidth = 2f }
+                    canvas.drawRect(startX - 20f, startY - 10f, startX + totalW + 20f, startY + letterW + 10f, borderPaint)
                     val letterPaint = android.graphics.Paint().apply { color = Color.DKGRAY; textSize = letterW * 0.8f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
                     val activePaint = android.graphics.Paint().apply { color = Color.BLUE; textSize = letterW * 0.8f; isAntiAlias = true; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
                     for (i in label.indices) {
@@ -1784,6 +1787,7 @@ class MiroirIME : InputMethodService() {
                                     if (shift > 0) entry.setValue(entry.value - shift)
                                 }
                                 groupBlobs.remove(tempGroup.id)
+                                gm.removeGroup(tempGroup.id)
                             }
                             imeView?.postInvalidate()
                         }

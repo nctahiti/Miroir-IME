@@ -329,6 +329,11 @@ class GroupManager(
         Log.d(TAG, "Evince: " + groupId + " -> .groups | cache=" + groups.size)
     }
 
+    /** Supprime definitivement un groupe (quel que soit son etat). */
+    fun removeGroup(groupId: String) {
+        groups.remove(groupId)
+    }
+
     private fun evictAllStored() {
         val storedIds = groups.filter { it.value.state == GroupState.STORED }.keys.toList()
         for (id in storedIds) { evictGroup(id) }
