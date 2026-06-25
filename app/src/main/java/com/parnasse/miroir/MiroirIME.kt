@@ -893,6 +893,11 @@ class MiroirIME : InputMethodService() {
                                 editMode = EditMode.MOVE
                                 updateModeIndicator()
                                 Log.i(TAG, "→ Mode DÉPLACEMENT (↓)")
+                            } else if (dy < -SWIPE_THRESHOLD) {
+                                editMode = EditMode.CORRECT_TRANSCRIPTION
+                                correctLetterIndex = -1  // pas encore de lettre ciblée
+                                updateModeIndicator()
+                                Log.i(TAG, "→ Mode CORRECTION TRANSCRIPTION (↑)")
                             }
                         } else if (editMode == EditMode.ERASE && dx < 0f) {
                             // ═══ Effacement proportionnel (scrub) — comme remonter l'aiguille ═══
@@ -937,6 +942,13 @@ class MiroirIME : InputMethodService() {
                                 redrawBitmapOnly()
                                 imeView?.postInvalidate()
                             }
+                            EditMode.CORRECT_TRANSCRIPTION -> {
+                                // Mode correction : attend un clic sur une lettre
+                                gestureStartX = event.x; gestureStartY = event.y
+                                currentPath.reset()
+                                redrawBitmapOnly()
+                                imeView?.postInvalidate()
+                            }
                             EditMode.NONE -> {
                                 // Tap sans mouvement → désactiver
                                 exitEditMode()
@@ -976,6 +988,7 @@ class MiroirIME : InputMethodService() {
 
         // ═══ États B/C — édition par gestes ═══
         private var editMode = EditMode.NONE
+        private var correctLetterIndex = -1  // index de la lettre ciblée en mode CORRECT_TRANSCRIPTION
         private var gestureStartX = 0f
         private var gestureStartY = 0f
         private val SWIPE_THRESHOLD = 30f  // px minimum pour détecter un glissement
@@ -1216,6 +1229,7 @@ class MiroirIME : InputMethodService() {
             val symbol = when {
                 editMode == EditMode.ERASE -> "⌛"
                 editMode == EditMode.MOVE -> "↕"
+                editMode == EditMode.CORRECT_TRANSCRIPTION -> "🔤"
                 else -> "✍"
             }
             modeIndicator?.text = symbol
@@ -1487,7 +1501,7 @@ class MiroirIME : InputMethodService() {
     private var isInferring = false
 
     // ═══ États d'édition B/C ═══
-    private enum class EditMode { NONE, ERASE, MOVE }
+    private enum class EditMode { NONE, ERASE, MOVE, CORRECT_TRANSCRIPTION }
 
     // ═══ Timers par groupe (comme CaptureView) ═══
     private val groupTimers = mutableMapOf<Int, java.util.concurrent.ScheduledFuture<*>>()
