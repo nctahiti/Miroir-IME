@@ -874,12 +874,14 @@ class MiroirIME : InputMethodService() {
                             }
                             // Clic hors des lettres → sortir du mode
                             exitEditMode()
-                            currentPath.reset()  // ═══ pas de trait parasite ═══
+                            currentPath.reset()  // ═══ pas de trait fantôme ═══
+                            tapStrokeStarted = true  // ═══ pas de groupe parasite au prochain MOVE ═══
                             return true
                         }
                         if (!isInBlob(event.x, event.y)) {
                             exitEditMode()  // tap dans le vide → pose la montre, reprend la plume
-                            currentPath.reset()  // ═══ pas de trait parasite ═══
+                            currentPath.reset()  // ═══ pas de trait fantôme ═══
+                            tapStrokeStarted = true  // ═══ pas de groupe parasite au prochain MOVE ═══
                             return true
                         }
                         // On reste dans le blob → mode édition immédiat, pas de new long-press
@@ -1007,6 +1009,7 @@ class MiroirIME : InputMethodService() {
                                     // ═══ Tap dans le vide (pas de geste) → sortie du mode ═══
                                     exitEditMode()
                                     currentPath.reset()
+                                    tapStrokeStarted = true
                                 } else {
                                     // Mettre à jour la position de départ pour le prochain geste
                                     gestureStartX = event.x
