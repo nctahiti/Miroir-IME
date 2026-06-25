@@ -792,6 +792,7 @@ class MiroirIME : InputMethodService() {
                     }
                 }
             }
+            bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             // ═══ Mode correction : cadre-tampon + filtre ═══
             if (isCorrecting()) {
                 val firstIdx = this@MiroirIME.correctionGroupFirstIdx
@@ -823,29 +824,6 @@ class MiroirIME : InputMethodService() {
                         canvas.drawText(label[i].toString(), cx, cy, p)
                     }
                 }
-                // Strokes de correction (tous les strokes récents → au-dessus du cadre)
-                val gm = this@MiroirIME.groupManager
-                val origStrokeIds = if (gm != null) {
-                    val origGroup = gm.allGroups().find { g ->
-                        g.strokeIds.firstOrNull()?.let { sid ->
-                            this@MiroirIME.inkStrokeIdToRegistryIndex[sid]
-                        } == firstIdx
-                    }
-                    origGroup?.strokeIds?.toSet() ?: emptySet()
-                } else emptySet()
-                for ((idx, sr) in strokeRegistry.withIndex()) {
-                    val inkId = this@MiroirIME.inkStrokeIdToRegistryIndex.entries
-                        .find { it.value == idx }?.key ?: continue
-                    if (inkId in origStrokeIds) continue  // skip groupe original
-                    if (sr.points.size >= 2) {
-                        val path = android.graphics.Path()
-                        path.moveTo(sr.points[0].first, sr.points[0].second)
-                        for (j in 1 until sr.points.size) {
-                            path.lineTo(sr.points[j].first, sr.points[j].second)
-                        }
-                        canvas.drawPath(path, strokePaint)
-                    }
-                }
                 // Filtre : pas de labels normaux en mode correction, mais le template oui
                 // Lignes de template (au-dessus du cadre, pour rester visibles)
                 for (y in cachedTemplateLines) {
@@ -854,7 +832,6 @@ class MiroirIME : InputMethodService() {
                 canvas.drawPath(currentPath, strokePaint)
                 return  // ← filtre : on ne continue PAS le dessin normal
             }
-            bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             if (showOverlays) {
                 // Lignes de partition depuis le cache
                 for (y in cachedTemplateLines) {
@@ -1820,20 +1797,7 @@ class MiroirIME : InputMethodService() {
                                 groupBlobs.remove(tempGroup.id)
                                 gm.removeGroup(tempGroup.id)
                             }
-                            // Rafraîchir uniquement la zone du cadre (pas tout l'écran)
-                            val anchor = groupAnchor[origFirstIdx]
-                            if (anchor != null) {
-                                val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
-                                val labelW = spacing * 0.7f * origLabel.length
-                                val v = imeView ?: return@post
-                                val l = (anchor.first - labelW / 2f - 20f).toInt()
-                                val t = (snapToLine(anchor.second) - spacing * 0.8f - 10f).toInt()
-                                val r = (anchor.first + labelW / 2f + 20f).toInt()
-                                val b = (snapToLine(anchor.second) + spacing * 0.7f + 10f).toInt()
-                                try { EpdController.handwritingRepaint(v, l, t, r, b) } catch (_: Exception) {}
-                            } else {
-                                imeView?.postInvalidate()
-                            }
+                            imeView?.postInvalidate()
                         }
                         return@post
                     }
