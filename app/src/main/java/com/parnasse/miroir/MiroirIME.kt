@@ -414,7 +414,7 @@ class MiroirIME : InputMethodService() {
     private fun refreshRect(left: Int, top: Int, right: Int, bottom: Int, isStroke: Boolean = false) {
         val v = imeView
         if (v == null) { Log.w(TAG, "refreshRect: imeView null"); return }
-        Log.d(TAG, "refreshRect: ($left,$top)-($right,$bottom) view=${v.width}x${v.height} stroke=$isStroke")
+        Log.v(TAG, "refreshRect: ($left,$top)-($right,$bottom) view=${v.width}x${v.height} stroke=$isStroke")
         v.postInvalidate(left, top, right, bottom)
         try {
             if (isStroke) {
@@ -785,7 +785,7 @@ class MiroirIME : InputMethodService() {
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             drawCount++
-            if (drawCount % 30 == 1) Log.d(TAG, "onDraw #$drawCount showOverlays=$showOverlays labels=${groupLabels.size} template=${cachedTemplateLines.size}")
+            if (drawCount % 30 == 1) Log.v(TAG, "onDraw #$drawCount showOverlays=$showOverlays labels=${groupLabels.size} template=${cachedTemplateLines.size}")
             if (showOverlays) {
                 // Blob du groupe actif (sélection visuelle, pas transition GM)
                 if (showOverlays) {
@@ -1116,7 +1116,7 @@ class MiroirIME : InputMethodService() {
                     remaining = 0.0
                 }
             }
-            Log.i(TAG, "⏳ ${"%.0f".format(dx - remaining)}px effacés (delta=dx)")
+            Log.v(TAG, "⏳ ${"%.0f".format(dx - remaining)}px effacés (delta=dx)")
             if (scrubbedGroupFirstIdx == null) {
                 scrubbedGroupFirstIdx = gid.let { groupId ->
                     val g = groupManager?.allGroups()?.find { it.id == groupId }
@@ -1174,7 +1174,7 @@ class MiroirIME : InputMethodService() {
             val gid = activeBlobGroupId ?: run { Log.w(TAG, "move: pas de groupe actif"); return }
             val dx = endX - gestureStartX; val dy = endY - gestureStartY
             gestureStartX = endX; gestureStartY = endY  // continuer le mouvement
-            Log.i(TAG, "↕ Déplacement groupe ${gid.take(8)} dx=$dx dy=$dy")
+            Log.v(TAG, "↕ Déplacement groupe ${gid.take(8)} dx=$dx dy=$dy")
             val gm = groupManager
             val group = gm?.allGroups()?.find { it.id == gid } ?: return
             for (sid in group.strokeIds) {
@@ -1645,8 +1645,11 @@ class MiroirIME : InputMethodService() {
 
         val loadedGroups = gm.groupsInState(GroupState.LOADED) + gm.groupsInState(GroupState.SELECTED)
         var armed = 0; var skipped = 0
-        val allStates = gm.allGroups().joinToString { "${it.id.take(8)}:${it.state}" }
-        Log.d(TAG, "SCHEDULE: ${loadedGroups.size} groupes LOADED/SELECTED (total=${gm.allGroups().size}: $allStates)")
+        Log.d(TAG, "SCHEDULE: ${loadedGroups.size} groupes LOADED/SELECTED (total=${gm.allGroups().size})")
+        if (Log.isLoggable(TAG, Log.VERBOSE)) {
+            val allStates = gm.allGroups().joinToString { "${it.id.take(8)}:${it.state}" }
+            Log.v(TAG, "SCHEDULE states: $allStates")
+        }
         for (group in loadedGroups) {
             if (group.strokeIds.isEmpty()) continue
             val firstIdx = inkStrokeIdToRegistryIndex[group.strokeIds.first()] ?: continue
