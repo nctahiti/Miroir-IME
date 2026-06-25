@@ -83,6 +83,7 @@ class MiroirIME : InputMethodService() {
     private var correctionGroupFirstIdx: Int = -1  // firstIdx du groupe en cours de correction
     private var correctionOriginalLabel: String = ""  // label avant correction (pour la paire)
     private var correctLetterIndex: Int = -1  // index de la lettre ciblée
+    private val correctionPaths = mutableListOf<android.graphics.Path>()  // paths des strokes de correction (dessin uniquement)
     private val uiHandler = Handler(Looper.getMainLooper())
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "miroir-ime-infer").apply {
@@ -829,6 +830,10 @@ class MiroirIME : InputMethodService() {
                 for (y in cachedTemplateLines) {
                     canvas.drawLine(0f, y, width.toFloat(), y, Template.GUIDE_PAINT)
                 }
+                // Strokes de correction accumulés (au-dessus du cadre)
+                for (p in correctionPaths) {
+                    canvas.drawPath(p, strokePaint)
+                }
                 canvas.drawPath(currentPath, strokePaint)
                 return  // ← filtre : on ne continue PAS le dessin normal
             }
@@ -861,6 +866,7 @@ class MiroirIME : InputMethodService() {
                             val idx = hitTestLetter(event.x, event.y)
                             if (idx >= 0) {
                                 correctLetterIndex = idx
+                                correctionPaths.clear()  // nouveau caractère → vider les anciens strokes
                                 Log.i(TAG, "Correction: lettre #$idx ciblée")
                                 imeView?.postInvalidate()
                                 return true
@@ -1542,15 +1548,21 @@ class MiroirIME : InputMethodService() {
         // ═══ Mode correction → chemin normal (strokeRegistry + GroupManager + inférence standard) ═══
         val isCorrection = imeView?.isCorrecting() == true && correctLetterIndex >= 0
 
-        // Rastériser le stroke dans le bitmap
-        val canvas = bitmapCanvas ?: return
-        if (stroke.points.size < 2) {
-            val p = stroke.points.first()
-            canvas.drawCircle(p.first, p.second, 1.5f, strokePaint.apply { style = Paint.Style.FILL })
+        if (isCorrection) {
+            // Sauvegarder le path pour dessin au-dessus du cadre (pas dans le bitmap principal)
+            correctionPaths.add(android.graphics.Path(currentPath))
+            currentPath.reset()
         } else {
-            canvas.drawPath(currentPath, strokePaint.apply { style = Paint.Style.STROKE })
+            // Rastériser le stroke dans le bitmap
+            val canvas = bitmapCanvas ?: return
+            if (stroke.points.size < 2) {
+                val p = stroke.points.first()
+                canvas.drawCircle(p.first, p.second, 1.5f, strokePaint.apply { style = Paint.Style.FILL })
+            } else {
+                canvas.drawPath(currentPath, strokePaint.apply { style = Paint.Style.STROKE })
+            }
+            currentPath.reset()
         }
-        currentPath.reset()
 
         // Ajouter au registre
         strokeRegistry.add(stroke)
@@ -1808,6 +1820,7 @@ class MiroirIME : InputMethodService() {
                                 groupBlobs.remove(tempGroup.id)
                                 gm.removeGroup(tempGroup.id)
                             }
+                            correctionPaths.clear()  // vider les strokes de correction après remplacement
                             imeView?.postInvalidate()
                         }
                         return@post
