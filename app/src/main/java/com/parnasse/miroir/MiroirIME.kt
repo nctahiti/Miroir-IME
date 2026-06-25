@@ -195,6 +195,13 @@ class MiroirIME : InputMethodService() {
         activeBlobGroupId = null
         cachedSpatialBounds = null
         resetSyncedNote()
+        // Supprimer le dossier de page fantôme s'il existe
+        val bd = blockDir ?: return
+        val dir = java.io.File(bd, "page_$currentPageIndex")
+        if (dir.exists()) {
+            dir.deleteRecursively()
+            Log.i(TAG, "clearPage: dossier page $currentPageIndex supprimé")
+        }
     }
 
     /** Sauvegarde la page active sur disque (bitmap + strokes + labels). */
@@ -205,7 +212,12 @@ class MiroirIME : InputMethodService() {
         }
         // ═══ Ne pas sauvegarder une page vide (protège les pages existantes) ═══
         if (strokeRegistry.isEmpty()) {
-            Log.d(TAG, "savePage: page $currentPageIndex vide — ignorée")
+            // Supprimer le dossier s'il existe (page fantôme)
+            val dir = java.io.File(bd, "page_$currentPageIndex")
+            if (dir.exists()) {
+                dir.deleteRecursively()
+                Log.i(TAG, "savePage: page $currentPageIndex vide — dossier supprimé")
+            }
             return
         }
         try {
@@ -1765,19 +1777,45 @@ class MiroirIME : InputMethodService() {
                     sb.append(pageText)
                 }
             } else {
-                // Autre page → lire les labels depuis le JSON
+                // Autre page → reconstruire l'ordre de lecture depuis les ancres
                 val stateFile = java.io.File(pd, "state.json")
                 if (!stateFile.exists()) continue
                 try {
                     val json = org.json.JSONObject(stateFile.readText())
                     val labelsObj = json.optJSONObject("labels") ?: continue
-                    val words = mutableListOf<String>()
+                    val anchorsObj = json.optJSONObject("anchors")
+                    data class Word(val line: Float, val x: Float, val text: String)
+                    val words = mutableListOf<Word>()
                     for (key in labelsObj.keys()) {
                         val text = labelsObj.optString(key, "")
                         if (text.isBlank()) continue
-                        words.add(text)
+                        val firstIdx = key.toIntOrNull() ?: continue
+                        var x = 0f; var y = 0f
+                        if (anchorsObj != null) {
+                            val arr = anchorsObj.optJSONArray(key)
+                            if (arr != null && arr.length() >= 2) {
+                                x = arr.optDouble(0).toFloat()
+                                y = arr.optDouble(1).toFloat()
+                            }
+                        }
+                        words.add(Word(snapToLine(y), x, text))
                     }
-                    val pageText = words.joinToString(" ")
+                    if (words.isEmpty()) continue
+                    // Trier par ligne puis X
+                    words.sortWith(compareBy<Word> { it.line }.thenBy { it.x })
+                    // Reconstruire avec sauts de ligne
+                    val pageSb = StringBuilder()
+                    var prevLine = words.first().line
+                    for (w in words) {
+                        if (w.line != prevLine) {
+                            pageSb.append("\n")
+                            prevLine = w.line
+                        } else if (pageSb.isNotEmpty()) {
+                            pageSb.append(" ")
+                        }
+                        pageSb.append(w.text)
+                    }
+                    val pageText = pageSb.toString()
                     Log.i(TAG, "buildAllPages: page $pi (sauvegardée) = ${words.size} labels -> \"${pageText.take(60)}\"")
                     if (pageText.isNotBlank()) {
                         if (sb.isNotEmpty()) sb.append("\n")
