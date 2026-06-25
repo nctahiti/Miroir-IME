@@ -890,23 +890,11 @@ class MiroirIME : InputMethodService() {
 
                     // ═══ Sélection visuelle (sans transition GroupManager) ═══
                     activeBlobGroupId = null
-                    val toRemove = mutableListOf<String>()
                     for ((gid, data) in groupBlobs) {
                         if (data.bounds.contains(event.x, event.y)) {
-                            // Vérifier que le groupe existe encore dans GroupManager
-                            // (un groupe auto-désélectionné → STORED → évincé → blob orphelin)
-                            val group = groupManager?.getGroup(gid)
-                            if (group == null) {
-                                toRemove.add(gid)
-                                continue
-                            }
                             activeBlobGroupId = gid
                             break
                         }
-                    }
-                    for (gid in toRemove) {
-                        groupBlobs.remove(gid)
-                        Log.d(TAG, "Blob orphelin nettoyé: ${gid.take(8)}")
                     }
                     // ═══ Armer le long-press (500ms) pour sélection + absorption ═══
                     // Si le stylet reste immobile sur un blob → selectGroup()
@@ -1822,12 +1810,9 @@ class MiroirIME : InputMethodService() {
                                 groupBlobs.remove(tempGroup.id)
                                 gm.removeGroup(tempGroup.id)
                             }
-                            // Ré-animer le groupe original (évincé après désélection)
+                            // Ré-animer le blob du groupe original (le groupe peut être évincé)
                             val savedGroup = correctionSavedGroup
-                            if (savedGroup != null && gm != null) {
-                                if (gm.getGroup(savedGroup.id) == null) {
-                                    gm.registerLoadedGroup(savedGroup)
-                                }
+                            if (savedGroup != null) {
                                 computeBlobPath(savedGroup)?.let { blob ->
                                     groupBlobs[savedGroup.id] = blob
                                 }
