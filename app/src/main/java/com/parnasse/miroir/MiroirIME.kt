@@ -1621,7 +1621,11 @@ class MiroirIME : InputMethodService() {
     /** Appelé après chaque stroke pour armer le timer du groupe modifié. */
     private fun scheduleGroupInference() {
         val gm = groupManager ?: return
-        val inferDelay = CalibrationActivity.getAutoInferDelay(this)
+        // Mode correction → délai plus court (une lettre = 1-3 traits, pas un mot)
+        val inferDelay = if (imeView?.isCorrecting() == true)
+            (CalibrationActivity.getAutoInferDelay(this) * 0.3f).toLong().coerceAtLeast(250L)
+        else
+            CalibrationActivity.getAutoInferDelay(this)
         val now = System.currentTimeMillis()
 
         val loadedGroups = gm.groupsInState(GroupState.LOADED) + gm.groupsInState(GroupState.SELECTED)
