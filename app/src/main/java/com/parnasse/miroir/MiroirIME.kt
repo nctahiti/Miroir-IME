@@ -847,8 +847,11 @@ class MiroirIME : InputMethodService() {
                         }
                     }
                 }
-                // Filtre : pas d'overlays (lignes, labels) en mode correction
-                // Seul currentPath est dessiné après
+                // Filtre : pas de labels normaux en mode correction, mais le template oui
+                // Lignes de template (au-dessus du cadre, pour rester visibles)
+                for (y in cachedTemplateLines) {
+                    canvas.drawLine(0f, y, width.toFloat(), y, Template.GUIDE_PAINT)
+                }
                 canvas.drawPath(currentPath, strokePaint)
                 return  // ← filtre : on ne continue PAS le dessin normal
             }
