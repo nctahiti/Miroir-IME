@@ -1800,7 +1800,7 @@ class MiroirIME : InputMethodService() {
 
         val dirs = blocks.toTypedArray()
 
-        android.app.AlertDialog.Builder(this@MiroirIME, android.R.style.Theme_DeviceDefault_Dialog)
+        val dialog = android.app.AlertDialog.Builder(this@MiroirIME)
             .setTitle("Blocs (${blocks.size})")
             .setItems(items) { _, which ->
                 val selected = dirs[which]
@@ -1821,7 +1821,9 @@ class MiroirIME : InputMethodService() {
                 Log.i(TAG, "Bloc chargé via menu: ${selected.name}")
             }
             .setNegativeButton("Annuler", null)
-            .show()
+            .create()
+        dialog.window?.setType(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL)
+        dialog.show()
     }
 
     /** Clic long ▶ — Toutes les transcriptions formatées (tel qu'injecté à la validation). */
@@ -1844,11 +1846,13 @@ class MiroirIME : InputMethodService() {
         }
         scrollView.addView(textView)
 
-        android.app.AlertDialog.Builder(this@MiroirIME, android.R.style.Theme_DeviceDefault_Dialog)
+        val dialog = android.app.AlertDialog.Builder(this@MiroirIME)
             .setTitle("Transcriptions (${groupLabels.size} labels)")
             .setView(scrollView)
             .setPositiveButton("Fermer", null)
-            .show()
+            .create()
+        dialog.window?.setType(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL)
+        dialog.show()
     }
 
     /** Ancienne injection continue — remplacée par buildReadingOrderText() à la validation. */
