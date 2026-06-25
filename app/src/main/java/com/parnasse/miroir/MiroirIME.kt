@@ -1749,11 +1749,14 @@ class MiroirIME : InputMethodService() {
         pageLabel?.text = "${currentPageIndex + 1}/$total"
     }
 
-    /** Compte le nombre total de pages sauvegardées. */
+    /** Compte le nombre total de pages sauvegardées (avec contenu). */
     private fun countPages(): Int {
         val dir = blockDir ?: return 0
         if (!dir.exists()) return 0
-        return dir.listFiles()?.count { it.isDirectory && it.name.startsWith("page_") } ?: 0
+        return dir.listFiles()?.count { f ->
+            f.isDirectory && f.name.startsWith("page_") &&
+            java.io.File(f, "state.json").exists()
+        } ?: 0
     }
 
     /** Construit le texte de TOUTES les pages dans l'ordre de lecture. */
@@ -1761,7 +1764,7 @@ class MiroirIME : InputMethodService() {
         val dir = blockDir ?: return buildReadingOrderText()
         if (!dir.exists() || !dir.isDirectory) return buildReadingOrderText()
         val pageDirs = dir.listFiles()
-            ?.filter { it.isDirectory && it.name.startsWith("page_") }
+            ?.filter { it.isDirectory && it.name.startsWith("page_") && java.io.File(it, "state.json").exists() }
             ?.sortedBy { it.name.removePrefix("page_").toIntOrNull() ?: -1 }
             ?: emptyList()
         val sb = StringBuilder()
