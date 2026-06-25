@@ -79,6 +79,12 @@ class MiroirIME : InputMethodService() {
     private val strokeRegistry = mutableListOf<StrokeRecord>()
     private val inkStrokeIdToRegistryIndex = mutableMapOf<Long, Int>()
     private var inkStrokeIdCounter = 0L
+
+    // ═══ Buffer de correction (isolé, vidé après validation) ═══
+    private val correctionStrokes = mutableListOf<StrokeRecord>()  // strokes de la lettre corrigée
+    private var correctionGroupFirstIdx: Int = -1  // firstIdx du groupe en cours de correction
+    private var correctionOriginalLabel: String = ""  // label avant correction (pour la paire)
+    private var correctLetterIndex: Int = -1  // index de la lettre ciblée
     private val uiHandler = Handler(Looper.getMainLooper())
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "miroir-ime-infer").apply {
@@ -813,6 +819,10 @@ class MiroirIME : InputMethodService() {
 
                     // ═══ Si on était en mode édition, vérifier si on reste dans le blob ═══
                     if (editMode != EditMode.NONE) {
+                        if (editMode == EditMode.CORRECT_TRANSCRIPTION) {
+                            // Le clic sur lettre est géré par l'overlay — ici on ignore le tap
+                            return true
+                        }
                         if (!isInBlob(event.x, event.y)) {
                             exitEditMode()  // tap dans le vide → pose la montre, reprend la plume
                             tapStrokeStarted = true  // ═══ évite un stroke parasite au prochain MOVE ═══
@@ -895,7 +905,23 @@ class MiroirIME : InputMethodService() {
                                 Log.i(TAG, "→ Mode DÉPLACEMENT (↓)")
                             } else if (dy < -SWIPE_THRESHOLD) {
                                 editMode = EditMode.CORRECT_TRANSCRIPTION
-                                correctLetterIndex = -1  // pas encore de lettre ciblée
+                                correctLetterIndex = -1
+                                // Initialiser le groupe à corriger (groupe sélectionné par le clic long)
+                                val gid = activeBlobGroupId
+                                if (gid != null) {
+                                    val gm = this@MiroirIME.groupManager
+                                    val group = gm?.allGroups()?.find { it.id == gid }
+                                    val firstIdx = group?.strokeIds?.firstOrNull()
+                                        ?.let { sid -> this@MiroirIME.inkStrokeIdToRegistryIndex[sid] }
+                                    if (firstIdx != null) {
+                                        correctionGroupFirstIdx = firstIdx
+                                        correctionOriginalLabel = groupLabels[firstIdx] ?: ""
+                                        val label = groupLabels[firstIdx] ?: ""
+                                        if (label.isNotEmpty()) {
+                                            showCorrectionOverlay(label)
+                                        }
+                                    }
+                                }
                                 updateModeIndicator()
                                 Log.i(TAG, "→ Mode CORRECTION TRANSCRIPTION (↑)")
                             }
@@ -988,7 +1014,6 @@ class MiroirIME : InputMethodService() {
 
         // ═══ États B/C — édition par gestes ═══
         private var editMode = EditMode.NONE
-        private var correctLetterIndex = -1  // index de la lettre ciblée en mode CORRECT_TRANSCRIPTION
         private var gestureStartX = 0f
         private var gestureStartY = 0f
         private val SWIPE_THRESHOLD = 30f  // px minimum pour détecter un glissement
@@ -1064,6 +1089,22 @@ class MiroirIME : InputMethodService() {
 
         /** Vrai si un geste d'édition est actif. */
         fun isEditing(): Boolean = editMode != EditMode.NONE
+        fun isCorrecting(): Boolean = editMode == EditMode.CORRECT_TRANSCRIPTION
+
+        /** Retourne l'index de la lettre touchée, ou -1. */
+        private fun hitTestLetter(x: Float, y: Float): Int {
+            val firstIdx = this@MiroirIME.correctionGroupFirstIdx
+            val label = groupLabels[firstIdx] ?: return -1
+            val anchor = groupAnchor[firstIdx] ?: return -1
+            if (label.isEmpty()) return -1
+            val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+            val letterW = spacing * 0.7f
+            val totalW = letterW * label.length
+            val startX = anchor.first - totalW / 2f
+            val startY = snapToLine(anchor.second) - spacing * 0.8f
+            if (x < startX || x > startX + totalW || y < startY || y > startY + letterW) return -1
+            return ((x - startX) / letterW).toInt().coerceIn(0, label.length - 1)
+        }
 
         /** Redessine tous les strokes dans le bitmap, SANS refreshScreen. */
         private fun redrawBitmapOnly() {
@@ -1119,7 +1160,7 @@ class MiroirIME : InputMethodService() {
             return groupBlobs[gid]?.bounds?.contains(x, y) == true
         }
 
-        private fun exitEditMode() {
+        fun exitEditMode() {
             editMode = EditMode.NONE
             longPressTriggered = false
             // ═══ Effacement définitif des strokes neutralisés ═══
@@ -1386,6 +1427,20 @@ class MiroirIME : InputMethodService() {
 
     private fun onStylusDown(x: Float, y: Float) {
         isStylusDown = true
+        // En mode correction → pas de changement EPD, strokes dans buffer isolé
+        if (imeView?.isCorrecting() == true && correctLetterIndex >= 0) {
+            // Mode correction actif : laisser le GU/REGAL pour voir les overlays
+            currentPath.reset()
+            currentPath.moveTo(x, y)
+            currentStroke = StrokeRecord(
+                id = UUID.randomUUID().toString()
+            ).also { stroke ->
+                stroke.points.add(Pair(x, y))
+                stroke.timestamps.add(System.currentTimeMillis())
+                stroke.pressures.add(1.0f)
+            }
+            return
+        }
         enterWriteMode()  // basculer en DU pour le tracé fluide
         currentPath.reset()
         currentPath.moveTo(x, y)
@@ -1423,6 +1478,25 @@ class MiroirIME : InputMethodService() {
         // ═══ Ignorer les taps dans le vide (un seul point) ═══
         if (stroke.points.size < 2) {
             currentPath.reset()
+            return
+        }
+
+        // ═══ Mode correction → buffer isolé (pas de GroupManager, pas de registre) ═══
+        if (imeView?.isCorrecting() == true && correctLetterIndex >= 0) {
+            correctionStrokes.add(stroke)
+            currentPath.reset()
+            // Rafraîchir la zone du stroke
+            var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
+            var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
+            for ((x, y) in stroke.points) {
+                if (x < minX) minX = x; if (x > maxX) maxX = x
+                if (y < minY) minY = y; if (y > maxY) maxY = y
+            }
+            refreshRect(
+                (minX - 10).toInt(), (minY - 10).toInt(),
+                (maxX + 10).toInt(), (maxY + 10).toInt(), isStroke = true)
+            // ═══ Lancer l'inférence sur le buffer de correction ═══
+            scheduleCorrectionInference()
             return
         }
 
@@ -1992,6 +2066,99 @@ class MiroirIME : InputMethodService() {
         showOverlay(scrollView, "Transcriptions (${groupLabels.size} labels)")
     }
 
+    // ═══ Overlay de correction de transcription ═══
+    private fun showCorrectionOverlay(label: String) {
+        val panel = overlayPanel ?: return
+        panel.removeAllViews()
+        val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+        val letterH = spacing * 0.6f  // hauteur des cases
+
+        // ── Header ──────────────────────────────────────────────────
+        val header = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            setPadding(20, 15, 20, 15)
+            setBackgroundColor(Color.argb(220, 240, 240, 240))
+        }
+        val titleView = android.widget.TextView(this).apply {
+            text = "✎ Corriger : $label"
+            textSize = 20f; setTextColor(Color.DKGRAY)
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        header.addView(titleView)
+        // Bouton valider
+        val validateBtn = android.widget.Button(this).apply {
+            text = "✓"; textSize = 22f; setTextColor(Color.BLACK); setBackgroundColor(Color.TRANSPARENT)
+            setOnClickListener {
+                // Propager le label corrigé
+                val firstIdx = correctionGroupFirstIdx
+                val correctedLabel = groupLabels[firstIdx] ?: ""
+                val ic = currentInputConnection
+                if (ic != null) {
+                    ic.commitText("$correctedLabel ", 1)
+                    Log.i(TAG, "Correction validée: '$correctionOriginalLabel' → '$correctedLabel'")
+                }
+                correctionOriginalLabel = ""
+                correctionStrokes.clear()
+                correctLetterIndex = -1
+                imeView?.exitEditMode()
+                hideOverlay()
+            }
+        }
+        header.addView(validateBtn)
+        // Bouton annuler
+        val cancelBtn = android.widget.Button(this).apply {
+            text = "✕"; textSize = 20f; setTextColor(Color.DKGRAY); setBackgroundColor(Color.TRANSPARENT)
+            setOnClickListener {
+                // Restaurer le label original
+                groupLabels[correctionGroupFirstIdx] = correctionOriginalLabel
+                correctionStrokes.clear()
+                correctLetterIndex = -1
+                imeView?.exitEditMode()
+                hideOverlay()
+            }
+        }
+        header.addView(cancelBtn)
+        panel.addView(header)
+
+        // ── Zone des lettres ─────────────────────────────────────────
+        val lettersRow = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER
+            setPadding(10, 20, 10, 20)
+        }
+        for (i in label.indices) {
+            val letterView = android.widget.TextView(this).apply {
+                text = label[i].toString()
+                textSize = letterH * 1.2f
+                setTextColor(if (i == correctLetterIndex) Color.BLUE else Color.DKGRAY)
+                gravity = android.view.Gravity.CENTER
+                setBackgroundColor(Color.argb(30, 200, 200, 200))
+                setPadding(12, 8, 12, 8)
+                val marginPx = 4
+                (layoutParams as android.widget.LinearLayout.LayoutParams).setMargins(marginPx, 0, marginPx, 0)
+                setOnClickListener {
+                    correctLetterIndex = i
+                    correctionStrokes.clear()
+                    // Rafraîchir l'overlay
+                    showCorrectionOverlay(groupLabels[correctionGroupFirstIdx] ?: label)
+                }
+            }
+            lettersRow.addView(letterView)
+        }
+        panel.addView(lettersRow)
+
+        // ── Zone de statut ───────────────────────────────────────────
+        val statusView = android.widget.TextView(this).apply {
+            text = if (correctLetterIndex >= 0) "Écris la lettre #${correctLetterIndex + 1}" else "Tape une lettre à corriger"
+            textSize = 16f; setTextColor(Color.GRAY); gravity = android.view.Gravity.CENTER
+            setPadding(10, 10, 10, 10)
+        }
+        panel.addView(statusView, android.widget.LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        panel.visibility = View.VISIBLE
+    }
+
     /** Ancienne injection continue — remplacée par buildReadingOrderText() à la validation. */
     private fun injectReadingOrder() {
         // Conservé pour compatibilité mais plus appelé par l'inférence
@@ -2093,5 +2260,54 @@ class MiroirIME : InputMethodService() {
             drawn++
         }
         if (drawn < groupLabels.size) Log.d(TAG, "LABEL drawn: $drawn/${groupLabels.size}")
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CORRECTION DE TRANSCRIPTION
+    // ═══════════════════════════════════════════════════════════════════
+
+    private var correctionInferencePending = false
+
+    /** Lance l'inférence sur le buffer de correction après un court délai. */
+    private fun scheduleCorrectionInference() {
+        if (correctionInferencePending) return
+        correctionInferencePending = true
+        uiHandler.postDelayed({
+            correctionInferencePending = false
+            doCorrectionInference()
+        }, 400L)  // 400ms après le dernier stroke
+    }
+
+    private fun doCorrectionInference() {
+        val strokes = correctionStrokes.toList()
+        if (strokes.isEmpty()) return
+        val recognizer = recognizer ?: return
+        if (!recognizer.isLoaded) {
+            Log.d(TAG, "Correction: modèle ML Kit pas chargé — différé")
+            uiHandler.postDelayed({ doCorrectionInference() }, 1000L)
+            return
+        }
+        val firstIdx = correctionGroupFirstIdx
+        val label = groupLabels[firstIdx] ?: return
+        val letterIdx = correctLetterIndex
+        if (letterIdx < 0 || letterIdx >= label.length) return
+
+        try {
+            val indices = strokes.indices.toList()
+            val result = recognizer.recognize(strokes, indices)
+            if (!result.isNullOrBlank()) {
+                // Prendre la première lettre du résultat
+                val corrected = result.first().toString()
+                val newLabel = label.substring(0, letterIdx) + corrected + label.substring(letterIdx + 1)
+                groupLabels[firstIdx] = newLabel
+                Log.i(TAG, "Correction: '$label' → '$newLabel' (lettre #$letterIdx: '${label[letterIdx]}' → '$corrected')")
+                // Vider le buffer pour la prochaine correction
+                correctionStrokes.clear()
+                // Rafraîchir l'overlay avec le nouveau label
+                showCorrectionOverlay(newLabel)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur inférence correction: ${e.message}")
+        }
     }
 }
