@@ -793,7 +793,7 @@ class MiroirIME : InputMethodService() {
                 }
             }
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
-            // ═══ Overlay de correction transcription (APRES bitmap = on top) ═══
+            // ═══ Mode correction : cadre-tampon + filtre ═══
             if (isCorrecting()) {
                 val firstIdx = this@MiroirIME.correctionGroupFirstIdx
                 val label = groupLabels[firstIdx]
@@ -804,11 +804,12 @@ class MiroirIME : InputMethodService() {
                     val totalW = letterW * label.length
                     val startX = anchor.first - totalW / 2f
                     val startY = snapToLine(anchor.second) - spacing * 0.8f
+                    // Cadre blanc = tampon qui efface la zone
                     val bgPaint = android.graphics.Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
                     canvas.drawRect(startX - 20f, startY - 10f, startX + totalW + 20f, startY + letterW + 10f, bgPaint)
-                    // Bordure fine autour de l'overlay
                     val borderPaint = android.graphics.Paint().apply { color = Color.DKGRAY; style = Paint.Style.STROKE; strokeWidth = 2f }
                     canvas.drawRect(startX - 20f, startY - 10f, startX + totalW + 20f, startY + letterW + 10f, borderPaint)
+                    // Grand label (entre cadre et strokes)
                     val letterPaint = android.graphics.Paint().apply { color = Color.DKGRAY; textSize = letterW * 0.8f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
                     val activePaint = android.graphics.Paint().apply { color = Color.BLUE; textSize = letterW * 0.8f; isAntiAlias = true; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
                     for (i in label.indices) {
@@ -823,6 +824,33 @@ class MiroirIME : InputMethodService() {
                         canvas.drawText(label[i].toString(), cx, cy, p)
                     }
                 }
+                // Strokes du groupe temporaire (au-dessus du cadre)
+                val gm = this@MiroirIME.groupManager
+                if (gm != null) {
+                    val tempGroup = gm.allGroups().find { g ->
+                        g.strokeIds.firstOrNull()?.let { sid ->
+                            this@MiroirIME.inkStrokeIdToRegistryIndex[sid]
+                        }?.let { it != firstIdx } == true
+                    }
+                    if (tempGroup != null) {
+                        for (sid in tempGroup.strokeIds) {
+                            val idx = this@MiroirIME.inkStrokeIdToRegistryIndex[sid] ?: continue
+                            val sr = strokeRegistry.getOrNull(idx) ?: continue
+                            if (sr.points.size >= 2) {
+                                val path = android.graphics.Path()
+                                path.moveTo(sr.points[0].first, sr.points[0].second)
+                                for (j in 1 until sr.points.size) {
+                                    path.lineTo(sr.points[j].first, sr.points[j].second)
+                                }
+                                canvas.drawPath(path, strokePaint)
+                            }
+                        }
+                    }
+                }
+                // Filtre : pas d'overlays (lignes, labels) en mode correction
+                // Seul currentPath est dessiné après
+                canvas.drawPath(currentPath, strokePaint)
+                return  // ← filtre : on ne continue PAS le dessin normal
             }
             if (showOverlays) {
                 // Lignes de partition depuis le cache
@@ -1621,11 +1649,7 @@ class MiroirIME : InputMethodService() {
     /** Appelé après chaque stroke pour armer le timer du groupe modifié. */
     private fun scheduleGroupInference() {
         val gm = groupManager ?: return
-        // Mode correction → délai plus court (une lettre = 1-3 traits, pas un mot)
-        val inferDelay = if (imeView?.isCorrecting() == true)
-            (CalibrationActivity.getAutoInferDelay(this) * 0.3f).toLong().coerceAtLeast(250L)
-        else
-            CalibrationActivity.getAutoInferDelay(this)
+        val inferDelay = CalibrationActivity.getAutoInferDelay(this)
         val now = System.currentTimeMillis()
 
         val loadedGroups = gm.groupsInState(GroupState.LOADED) + gm.groupsInState(GroupState.SELECTED)
@@ -1793,8 +1817,6 @@ class MiroirIME : InputMethodService() {
                                 groupBlobs.remove(tempGroup.id)
                                 gm.removeGroup(tempGroup.id)
                             }
-                            // Reconstruire le bitmap sans les strokes de correction
-                            rebuildBitmap()
                             imeView?.postInvalidate()
                         }
                         return@post
