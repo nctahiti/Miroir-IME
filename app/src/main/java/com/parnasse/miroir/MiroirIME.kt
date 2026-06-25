@@ -792,7 +792,6 @@ class MiroirIME : InputMethodService() {
                     }
                 }
             }
-            bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             // ═══ Mode correction : cadre-tampon + filtre ═══
             if (isCorrecting()) {
                 val firstIdx = this@MiroirIME.correctionGroupFirstIdx
@@ -855,6 +854,7 @@ class MiroirIME : InputMethodService() {
                 canvas.drawPath(currentPath, strokePaint)
                 return  // ← filtre : on ne continue PAS le dessin normal
             }
+            bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             if (showOverlays) {
                 // Lignes de partition depuis le cache
                 for (y in cachedTemplateLines) {
