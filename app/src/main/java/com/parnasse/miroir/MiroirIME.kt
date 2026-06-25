@@ -1823,13 +1823,14 @@ class MiroirIME : InputMethodService() {
                         }
                         // Trier les mots de cette ligne par X
                         lineWords.sortBy { it.x }
-                        // Ajouter un saut de ligne si ce n'est pas la première ligne
+                        // Ajouter un saut si ce n'est pas la première ligne
                         if (pageSb.isNotEmpty()) {
                             val gapRatio = (lineY - prevLineY) / spacing
-                            if (gapRatio > 1.5f) {
-                                pageSb.append("\n\n")  // 2+ interlignes → paragraphe
-                            } else {
-                                pageSb.append("\n")     // 1 interligne → retour ligne
+                            val skippedLines = Math.round(gapRatio).toInt() - 1  // 0=adjacentes, 1=1 vide, 2+=paragraphe
+                            when {
+                                skippedLines >= 2 -> pageSb.append("\n\n")  // 2+ interlignes vides → paragraphe
+                                skippedLines == 1 -> pageSb.append("\n")    // 1 interligne vide → retour ligne
+                                else -> pageSb.append(" ")                  // lignes adjacentes → espace
                             }
                         }
                         prevLineY = lineY
