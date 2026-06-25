@@ -105,6 +105,9 @@ class MiroirIME : InputMethodService() {
      /** Témoin de mode dans la barre d'outils (✍ plume · ⌛ montre · ↕ déplacement). */
      private var modeIndicator: android.widget.TextView? = null
 
+     /** Panneau overlay pour menus contextuels (affiche par-dessus la surface de capture). */
+     private var overlayPanel: android.widget.LinearLayout? = null
+
      /** Index des strokes neutralisés visuellement pendant le scrub. Accessible depuis le rendu et les gestes. */
      private var erasedStrokes = mutableSetOf<Int>()
 
@@ -511,14 +514,34 @@ class MiroirIME : InputMethodService() {
         val density = resources.displayMetrics.density
         val toolbarHeight = (80 * density).toInt()  // hauteur adaptée aux grands boutons
 
-        val root = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
+        // ═══ Conteneur principal (FrameLayout pour superposer l'overlay) ═══
+        val root = android.widget.FrameLayout(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT)
-            // Fond opaque — évite la composition coûteuse avec l'app en dessous
             setBackgroundColor(Color.WHITE)
         }
+
+        // ── Contenu principal (toolbar + surface) ─────────────────────
+        val mainContent = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT)
+            setBackgroundColor(Color.WHITE)
+        }
+        root.addView(mainContent)
+
+        // ── Panneau overlay (caché par défaut) ────────────────────────
+        overlayPanel = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT)
+            setBackgroundColor(Color.WHITE)
+            visibility = View.GONE
+        }
+        root.addView(overlayPanel)
 
         // ── Barre d'outils EN HAUT ──────────────────────────────────
         val toolbar = android.widget.LinearLayout(this).apply {
@@ -628,7 +651,7 @@ class MiroirIME : InputMethodService() {
             modeIndicator = this
         })
 
-        root.addView(toolbar)  // barre EN HAUT
+        mainContent.addView(toolbar)  // barre EN HAUT
 
         // ── Surface de capture (reste de l'écran) ───────────────────
         val surface = CaptureSurfaceView(this).apply {
@@ -639,7 +662,7 @@ class MiroirIME : InputMethodService() {
         imeView = surface
          // Initialisation du séquenceur de modes (État A) — la surface IME est la cible EPD
          displayController = DisplayController(OnyxEpdPort(surface))
-        root.addView(surface)
+        mainContent.addView(surface)
 
         root.post {
             // Mesurer la toolbar pour les taps stylet
@@ -1772,6 +1795,46 @@ class MiroirIME : InputMethodService() {
     // MENUS CONTEXTUELS (clic long ◀ et ▶)
     // ═══════════════════════════════════════════════════════════════════
 
+    /** Affiche un panneau overlay (cache la surface de capture). */
+    private fun showOverlay(content: View, title: String) {
+        val panel = overlayPanel ?: return
+        panel.removeAllViews()
+        // ── Barre titre + bouton fermer ──────────────────────────────
+        val header = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            setPadding(20, 20, 20, 20)
+            setBackgroundColor(Color.argb(220, 240, 240, 240))
+        }
+        val titleView = android.widget.TextView(this).apply {
+            text = title
+            textSize = 20f
+            setTextColor(Color.DKGRAY)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        header.addView(titleView)
+        val closeBtn = android.widget.Button(this).apply {
+            text = "✕"
+            textSize = 20f
+            setTextColor(Color.DKGRAY)
+            setBackgroundColor(Color.TRANSPARENT)
+            setOnClickListener { hideOverlay() }
+        }
+        header.addView(closeBtn)
+        panel.addView(header)
+        // ── Contenu scrollable ───────────────────────────────────────
+        panel.addView(content, android.widget.LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        // Afficher
+        panel.visibility = View.VISIBLE
+    }
+
+    private fun hideOverlay() {
+        overlayPanel?.visibility = View.GONE
+        overlayPanel?.removeAllViews()
+        imeView?.postInvalidate()
+    }
+
     /** Clic long ◀ — Liste des blocs disponibles. */
     private fun showBlockList() {
         val blocksDir = java.io.File(cacheDir, "blocks")
@@ -1785,26 +1848,33 @@ class MiroirIME : InputMethodService() {
             return
         }
 
-        val items = blocks.map { dir ->
-            val name = dir.name
-            // Format : appName_timestamp
-            val lastUnderscore = name.lastIndexOf('_')
-            val appName = if (lastUnderscore > 0) name.substring(0, lastUnderscore).replace("_", ".") else "inconnu"
-            val ts = if (lastUnderscore > 0) name.substring(lastUnderscore + 1).toLongOrNull() ?: 0L else 0L
-            val date = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ts))
-            val pageCount = dir.listFiles()?.count { it.isDirectory && it.name.startsWith("page_") } ?: 0
-            val current = dir == blockDir
-            val prefix = if (current) "▸ " else "  "
-            "$prefix$appName — $date ($pageCount p.)"
-        }.toTypedArray()
-
-        val dirs = blocks.toTypedArray()
-
-        val dialog = android.app.AlertDialog.Builder(this@MiroirIME)
-            .setTitle("Blocs (${blocks.size})")
-            .setItems(items) { _, which ->
-                val selected = dirs[which]
-                // Charger ce bloc (closeBlock puis reopen)
+        val listView = android.widget.ListView(this).apply {
+            setBackgroundColor(Color.WHITE)
+            adapter = object : android.widget.BaseAdapter() {
+                override fun getCount() = blocks.size
+                override fun getItem(pos: Int) = blocks[pos]
+                override fun getItemId(pos: Int) = pos.toLong()
+                override fun getView(pos: Int, convertView: View?, parent: ViewGroup?): View {
+                    val dir = blocks[pos]
+                    val name = dir.name
+                    val lastUnderscore = name.lastIndexOf('_')
+                    val appName = if (lastUnderscore > 0) name.substring(0, lastUnderscore).replace("_", ".") else "inconnu"
+                    val ts = if (lastUnderscore > 0) name.substring(lastUnderscore + 1).toLongOrNull() ?: 0L else 0L
+                    val date = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ts))
+                    val pageCount = dir.listFiles()?.count { it.isDirectory && it.name.startsWith("page_") } ?: 0
+                    val current = dir == blockDir
+                    val prefix = if (current) "▸ " else "  "
+                    val tv = android.widget.TextView(this@MiroirIME).apply {
+                        text = "$prefix$appName — $date ($pageCount p.)"
+                        textSize = 18f
+                        setTextColor(if (current) Color.BLACK else Color.DKGRAY)
+                        setPadding(30, 20, 30, 20)
+                    }
+                    return tv
+                }
+            }
+            setOnItemClickListener { _, _, pos, _ ->
+                val selected = blocks[pos]
                 closeBlock()
                 val name = selected.name
                 val lastUnderscore = name.lastIndexOf('_')
@@ -1818,12 +1888,12 @@ class MiroirIME : InputMethodService() {
                 loadPage(0)
                 refreshAll()
                 updatePageIndicator()
+                hideOverlay()
                 Log.i(TAG, "Bloc chargé via menu: ${selected.name}")
             }
-            .setNegativeButton("Annuler", null)
-            .create()
-        dialog.window?.setType(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL)
-        dialog.show()
+        }
+
+        showOverlay(listView, "Blocs (${blocks.size})")
     }
 
     /** Clic long ▶ — Toutes les transcriptions formatées (tel qu'injecté à la validation). */
@@ -1835,24 +1905,17 @@ class MiroirIME : InputMethodService() {
             return
         }
 
-        // ScrollView pour les longs textes
         val scrollView = android.widget.ScrollView(this@MiroirIME)
         val textView = android.widget.TextView(this@MiroirIME).apply {
             text = fullText
             textSize = 16f
-            setTextColor(android.graphics.Color.BLACK)
-            setPadding(40, 30, 40, 30)
+            setTextColor(Color.BLACK)
+            setPadding(30, 20, 30, 20)
             setLineSpacing(4f, 1.2f)
         }
         scrollView.addView(textView)
 
-        val dialog = android.app.AlertDialog.Builder(this@MiroirIME)
-            .setTitle("Transcriptions (${groupLabels.size} labels)")
-            .setView(scrollView)
-            .setPositiveButton("Fermer", null)
-            .create()
-        dialog.window?.setType(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL)
-        dialog.show()
+        showOverlay(scrollView, "Transcriptions (${groupLabels.size} labels)")
     }
 
     /** Ancienne injection continue — remplacée par buildReadingOrderText() à la validation. */
