@@ -83,6 +83,7 @@ class MiroirIME : InputMethodService() {
     private var correctionGroupFirstIdx: Int = -1  // firstIdx du groupe en cours de correction
     private var correctionOriginalLabel: String = ""  // label avant correction (pour la paire)
     private var correctLetterIndex: Int = -1  // index de la lettre ciblée
+    private var correctionSavedGroup: InkGroup? = null  // groupe original sauvegardé (ré-enregistré après correction)
     private val correctionPaths = mutableListOf<android.graphics.Path>()  // paths des strokes de correction (dessin uniquement)
     private val uiHandler = Handler(Looper.getMainLooper())
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
@@ -973,6 +974,7 @@ class MiroirIME : InputMethodService() {
                                     if (firstIdx != null) {
                                         correctionGroupFirstIdx = firstIdx
                                         correctionOriginalLabel = groupLabels[firstIdx] ?: ""
+                                        correctionSavedGroup = group  // sauvegarder pour ré-enregistrement
                                         val label = groupLabels[firstIdx] ?: ""
                                         Log.i(TAG, "SWIPE HAUT: label='$label'")
                                         if (label.isNotEmpty()) {
@@ -1820,7 +1822,17 @@ class MiroirIME : InputMethodService() {
                                 groupBlobs.remove(tempGroup.id)
                                 gm.removeGroup(tempGroup.id)
                             }
-                            correctionPaths.clear()  // vider les strokes de correction après remplacement
+                            // Ré-animer le groupe original (évincé après désélection)
+                            val savedGroup = correctionSavedGroup
+                            if (savedGroup != null && gm != null) {
+                                if (gm.getGroup(savedGroup.id) == null) {
+                                    gm.registerLoadedGroup(savedGroup)
+                                }
+                                computeBlobPath(savedGroup)?.let { blob ->
+                                    groupBlobs[savedGroup.id] = blob
+                                }
+                            }
+                            correctionPaths.clear()
                             imeView?.postInvalidate()
                         }
                         return@post
