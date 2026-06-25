@@ -1557,20 +1557,23 @@ class MiroirIME : InputMethodService() {
         scheduleGroupInference()
 
         // ═══ Rafraîchir uniquement la zone du stroke ═══
-        if (stroke.points.size >= 2) {
-            var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
-            var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
-            for ((x, y) in stroke.points) {
-                if (x < minX) minX = x; if (x > maxX) maxX = x
-                if (y < minY) minY = y; if (y > maxY) maxY = y
+        // En mode correction → pas de refreshRect (le cadre tampon couvre), pas de reasserterDU (on reste en GU)
+        if (imeView?.isCorrecting() != true) {
+            if (stroke.points.size >= 2) {
+                var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
+                var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
+                for ((x, y) in stroke.points) {
+                    if (x < minX) minX = x; if (x > maxX) maxX = x
+                    if (y < minY) minY = y; if (y > maxY) maxY = y
+                }
+                refreshRect(
+                    (minX - 10).toInt(), (minY - 10).toInt(),
+                    (maxX + 10).toInt(), (maxY + 10).toInt(), isStroke = true)
             }
-            refreshRect(
-                (minX - 10).toInt(), (minY - 10).toInt(),
-                (maxX + 10).toInt(), (maxY + 10).toInt(), isStroke = true)
-        }
-        // ═══ Maintenir le DU après le lever du stylet (l'inférence fera le refresh label) ═══
-        if (isWriteMode) {
-            displayController?.reasserterDU()
+            // ═══ Maintenir le DU après le lever du stylet (l'inférence fera le refresh label) ═══
+            if (isWriteMode) {
+                displayController?.reasserterDU()
+            }
         }
     }
 
@@ -1797,7 +1800,23 @@ class MiroirIME : InputMethodService() {
                                 groupBlobs.remove(tempGroup.id)
                                 gm.removeGroup(tempGroup.id)
                             }
-                            imeView?.postInvalidate()
+                            // Rafraîchir uniquement la zone du caractère corrigé
+                            val anchor = groupAnchor[origFirstIdx]
+                            if (anchor != null) {
+                                val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+                                val letterW = spacing * 0.7f
+                                val totalW = letterW * origLabel.length
+                                val startX = anchor.first - totalW / 2f
+                                val startY = snapToLine(anchor.second) - spacing * 0.8f
+                                val v = imeView ?: return@post
+                                val l = (startX + letterW * correctLetterIndex).toInt()
+                                val t = startY.toInt()
+                                val r = (startX + letterW * (correctLetterIndex + 1)).toInt()
+                                val b = (startY + letterW).toInt()
+                                try { EpdController.handwritingRepaint(v, l, t, r, b) } catch (_: Exception) {}
+                            } else {
+                                imeView?.postInvalidate()
+                            }
                         }
                         return@post
                     }
