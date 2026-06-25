@@ -792,7 +792,8 @@ class MiroirIME : InputMethodService() {
                     }
                 }
             }
-            // ═══ Overlay de correction transcription (AVANT bitmap pour que les strokes restent visibles) ═══
+            bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+            // ═══ Overlay de correction transcription (APRES bitmap = on top) ═══
             if (isCorrecting()) {
                 val firstIdx = this@MiroirIME.correctionGroupFirstIdx
                 val label = groupLabels[firstIdx]
@@ -823,7 +824,6 @@ class MiroirIME : InputMethodService() {
                     }
                 }
             }
-            bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             if (showOverlays) {
                 // Lignes de partition depuis le cache
                 for (y in cachedTemplateLines) {
@@ -1789,6 +1789,8 @@ class MiroirIME : InputMethodService() {
                                 groupBlobs.remove(tempGroup.id)
                                 gm.removeGroup(tempGroup.id)
                             }
+                            // Reconstruire le bitmap sans les strokes de correction
+                            rebuildBitmap()
                             imeView?.postInvalidate()
                         }
                         return@post
