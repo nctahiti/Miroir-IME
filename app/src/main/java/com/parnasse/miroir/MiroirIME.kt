@@ -1820,7 +1820,20 @@ class MiroirIME : InputMethodService() {
                                 groupBlobs.remove(tempGroup.id)
                                 gm.removeGroup(tempGroup.id)
                             }
-                            imeView?.postInvalidate()
+                            // Rafraîchir uniquement la zone du cadre (pas tout l'écran)
+                            val anchor = groupAnchor[origFirstIdx]
+                            if (anchor != null) {
+                                val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+                                val labelW = spacing * 0.7f * origLabel.length
+                                val v = imeView ?: return@post
+                                val l = (anchor.first - labelW / 2f - 20f).toInt()
+                                val t = (snapToLine(anchor.second) - spacing * 0.8f - 10f).toInt()
+                                val r = (anchor.first + labelW / 2f + 20f).toInt()
+                                val b = (snapToLine(anchor.second) + spacing * 0.7f + 10f).toInt()
+                                try { EpdController.handwritingRepaint(v, l, t, r, b) } catch (_: Exception) {}
+                            } else {
+                                imeView?.postInvalidate()
+                            }
                         }
                         return@post
                     }
