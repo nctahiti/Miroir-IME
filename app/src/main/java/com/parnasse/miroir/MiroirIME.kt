@@ -80,8 +80,6 @@ class MiroirIME : InputMethodService() {
     private val inkStrokeIdToRegistryIndex = mutableMapOf<Long, Int>()
     private var inkStrokeIdCounter = 0L
 
-    // ═══ Buffer de correction (isolé, vidé après validation) ═══
-    private val correctionStrokes = mutableListOf<StrokeRecord>()  // strokes de la lettre corrigée
     private var correctionGroupFirstIdx: Int = -1  // firstIdx du groupe en cours de correction
     private var correctionOriginalLabel: String = ""  // label avant correction (pour la paire)
     private var correctLetterIndex: Int = -1  // index de la lettre ciblée
@@ -794,6 +792,34 @@ class MiroirIME : InputMethodService() {
                     }
                 }
             }
+            // ═══ Overlay de correction transcription (AVANT bitmap pour que les strokes restent visibles) ═══
+            if (isCorrecting()) {
+                val firstIdx = this@MiroirIME.correctionGroupFirstIdx
+                val label = groupLabels[firstIdx]
+                val anchor = groupAnchor[firstIdx]
+                if (label != null && anchor != null && label.isNotEmpty()) {
+                    val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+                    val letterW = spacing * 0.7f
+                    val totalW = letterW * label.length
+                    val startX = anchor.first - totalW / 2f
+                    val startY = snapToLine(anchor.second) - spacing * 0.8f
+                    val bgPaint = android.graphics.Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
+                    canvas.drawRect(startX - 20f, startY - 10f, startX + totalW + 20f, startY + letterW + 10f, bgPaint)
+                    val letterPaint = android.graphics.Paint().apply { color = Color.DKGRAY; textSize = letterW * 0.8f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+                    val activePaint = android.graphics.Paint().apply { color = Color.BLUE; textSize = letterW * 0.8f; isAntiAlias = true; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
+                    for (i in label.indices) {
+                        val cx = startX + letterW * i + letterW / 2f
+                        val cy = startY + letterW * 0.75f
+                        val casePaint = if (i == this@MiroirIME.correctLetterIndex)
+                            android.graphics.Paint().apply { color = Color.argb(40, 0, 0, 255); style = Paint.Style.FILL }
+                        else
+                            android.graphics.Paint().apply { color = Color.argb(20, 0, 0, 0); style = Paint.Style.FILL }
+                        canvas.drawRect(startX + letterW * i, startY, startX + letterW * (i + 1), startY + letterW, casePaint)
+                        val p = if (i == this@MiroirIME.correctLetterIndex) activePaint else letterPaint
+                        canvas.drawText(label[i].toString(), cx, cy, p)
+                    }
+                }
+            }
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             if (showOverlays) {
                 // Lignes de partition depuis le cache
@@ -820,7 +846,16 @@ class MiroirIME : InputMethodService() {
                     // ═══ Si on était en mode édition, vérifier si on reste dans le blob ═══
                     if (editMode != EditMode.NONE) {
                         if (editMode == EditMode.CORRECT_TRANSCRIPTION) {
-                            // Le clic sur lettre est géré par l'overlay — ici on ignore le tap
+                            // Détecter clic sur une lettre de l'overlay
+                            val idx = hitTestLetter(event.x, event.y)
+                            if (idx >= 0) {
+                                correctLetterIndex = idx
+                                Log.i(TAG, "Correction: lettre #$idx ciblée")
+                                imeView?.postInvalidate()
+                                return true
+                            }
+                            // Clic hors des lettres → sortir du mode
+                            exitEditMode()
                             return true
                         }
                         if (!isInBlob(event.x, event.y)) {
@@ -924,8 +959,7 @@ class MiroirIME : InputMethodService() {
                                         val label = groupLabels[firstIdx] ?: ""
                                         Log.i(TAG, "SWIPE HAUT: label='$label'")
                                         if (label.isNotEmpty()) {
-                                            Log.i(TAG, "SWIPE HAUT: posting showCorrectionOverlay")
-                                            uiHandler.post { showCorrectionOverlay(label) }
+                                            imeView?.postInvalidate()
                                         }
                                     }
                                 }
@@ -1437,21 +1471,15 @@ class MiroirIME : InputMethodService() {
 
     private fun onStylusDown(x: Float, y: Float) {
         isStylusDown = true
-        // En mode correction → pas de changement EPD, strokes dans buffer isolé
+        // Mode correction → désélectionner le groupe original pour que les strokes forment un NOUVEAU groupe
         if (imeView?.isCorrecting() == true && correctLetterIndex >= 0) {
-            // Mode correction actif : laisser le GU/REGAL pour voir les overlays
-            currentPath.reset()
-            currentPath.moveTo(x, y)
-            currentStroke = StrokeRecord(
-                id = UUID.randomUUID().toString()
-            ).also { stroke ->
-                stroke.points.add(Pair(x, y))
-                stroke.timestamps.add(System.currentTimeMillis())
-                stroke.pressures.add(1.0f)
+            groupManager?.allGroups()?.find { it.state == GroupState.SELECTED }?.let {
+                groupManager?.deselectGroup(it.id)
             }
-            return
+            // Garder le GU/REGAL pour voir l'overlay
+        } else {
+            enterWriteMode()  // basculer en DU pour le tracé fluide
         }
-        enterWriteMode()  // basculer en DU pour le tracé fluide
         currentPath.reset()
         currentPath.moveTo(x, y)
         currentStroke = StrokeRecord(
@@ -1491,24 +1519,8 @@ class MiroirIME : InputMethodService() {
             return
         }
 
-        // ═══ Mode correction → buffer isolé (pas de GroupManager, pas de registre) ═══
-        if (imeView?.isCorrecting() == true && correctLetterIndex >= 0) {
-            correctionStrokes.add(stroke)
-            currentPath.reset()
-            // Rafraîchir la zone du stroke
-            var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
-            var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
-            for ((x, y) in stroke.points) {
-                if (x < minX) minX = x; if (x > maxX) maxX = x
-                if (y < minY) minY = y; if (y > maxY) maxY = y
-            }
-            refreshRect(
-                (minX - 10).toInt(), (minY - 10).toInt(),
-                (maxX + 10).toInt(), (maxY + 10).toInt(), isStroke = true)
-            // ═══ Lancer l'inférence sur le buffer de correction ═══
-            scheduleCorrectionInference()
-            return
-        }
+        // ═══ Mode correction → chemin normal (strokeRegistry + GroupManager + inférence standard) ═══
+        val isCorrection = imeView?.isCorrecting() == true && correctLetterIndex >= 0
 
         // Rastériser le stroke dans le bitmap
         val canvas = bitmapCanvas ?: return
@@ -1742,6 +1754,42 @@ class MiroirIME : InputMethodService() {
                 Log.i(TAG, "Reconnaissance groupe: \"$result\" (${indices.size} strokes)")
                 uiHandler.post {
                     val firstIdx = indices.firstOrNull() ?: return@post
+
+                    // ═══ Mode correction → corriger la lettre du groupe ORIGINAL ═══
+                    if (imeView?.isCorrecting() == true && correctLetterIndex >= 0) {
+                        val origFirstIdx = correctionGroupFirstIdx
+                        val origLabel = groupLabels[origFirstIdx] ?: return@post
+                        if (correctLetterIndex < origLabel.length) {
+                            val corrected = result.first().toString()
+                            val newLabel = origLabel.substring(0, correctLetterIndex) + corrected +
+                                           origLabel.substring(correctLetterIndex + 1)
+                            groupLabels[origFirstIdx] = newLabel
+                            Log.i(TAG, "Correction: '$origLabel' → '$newLabel' (lettre #$correctLetterIndex: '$corrected')")
+                            // Supprimer le groupe temporaire et ses strokes du strokeRegistry
+                            val gm = groupManager
+                            val tempGroup = gm?.allGroups()?.find { g ->
+                                g.strokeIds.firstOrNull()?.let { sid -> inkStrokeIdToRegistryIndex[sid] == firstIdx } == true
+                            }
+                            if (tempGroup != null) {
+                                // Retirer les strokes du strokeRegistry
+                                val removedIndices = tempGroup.strokeIds.mapNotNull { sid ->
+                                    inkStrokeIdToRegistryIndex.remove(sid)
+                                }.sortedDescending()
+                                for (idx in removedIndices) {
+                                    if (idx < strokeRegistry.size) strokeRegistry.removeAt(idx)
+                                }
+                                // Ré-indexer
+                                for (entry in inkStrokeIdToRegistryIndex.entries) {
+                                    val shift = removedIndices.count { it < entry.value }
+                                    if (shift > 0) entry.setValue(entry.value - shift)
+                                }
+                                groupBlobs.remove(tempGroup.id)
+                            }
+                            imeView?.postInvalidate()
+                        }
+                        return@post
+                    }
+
                     groupLabels[firstIdx] = result
                     Log.i(TAG, "LABEL set: firstIdx=$firstIdx -> '$result' (${groupLabels.size} labels total)")
                     cachedGMCacheSize = -1
@@ -2108,7 +2156,6 @@ class MiroirIME : InputMethodService() {
                     Log.i(TAG, "Correction validée: '$correctionOriginalLabel' → '$correctedLabel'")
                 }
                 correctionOriginalLabel = ""
-                correctionStrokes.clear()
                 correctLetterIndex = -1
                 imeView?.exitEditMode()
                 hideOverlay()
@@ -2121,7 +2168,6 @@ class MiroirIME : InputMethodService() {
             setOnClickListener {
                 // Restaurer le label original
                 groupLabels[correctionGroupFirstIdx] = correctionOriginalLabel
-                correctionStrokes.clear()
                 correctLetterIndex = -1
                 imeView?.exitEditMode()
                 hideOverlay()
@@ -2146,8 +2192,6 @@ class MiroirIME : InputMethodService() {
                 setPadding(12, 8, 12, 8)
                 setOnClickListener {
                     correctLetterIndex = i
-                    correctionStrokes.clear()
-                    // Rafraîchir l'overlay
                     showCorrectionOverlay(groupLabels[correctionGroupFirstIdx] ?: label)
                 }
             }
@@ -2163,6 +2207,16 @@ class MiroirIME : InputMethodService() {
         }
         panel.addView(statusView, android.widget.LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        // ═══ Forwarder les événements tactiles vers la surface de capture ═══
+        val captureView = imeView
+        panel.setOnTouchListener { _, event ->
+            captureView?.dispatchTouchEvent(event)
+            false  // laisse le panel traiter aussi (boutons, lettres)
+        }
+
+        // Fond blanc uniquement sur le header (pour lisibilité)
+        header.setBackgroundColor(Color.WHITE)
 
         panel.visibility = View.VISIBLE
     }
@@ -2273,49 +2327,7 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
     // CORRECTION DE TRANSCRIPTION
     // ═══════════════════════════════════════════════════════════════════
-
-    private var correctionInferencePending = false
-
-    /** Lance l'inférence sur le buffer de correction après un court délai. */
-    private fun scheduleCorrectionInference() {
-        if (correctionInferencePending) return
-        correctionInferencePending = true
-        uiHandler.postDelayed({
-            correctionInferencePending = false
-            doCorrectionInference()
-        }, 400L)  // 400ms après le dernier stroke
-    }
-
-    private fun doCorrectionInference() {
-        val strokes = correctionStrokes.toList()
-        if (strokes.isEmpty()) return
-        val recognizer = recognizer ?: return
-        if (!recognizer.isLoaded) {
-            Log.d(TAG, "Correction: modèle ML Kit pas chargé — différé")
-            uiHandler.postDelayed({ doCorrectionInference() }, 1000L)
-            return
-        }
-        val firstIdx = correctionGroupFirstIdx
-        val label = groupLabels[firstIdx] ?: return
-        val letterIdx = correctLetterIndex
-        if (letterIdx < 0 || letterIdx >= label.length) return
-
-        try {
-            val indices = strokes.indices.toList()
-            val result = recognizer.recognize(strokes, indices)
-            if (!result.isNullOrBlank()) {
-                // Prendre la première lettre du résultat
-                val corrected = result.first().toString()
-                val newLabel = label.substring(0, letterIdx) + corrected + label.substring(letterIdx + 1)
-                groupLabels[firstIdx] = newLabel
-                Log.i(TAG, "Correction: '$label' → '$newLabel' (lettre #$letterIdx: '${label[letterIdx]}' → '$corrected')")
-                // Vider le buffer pour la prochaine correction
-                correctionStrokes.clear()
-                // Rafraîchir l'overlay avec le nouveau label
-                showCorrectionOverlay(newLabel)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Erreur inférence correction: ${e.message}")
-        }
-    }
+    // La correction utilise le circuit NORMAL : strokes → strokeRegistry → GroupManager → inférence standard.
+    // Les strokes de correction sont ajoutés au groupe existant, l'inférence normale met à jour le label.
+    // Le buffer isolé et l'inférence parallèle ont été supprimés — trop complexes, résultat vide sur 1 stroke.
 }
