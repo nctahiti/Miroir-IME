@@ -1242,21 +1242,22 @@ class MiroirIME : InputMethodService() {
             // ═══ Si le groupe est vidé de tous ses strokes → supprimer label + blob ═══
             val erasedGroupId = activeBlobGroupId
             if (erasedGroupId != null) {
-            val g = groupManager?.allGroups()?.find { it.id == erasedGroupId }
-            if (g == null || g.strokeIds.isEmpty()) {
-                groupBlobs.remove(erasedGroupId)
-                // Nettoyer les labels AVANT d'avoir retiré inkStrokeIdToRegistryIndex
-                for (sid in erasedSids) {
-                    val firstIdxInMap = inkStrokeIdToRegistryIndex[sid]
-                    if (firstIdxInMap != null) {
-                        groupLabels.remove(firstIdxInMap)
-                        inferredGroupFirstIdxs.remove(firstIdxInMap)
-                        groupStrokeCountAtInference.remove(firstIdxInMap)
+                val g = groupManager?.allGroups()?.find { it.id == erasedGroupId }
+                // Ne supprimer que si le groupe existe ET est vraiment vide (pas juste évincé)
+                if (g != null && g.strokeIds.isEmpty()) {
+                    groupBlobs.remove(erasedGroupId)
+                    // Nettoyer les labels AVANT d'avoir retiré inkStrokeIdToRegistryIndex
+                    for (sid in erasedSids) {
+                        val firstIdxInMap = inkStrokeIdToRegistryIndex[sid]
+                        if (firstIdxInMap != null) {
+                            groupLabels.remove(firstIdxInMap)
+                            inferredGroupFirstIdxs.remove(firstIdxInMap)
+                            groupStrokeCountAtInference.remove(firstIdxInMap)
+                        }
                     }
+                    scrubbedGroupFirstIdx = null
+                    Log.i(TAG, "🗑️ Groupe ${erasedGroupId.take(8)} vidé → supprimé")
                 }
-                scrubbedGroupFirstIdx = null
-                Log.i(TAG, "🗑️ Groupe ${erasedGroupId.take(8)} vidé → supprimé")
-            }
             }
             // ═══ Réactiver le groupe modifié comme SELECTED pour GroupManager ═══
             val reactivateId = activeBlobGroupId
