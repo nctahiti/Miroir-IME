@@ -824,27 +824,27 @@ class MiroirIME : InputMethodService() {
                         canvas.drawText(label[i].toString(), cx, cy, p)
                     }
                 }
-                // Strokes du groupe temporaire (au-dessus du cadre)
+                // Strokes de correction (tous les strokes récents → au-dessus du cadre)
                 val gm = this@MiroirIME.groupManager
-                if (gm != null) {
-                    val tempGroup = gm.allGroups().find { g ->
+                val origStrokeIds = if (gm != null) {
+                    val origGroup = gm.allGroups().find { g ->
                         g.strokeIds.firstOrNull()?.let { sid ->
                             this@MiroirIME.inkStrokeIdToRegistryIndex[sid]
-                        }?.let { it != firstIdx } == true
+                        } == firstIdx
                     }
-                    if (tempGroup != null) {
-                        for (sid in tempGroup.strokeIds) {
-                            val idx = this@MiroirIME.inkStrokeIdToRegistryIndex[sid] ?: continue
-                            val sr = strokeRegistry.getOrNull(idx) ?: continue
-                            if (sr.points.size >= 2) {
-                                val path = android.graphics.Path()
-                                path.moveTo(sr.points[0].first, sr.points[0].second)
-                                for (j in 1 until sr.points.size) {
-                                    path.lineTo(sr.points[j].first, sr.points[j].second)
-                                }
-                                canvas.drawPath(path, strokePaint)
-                            }
+                    origGroup?.strokeIds?.toSet() ?: emptySet()
+                } else emptySet()
+                for ((idx, sr) in strokeRegistry.withIndex()) {
+                    val inkId = this@MiroirIME.inkStrokeIdToRegistryIndex.entries
+                        .find { it.value == idx }?.key ?: continue
+                    if (inkId in origStrokeIds) continue  // skip groupe original
+                    if (sr.points.size >= 2) {
+                        val path = android.graphics.Path()
+                        path.moveTo(sr.points[0].first, sr.points[0].second)
+                        for (j in 1 until sr.points.size) {
+                            path.lineTo(sr.points[j].first, sr.points[j].second)
                         }
+                        canvas.drawPath(path, strokePaint)
                     }
                 }
                 // Filtre : pas de labels normaux en mode correction, mais le template oui
