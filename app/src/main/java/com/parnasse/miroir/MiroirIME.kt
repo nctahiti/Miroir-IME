@@ -904,26 +904,36 @@ class MiroirIME : InputMethodService() {
                                 updateModeIndicator()
                                 Log.i(TAG, "→ Mode DÉPLACEMENT (↓)")
                             } else if (dy < -SWIPE_THRESHOLD) {
+                                try {
+                                Log.i(TAG, "SWIPE HAUT détecté dy=$dy gid=$activeBlobGroupId longPress=$longPressTriggered")
                                 editMode = EditMode.CORRECT_TRANSCRIPTION
                                 correctLetterIndex = -1
-                                // Initialiser le groupe à corriger (groupe sélectionné par le clic long)
                                 val gid = activeBlobGroupId
+                                Log.i(TAG, "SWIPE HAUT: gid=$gid")
                                 if (gid != null) {
                                     val gm = this@MiroirIME.groupManager
+                                    Log.i(TAG, "SWIPE HAUT: gm=$gm allGroups=${gm?.allGroups()?.size}")
                                     val group = gm?.allGroups()?.find { it.id == gid }
+                                    Log.i(TAG, "SWIPE HAUT: group=$group strokeIds=${group?.strokeIds}")
                                     val firstIdx = group?.strokeIds?.firstOrNull()
                                         ?.let { sid -> this@MiroirIME.inkStrokeIdToRegistryIndex[sid] }
+                                    Log.i(TAG, "SWIPE HAUT: firstIdx=$firstIdx labels=${groupLabels.size}")
                                     if (firstIdx != null) {
                                         correctionGroupFirstIdx = firstIdx
                                         correctionOriginalLabel = groupLabels[firstIdx] ?: ""
                                         val label = groupLabels[firstIdx] ?: ""
+                                        Log.i(TAG, "SWIPE HAUT: label='$label'")
                                         if (label.isNotEmpty()) {
-                                            showCorrectionOverlay(label)
+                                            Log.i(TAG, "SWIPE HAUT: posting showCorrectionOverlay")
+                                            uiHandler.post { showCorrectionOverlay(label) }
                                         }
                                     }
                                 }
                                 updateModeIndicator()
                                 Log.i(TAG, "→ Mode CORRECTION TRANSCRIPTION (↑)")
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "SWIPE HAUT CRASH: ${e.message}", e)
+                                }
                             }
                         } else if (editMode == EditMode.ERASE && dx < 0f) {
                             // ═══ Effacement proportionnel (scrub) — comme remonter l'aiguille ═══
@@ -2134,8 +2144,6 @@ class MiroirIME : InputMethodService() {
                 gravity = android.view.Gravity.CENTER
                 setBackgroundColor(Color.argb(30, 200, 200, 200))
                 setPadding(12, 8, 12, 8)
-                val marginPx = 4
-                (layoutParams as android.widget.LinearLayout.LayoutParams).setMargins(marginPx, 0, marginPx, 0)
                 setOnClickListener {
                     correctLetterIndex = i
                     correctionStrokes.clear()
