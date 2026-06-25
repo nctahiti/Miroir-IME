@@ -1001,40 +1001,32 @@ class MiroirIME : InputMethodService() {
                 }
                 MotionEvent.ACTION_UP -> {
                     cancelLongPressRunnable()
-                    // ═══ Gestes d'édition : le mode tient après pen-up ═══
+                    // ═══ Sortie du mode édition à chaque relâcher (sauf correction) ═══
                     if (longPressTriggered) {
                         when (editMode) {
                             EditMode.ERASE -> {
-                                if (!tapMoved) {
-                                    // ═══ Tap dans le vide (pas de geste) → sortie du mode ═══
-                                    exitEditMode()
-                                    currentPath.reset()
-                                    tapStrokeStarted = true
-                                } else {
-                                    // Mettre à jour la position de départ pour le prochain geste
-                                    gestureStartX = event.x
-                                    currentPath.reset()  // ═══ nettoie le path fantôme ═══
-                                    redrawBitmapOnly()
-                                    imeView?.postInvalidate()
-                                }
+                                exitEditMode()
                             }
                             EditMode.MOVE -> {
-                                gestureStartX = event.x; gestureStartY = event.y
-                                currentPath.reset()  // ═══ nettoie le path fantôme ═══
-                                redrawBitmapOnly()
-                                imeView?.postInvalidate()
+                                exitEditMode()
                             }
                             EditMode.CORRECT_TRANSCRIPTION -> {
-                                // Mode correction : attend un clic sur une lettre
+                                // Le mode correction persiste (clics sur lettres)
                                 gestureStartX = event.x; gestureStartY = event.y
                                 currentPath.reset()
                                 redrawBitmapOnly()
                                 imeView?.postInvalidate()
                             }
                             EditMode.NONE -> {
-                                // Tap sans mouvement → désactiver
                                 exitEditMode()
                             }
+                        }
+                        if (editMode != EditMode.CORRECT_TRANSCRIPTION) {
+                            currentPath.reset()
+                            tapStrokeStarted = true
+                            redrawBitmapOnly()
+                            imeView?.postInvalidate()
+                            return true
                         }
                         return true
                     }
