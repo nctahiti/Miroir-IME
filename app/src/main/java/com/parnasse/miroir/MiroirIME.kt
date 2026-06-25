@@ -1510,8 +1510,14 @@ class MiroirIME : InputMethodService() {
             stroke.pressures.add(pressure.coerceIn(0f, 1f))
         }
         // Rafraîchir pendant le glissé (fréquence paramétrable via calibration)
-        // En mode correction → pas de refreshRect (le cadre tampon gère l'affichage)
-        if (imeView?.isCorrecting() != true) {
+        if (imeView?.isCorrecting() == true) {
+            // Mode correction : invalidate logiciel + handwritingRepaint ciblé cadre uniquement
+            val now = System.currentTimeMillis()
+            if (now - lastPointRefresh >= 33L) {  // ~30 FPS
+                lastPointRefresh = now
+                imeView?.invalidate()  // redessine le canvas (currentPath mis à jour)
+            }
+        } else {
             val interval = CalibrationActivity.getRefreshInterval(this@MiroirIME)
             val now = System.currentTimeMillis()
             if (now - lastPointRefresh >= interval) {
