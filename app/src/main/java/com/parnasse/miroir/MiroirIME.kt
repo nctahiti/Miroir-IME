@@ -529,7 +529,7 @@ class MiroirIME : InputMethodService() {
             gravity = android.view.Gravity.CENTER
         }
 
-        fun makeButton(label: String, onClick: () -> Unit): android.widget.Button {
+        fun makeButton(label: String, onLongClick: (() -> Unit)? = null, onClick: () -> Unit): android.widget.Button {
             return android.widget.Button(this).apply {
                 text = label
                 textSize = 22f  // ×5 par rapport à 12f
@@ -539,6 +539,9 @@ class MiroirIME : InputMethodService() {
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
                 setOnClickListener { onClick() }
+                if (onLongClick != null) {
+                    setOnLongClickListener { onLongClick(); true }
+                }
             }
         }
 
@@ -559,7 +562,9 @@ class MiroirIME : InputMethodService() {
             startActivity(intent)
         })
 
-        toolbar.addView(makeButton("◀") {
+        toolbar.addView(makeButton("◀", {
+            showBlockList()
+        }) {
             if (currentPageIndex > 0) {
                 savePage()
                 currentPageIndex--
@@ -581,7 +586,9 @@ class MiroirIME : InputMethodService() {
         }.also { this.pageLabel = it }
         toolbar.addView(pageLabel)
 
-        toolbar.addView(makeButton("▶") {
+        toolbar.addView(makeButton("▶", {
+            showAllTranscriptions()
+        }) {
             savePage()
             currentPageIndex++
             if (!loadPage(currentPageIndex)) {
@@ -1759,6 +1766,89 @@ class MiroirIME : InputMethodService() {
         // Si aucune page sauvegardée → utiliser la page courante uniquement
         if (sb.isEmpty()) return buildReadingOrderText()
         return sb.toString()
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // MENUS CONTEXTUELS (clic long ◀ et ▶)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /** Clic long ◀ — Liste des blocs disponibles. */
+    private fun showBlockList() {
+        val blocksDir = java.io.File(cacheDir, "blocks")
+        val blocks = blocksDir.listFiles()
+            ?.filter { it.isDirectory }
+            ?.sortedByDescending { it.lastModified() }
+            ?: emptyList()
+
+        if (blocks.isEmpty()) {
+            android.widget.Toast.makeText(this, "Aucun bloc sauvegardé", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val items = blocks.map { dir ->
+            val name = dir.name
+            // Format : appName_timestamp
+            val lastUnderscore = name.lastIndexOf('_')
+            val appName = if (lastUnderscore > 0) name.substring(0, lastUnderscore).replace("_", ".") else "inconnu"
+            val ts = if (lastUnderscore > 0) name.substring(lastUnderscore + 1).toLongOrNull() ?: 0L else 0L
+            val date = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ts))
+            val pageCount = dir.listFiles()?.count { it.isDirectory && it.name.startsWith("page_") } ?: 0
+            val current = dir == blockDir
+            val prefix = if (current) "▸ " else "  "
+            "$prefix$appName — $date ($pageCount p.)"
+        }.toTypedArray()
+
+        val dirs = blocks.toTypedArray()
+
+        android.app.AlertDialog.Builder(this@MiroirIME, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Blocs (${blocks.size})")
+            .setItems(items) { _, which ->
+                val selected = dirs[which]
+                // Charger ce bloc (closeBlock puis reopen)
+                closeBlock()
+                val name = selected.name
+                val lastUnderscore = name.lastIndexOf('_')
+                val appName = if (lastUnderscore > 0) name.substring(0, lastUnderscore).replace("_", ".") else "unknown"
+                val ts = if (lastUnderscore > 0) name.substring(lastUnderscore + 1).toLongOrNull() ?: System.currentTimeMillis() else System.currentTimeMillis()
+                hostAppName = appName
+                blockTimestamp = ts
+                blockDir = selected
+                currentPageIndex = 0
+                clearPage()
+                loadPage(0)
+                refreshAll()
+                updatePageIndicator()
+                Log.i(TAG, "Bloc chargé via menu: ${selected.name}")
+            }
+            .setNegativeButton("Annuler", null)
+            .show()
+    }
+
+    /** Clic long ▶ — Toutes les transcriptions formatées (tel qu'injecté à la validation). */
+    private fun showAllTranscriptions() {
+        val fullText = buildAllPagesText()
+
+        if (fullText.isBlank()) {
+            android.widget.Toast.makeText(this, "Aucune transcription", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // ScrollView pour les longs textes
+        val scrollView = android.widget.ScrollView(this@MiroirIME)
+        val textView = android.widget.TextView(this@MiroirIME).apply {
+            text = fullText
+            textSize = 16f
+            setTextColor(android.graphics.Color.BLACK)
+            setPadding(40, 30, 40, 30)
+            setLineSpacing(4f, 1.2f)
+        }
+        scrollView.addView(textView)
+
+        android.app.AlertDialog.Builder(this@MiroirIME, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Transcriptions (${groupLabels.size} labels)")
+            .setView(scrollView)
+            .setPositiveButton("Fermer", null)
+            .show()
     }
 
     /** Ancienne injection continue — remplacée par buildReadingOrderText() à la validation. */
