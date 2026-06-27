@@ -891,6 +891,11 @@ class MiroirIME : InputMethodService() {
                         groupBlobs[gid]?.let { canvas.drawPath(it.path, blobPaint) }
                     }
                 }
+                // ═══ Blob témoin de sélection (toujours visible sur le groupe SELECTED) ═══
+                val selectedGroup = groupManager?.groupsInState(GroupState.SELECTED)?.firstOrNull()
+                if (selectedGroup != null) {
+                    groupBlobs[selectedGroup.id]?.let { canvas.drawPath(it.path, blobPaint) }
+                }
             }
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             // ═══ Mode correction : cadre-tampon + filtre ═══
@@ -991,19 +996,12 @@ class MiroirIME : InputMethodService() {
                         return true
                     }
 
-                    // ═══ Sélection visuelle (sans transition GroupManager) ═══
+                    // ═══ Détection du blob sous le stylet (pour long-press, pas d'affichage) ═══
                     activeBlobGroupId = null
                     for ((gid, data) in groupBlobs) {
                         if (data.bounds.contains(event.x, event.y)) {
                             activeBlobGroupId = gid
                             break
-                        }
-                    }
-                    // Si aucun blob trouvé sous le stylet, mais un groupe est SELECTED → garder son blob visible
-                    if (activeBlobGroupId == null) {
-                        val selectedGroup = groupManager?.groupsInState(GroupState.SELECTED)?.firstOrNull()
-                        if (selectedGroup != null && groupBlobs.containsKey(selectedGroup.id)) {
-                            activeBlobGroupId = selectedGroup.id
                         }
                     }
                     // ═══ Armer le long-press (500ms) pour sélection + absorption ═══
