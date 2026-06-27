@@ -507,6 +507,9 @@ class MiroirIME : InputMethodService() {
     // LIFECYCLE IME
     // ═══════════════════════════════════════════════════════════════════
 
+    /** Mode plein écran uniquement en capture (✍) ; mode clavier en mise en forme (📝). */
+    override fun onEvaluateFullscreenMode(): Boolean = !isFormattingMode
+
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "MiroirIME — Portail d'écriture universel — création")
@@ -2160,6 +2163,8 @@ class MiroirIME : InputMethodService() {
         isFormattingMode = !isFormattingMode
         if (isFormattingMode) {
             // ═══ MODE MISE EN FORME ═══
+            // Forcer le mode clavier (non plein écran) → app hôte visible
+            updateFullscreenMode()
             // Fond semi-transparent pour voir l'app hôte derrière
             root.setBackgroundColor(Color.argb(180, 20, 20, 20))
             // Cacher la surface de capture, montrer le panneau
@@ -2176,6 +2181,8 @@ class MiroirIME : InputMethodService() {
             modeIndicator?.text = "📝"
         } else {
             // ═══ MODE CAPTURE ═══
+            // Repasser en plein écran
+            updateFullscreenMode()
             root.setBackgroundColor(Color.WHITE)
             panel.visibility = View.GONE
             surface.visibility = View.VISIBLE
