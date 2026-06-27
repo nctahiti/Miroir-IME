@@ -56,10 +56,10 @@ class GroupManager(
      */
     var pointProvider: ((Long) -> List<Pair<Float, Float>>?)? = null
 
-    fun onStrokeSealed(stroke: InkStroke) {
-        if (stroke.wasCanceled || stroke.points.isEmpty()) return
+    fun onStrokeSealed(stroke: InkStroke): InkGroup? {
+        if (stroke.wasCanceled || stroke.points.isEmpty()) return null
         val strokeBounds = BlobAbsorber.computeBounds(stroke)
-        if (strokeBounds.isEmpty) return
+        if (strokeBounds.isEmpty) return null
 
         // ═══ 1. Priorité au groupe SELECTED ═══
         val selected = machine.pendingGroupId?.let { groups[it] }
@@ -98,6 +98,7 @@ class GroupManager(
         group.modifiedAt = System.currentTimeMillis()
         Log.d(TAG, "Stroke #" + stroke.id + " -> groupe " + group.id + " (" + group.strokeCount + " strokes)")
         resetTranscriptionTimeout(group)
+        return group
     }
 
     /**

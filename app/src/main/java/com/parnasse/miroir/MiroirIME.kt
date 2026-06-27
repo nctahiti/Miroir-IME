@@ -1660,10 +1660,12 @@ class MiroirIME : InputMethodService() {
 
         // ═══ GroupManager : groupement spatial ═══
         val inkStroke = strokeRecordToInkStroke(stroke, inkId)
-        groupManager?.onStrokeSealed(inkStroke)
+        val affectedGroup = groupManager?.onStrokeSealed(inkStroke)
 
-        // Armer le timer d'inférence pour les groupes modifiés
-        scheduleGroupInference()
+        // Armer le timer d'inférence UNIQUEMENT pour le groupe modifié
+        if (affectedGroup != null && !isFormattingMode) {
+            armTimerForGroup(affectedGroup)
+        }
 
         // ═══ Rafraîchir uniquement la zone du stroke ═══
         // En mode correction → pas de refreshRect (le cadre tampon gère l'affichage)
@@ -1735,6 +1737,47 @@ class MiroirIME : InputMethodService() {
             timer.cancel(false)
         }
         groupTimers.clear()
+    }
+
+    /** Arme le timer d'inférence pour UN SEUL groupe (O(1) au lieu de O(n)). */
+    private fun armTimerForGroup(group: InkGroup) {
+        val gm = groupManager ?: return
+        if (group.strokeIds.isEmpty()) return
+        val firstIdx = inkStrokeIdToRegistryIndex[group.strokeIds.first()] ?: return
+        val strokeCount = group.strokeIds.size
+        val now = System.currentTimeMillis()
+
+        // Déjà inféré mais modifié → permettre la ré-inférence
+        val infCount = groupStrokeCountAtInference[firstIdx]
+        if (firstIdx in inferredGroupFirstIdxs) {
+            if (infCount != null && strokeCount == infCount) return  // vraiment inchangé
+            inferredGroupFirstIdxs.remove(firstIdx)
+        }
+
+        // Réarmer seulement si le groupe a changé
+        val countChanged = timerArmedStrokeCount[firstIdx] != strokeCount
+        if (groupTimers.containsKey(firstIdx) && !countChanged) return
+
+        val inferDelay = CalibrationActivity.getAutoInferDelay(this)
+        groupLastModifiedMs[firstIdx] = now
+        groupTimers.remove(firstIdx)?.cancel(false)
+
+        // Ancrer le groupe si nouveau
+        if (groupAnchor[firstIdx] == null) {
+            val cx = if (!group.bounds.isEmpty) group.bounds.centerX()
+                     else strokeRegistry.getOrNull(firstIdx)?.points?.firstOrNull()?.first ?: 0f
+            val cy = if (!group.bounds.isEmpty) group.bounds.centerY()
+                     else strokeRegistry.getOrNull(firstIdx)?.points?.firstOrNull()?.second ?: 0f
+            groupAnchor[firstIdx] = Pair(cx, cy)
+        }
+        timerArmedAt[firstIdx] = now
+        timerArmedStrokeCount[firstIdx] = strokeCount
+
+        val capturedFirstIdx = firstIdx
+        val timer = inferExecutor.schedule({
+            armGroupInference(capturedFirstIdx)
+        }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
+        groupTimers[firstIdx] = timer
     }
 
     /** Appelé après chaque stroke pour armer le timer du groupe modifié. */
