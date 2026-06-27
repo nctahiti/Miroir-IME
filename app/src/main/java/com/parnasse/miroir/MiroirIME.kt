@@ -2150,23 +2150,18 @@ class MiroirIME : InputMethodService() {
     // ═══ Bascule capture / mise en forme ═══
 
     /** Active/désactive le panneau de mise en forme.
-     *  En mode 📝 : IME réduit à ~220dp, fond semi-transparent → l'app hôte est visible derrière.
+     *  En mode 📝 : fond semi-transparent → l'app hôte est visible derrière.
      *  Le stylet n'est plus en mode capture : il sert de curseur (déplacement, sélection). */
     private fun toggleFormattingMode() {
         val panel = formattingPanel ?: return
         val surface = imeView ?: return
         val root = rootView ?: return
-        val density = resources.displayMetrics.density
 
         isFormattingMode = !isFormattingMode
         if (isFormattingMode) {
             // ═══ MODE MISE EN FORME ═══
-            // Réduire l'IME à ~220dp pour voir l'app derrière
-            val panelHeight = (220 * density).toInt()
-            root.layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, panelHeight)
-            // Fond semi-transparent pour voir l'app hôte
-            root.setBackgroundColor(Color.argb(215, 30, 30, 30))
+            // Fond semi-transparent pour voir l'app hôte derrière
+            root.setBackgroundColor(Color.argb(180, 20, 20, 20))
             // Cacher la surface de capture, montrer le panneau
             surface.visibility = View.GONE
             panel.visibility = View.VISIBLE
@@ -2179,19 +2174,13 @@ class MiroirIME : InputMethodService() {
             } else buildAllPagesText()
             formattingTextField?.text = currentText
             modeIndicator?.text = "📝"
-            root.requestLayout()
         } else {
             // ═══ MODE CAPTURE ═══
-            // Rétablir le plein écran
-            root.layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT)
             root.setBackgroundColor(Color.WHITE)
             panel.visibility = View.GONE
             surface.visibility = View.VISIBLE
             modeIndicator?.text = "✍"
             surface.invalidate()
-            root.requestLayout()
         }
     }
 
