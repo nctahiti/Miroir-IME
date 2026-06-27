@@ -115,6 +115,7 @@ class MiroirIME : InputMethodService() {
      private var formattingPanel: android.widget.LinearLayout? = null
      private var isFormattingMode = false
      private var formattingTextField: android.widget.TextView? = null
+     private var rootView: android.widget.FrameLayout? = null  // pour ajuster la hauteur au toggle
 
      /** Panneau overlay pour menus contextuels (affiche par-dessus la surface de capture). */
      private var overlayPanel: android.widget.LinearLayout? = null
@@ -544,6 +545,7 @@ class MiroirIME : InputMethodService() {
                 ViewGroup.LayoutParams.MATCH_PARENT)
             setBackgroundColor(Color.WHITE)
         }
+        rootView = root
 
         // ── Contenu principal (toolbar + surface) ─────────────────────
         val mainContent = android.widget.LinearLayout(this).apply {
@@ -958,6 +960,8 @@ class MiroirIME : InputMethodService() {
         }
         override fun onTouchEvent(event: MotionEvent): Boolean {
             if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
+            // En mode mise en forme, le stylet agit comme curseur (pas de capture)
+            if (isFormattingMode) return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> { /* ignoré — IME ne reçoit pas ces événements */ }
                 MotionEvent.ACTION_DOWN -> {
@@ -2145,14 +2149,25 @@ class MiroirIME : InputMethodService() {
 
     // ═══ Bascule capture / mise en forme ═══
 
-    /** Active/désactive le panneau de mise en forme. */
+    /** Active/désactive le panneau de mise en forme.
+     *  En mode 📝 : IME réduit à ~220dp, fond semi-transparent → l'app hôte est visible derrière.
+     *  Le stylet n'est plus en mode capture : il sert de curseur (déplacement, sélection). */
     private fun toggleFormattingMode() {
         val panel = formattingPanel ?: return
         val surface = imeView ?: return
+        val root = rootView ?: return
+        val density = resources.displayMetrics.density
 
         isFormattingMode = !isFormattingMode
         if (isFormattingMode) {
-            // Passer en mode mise en forme
+            // ═══ MODE MISE EN FORME ═══
+            // Réduire l'IME à ~220dp pour voir l'app derrière
+            val panelHeight = (220 * density).toInt()
+            root.layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, panelHeight)
+            // Fond semi-transparent pour voir l'app hôte
+            root.setBackgroundColor(Color.argb(215, 30, 30, 30))
+            // Cacher la surface de capture, montrer le panneau
             surface.visibility = View.GONE
             panel.visibility = View.VISIBLE
             // Afficher le texte courant
@@ -2164,13 +2179,19 @@ class MiroirIME : InputMethodService() {
             } else buildAllPagesText()
             formattingTextField?.text = currentText
             modeIndicator?.text = "📝"
+            root.requestLayout()
         } else {
-            // Revenir en mode capture
+            // ═══ MODE CAPTURE ═══
+            // Rétablir le plein écran
+            root.layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT)
+            root.setBackgroundColor(Color.WHITE)
             panel.visibility = View.GONE
             surface.visibility = View.VISIBLE
             modeIndicator?.text = "✍"
-            // Rafraîchir la surface
             surface.invalidate()
+            root.requestLayout()
         }
     }
 
