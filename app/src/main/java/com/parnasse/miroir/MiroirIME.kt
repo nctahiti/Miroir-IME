@@ -2153,8 +2153,8 @@ class MiroirIME : InputMethodService() {
     // ═══ Bascule capture / mise en forme ═══
 
     /** Active/désactive le panneau de mise en forme.
-     *  En mode 📝 : fond semi-transparent → l'app hôte est visible derrière.
-     *  Le stylet n'est plus en mode capture : il sert de curseur (déplacement, sélection). */
+     *  En mode 📝 : mode clavier (non plein écran) → l'app hôte est visible au-dessus.
+     *  Le stylet n'est plus en mode capture : il sert de curseur. */
     private fun toggleFormattingMode() {
         val panel = formattingPanel ?: return
         val surface = imeView ?: return
@@ -2163,10 +2163,11 @@ class MiroirIME : InputMethodService() {
         isFormattingMode = !isFormattingMode
         if (isFormattingMode) {
             // ═══ MODE MISE EN FORME ═══
-            // Forcer le mode clavier (non plein écran) → app hôte visible
+            // Forcer le mode clavier (non plein écran) → app hôte visible au-dessus
             updateFullscreenMode()
-            // Fond semi-transparent pour voir l'app hôte derrière
-            root.setBackgroundColor(Color.argb(180, 20, 20, 20))
+            // Fond transparent pour voir l'app hôte
+            root.setBackgroundColor(Color.TRANSPARENT)
+            panel.setBackgroundColor(Color.TRANSPARENT)
             // Cacher la surface de capture, montrer le panneau
             surface.visibility = View.GONE
             panel.visibility = View.VISIBLE
