@@ -20,7 +20,7 @@ Miroir is an Android `InputMethodService` that replaces the standard keyboard wi
 - **Real-time transcription** — ML Kit Digital Ink Recognition, re-inference after correction
 - **Visual feedback** — absorption blob around words, transcription labels, baselines
 - **Optimized for e-ink** — DU/GU/REGAL modes, partial refresh, double buffer
-- **Standalone notepad** — MiroirActivity for decoupled use without a host application
+- **Standalone notepad** — CaptureActivity for decoupled use without a host application
 - **Open dataset** — validated correction pairs contributed anonymously to the ODbL HTR dataset
 
 ---
@@ -90,7 +90,7 @@ You correct because it is useful — the community benefits as a side effect.
 └─────────────────────────────────────────────────────┘
          │
          ▼
-  MiroirActivity (standalone notepad, local .note storage)
+  CaptureActivity (standalone notepad, local .note storage)
 ```
 
 ### Key components
