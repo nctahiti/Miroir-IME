@@ -114,7 +114,6 @@ class MiroirIME : InputMethodService() {
      // ── Vue clavier mise en forme ─────────────────────────────────────
      private var formattingPanel: android.widget.LinearLayout? = null
      private var isFormattingMode = false
-     private var formattingTextField: android.widget.TextView? = null
      private var rootView: android.widget.FrameLayout? = null  // pour ajuster la hauteur au toggle
 
      /** Panneau overlay pour menus contextuels (affiche par-dessus la surface de capture). */
@@ -765,20 +764,6 @@ class MiroirIME : InputMethodService() {
         formatRow3.addView(makeActionBtn("↩ Retour") { injectText("\n") })
         formatRow3.addView(makeActionBtn("⇥ Tab") { injectText("\t") })
         formattingPanel?.addView(formatRow3)
-
-        // ── Champ texte (affichage du texte courant) ──
-        formattingTextField = android.widget.TextView(this).apply {
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0, 1f)
-            textSize = 20f
-            setTextColor(Color.argb(255, 220, 220, 220))
-            setBackgroundColor(Color.argb(40, 255, 255, 255))
-            setPadding((12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt())
-            gravity = android.view.Gravity.TOP or android.view.Gravity.START
-            text = ""
-        }
-        formattingPanel?.addView(formattingTextField)
 
         // ── Bouton retour capture ──
         val backToCaptureBtn = android.widget.Button(this).apply {
@@ -2171,17 +2156,6 @@ class MiroirIME : InputMethodService() {
             // Cacher la surface de capture + toolbar, montrer le panneau
             surface.visibility = View.GONE
             panel.visibility = View.VISIBLE
-            // Assombrir le champ texte
-            formattingTextField?.setBackgroundColor(Color.argb(80, 255, 255, 255))
-            formattingTextField?.setTextColor(Color.argb(255, 220, 220, 220))
-            // Afficher le texte courant
-            val ic = currentInputConnection
-            val currentText = if (ic != null) {
-                val before = ic.getTextBeforeCursor(5000, 0) ?: ""
-                val after = ic.getTextAfterCursor(5000, 0) ?: ""
-                before.toString() + after.toString()
-            } else buildAllPagesText()
-            formattingTextField?.text = currentText
             modeIndicator?.text = "📝"
         } else {
             // ═══ MODE CAPTURE ═══
@@ -2200,10 +2174,6 @@ class MiroirIME : InputMethodService() {
         val ic = currentInputConnection
         if (ic != null) {
             ic.commitText(text, 1)
-            // Mettre à jour l'affichage
-            val before = ic.getTextBeforeCursor(5000, 0) ?: ""
-            val after = ic.getTextAfterCursor(5000, 0) ?: ""
-            formattingTextField?.text = before.toString() + after.toString()
         }
     }
 
@@ -2220,10 +2190,6 @@ class MiroirIME : InputMethodService() {
             val combined = before.toString() + after.toString()
             ic.commitText("$markdown$combined$markdown", 1)
         }
-        // Mettre à jour l'affichage
-        val updatedBefore = ic.getTextBeforeCursor(5000, 0) ?: ""
-        val updatedAfter = ic.getTextAfterCursor(5000, 0) ?: ""
-        formattingTextField?.text = updatedBefore.toString() + updatedAfter.toString()
     }
 
     /** Affiche un panneau overlay (cache la surface de capture). */
