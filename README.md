@@ -197,8 +197,9 @@ adb shell am force-stop com.parnasse.miroir.v4
 - [`docs/MIROIR-ARCHITECTURE-PRIOR-ART.md`](docs/MIROIR-ARCHITECTURE-PRIOR-ART.md) — complete system architecture disclosure (Apache 2.0)
 - [`docs/format-note.md`](docs/format-note.md) — `.note` format specification (parnasse.note.v1)
 - [`docs/dataset-libre.md`](docs/dataset-libre.md) — open HTR dataset vision, anonymization, ODbL
-- [Conduit V★ — Zenodo prior art (CC0)](https://zenodo.org/[doi-to-complete]) — binary delta protocol
-- [UxK — Zenodo prior art (CC0)](https://zenodo.org/[doi-to-complete]) — gesture vocabulary
+- [Conduit V★ — Zenodo prior art (CC0)](https://doi.org/10.5281/zenodo.20964421) — binary delta protocol
+- [UxK — Zenodo prior art (CC0)](https://doi.org/10.5281/zenodo.20965531) — gesture vocabulary
+- [Miroir IME — Zenodo prior art (CC0)](https://zenodo.org/records/20969687) — system architecture disclosure
 
 ---
 

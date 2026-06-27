@@ -820,9 +820,9 @@ The following concepts are established and are NOT claimed as original:
 
 | Disclosure | Topic | License | Status |
 |------------|-------|---------|--------|
-| **UxK — Kinetic UX** | Four-directional long-press gesture vocabulary, state machine, symbiotic annotation loop | CC0 | Zenodo |
-| **Conduit V★** | Fixed-width 13-byte binary delta streaming protocol | CC0 | Zenodo |
-| **Miroir IME** (this document) | Complete system architecture: capture, grouping, inference, persistence, EPD control | Apache 2.0 | GitHub + Zenodo |
+|| **UxK — Kinetic UX** | Four-directional long-press gesture vocabulary, state machine, symbiotic annotation loop | CC0 | [10.5281/zenodo.20965531](https://doi.org/10.5281/zenodo.20965531) |
+|| **Conduit V★** | Fixed-width 13-byte binary delta streaming protocol | CC0 | [10.5281/zenodo.20964421](https://doi.org/10.5281/zenodo.20964421) |
+|| **Miroir IME** (this document) | Complete system architecture: capture, grouping, inference, persistence, EPD control | Apache 2.0 | [zenodo.org/records/20969687](https://zenodo.org/records/20969687) |
 
 The three disclosures are designed to be read independently. UxK and Conduit cover components; Miroir covers the system that integrates them. Each can be implemented separately.
 
@@ -859,7 +859,7 @@ The reference implementation at https://github.com/nctahiti/Miroir-IME is the au
 **Date:** June 27, 2026  
 **Project:** Miroir IME — Parnasse ecosystem  
 **License:** Apache License 2.0  
-**Zenodo DOI:** [to be completed upon submission]
+**Zenodo DOI:** [10.5281/zenodo.20969687](https://doi.org/10.5281/zenodo.20969687)
 
 ---
 
