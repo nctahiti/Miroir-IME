@@ -999,6 +999,13 @@ class MiroirIME : InputMethodService() {
                             break
                         }
                     }
+                    // Si aucun blob trouvé sous le stylet, mais un groupe est SELECTED → garder son blob visible
+                    if (activeBlobGroupId == null) {
+                        val selectedGroup = groupManager?.groupsInState(GroupState.SELECTED)?.firstOrNull()
+                        if (selectedGroup != null && groupBlobs.containsKey(selectedGroup.id)) {
+                            activeBlobGroupId = selectedGroup.id
+                        }
+                    }
                     // ═══ Armer le long-press (500ms) pour sélection + absorption ═══
                     // Si le stylet reste immobile sur un blob → selectGroup()
                     cancelLongPressRunnable()
