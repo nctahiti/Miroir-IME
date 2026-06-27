@@ -719,8 +719,8 @@ class MiroirIME : InputMethodService() {
             return android.widget.Button(this).apply {
                 text = label
                 textSize = 18f
-                setTextColor(Color.DKGRAY)
-                setBackgroundColor(Color.argb(60, 200, 200, 200))
+                setTextColor(Color.argb(255, 200, 200, 200))
+                setBackgroundColor(Color.argb(100, 60, 60, 70))
                 setPadding((10 * density).toInt(), (6 * density).toInt(), (10 * density).toInt(), (6 * density).toInt())
                 setOnClickListener { injectMarkdown(markdown) }
             }
@@ -755,8 +755,8 @@ class MiroirIME : InputMethodService() {
             return android.widget.Button(this).apply {
                 text = label
                 textSize = 16f
-                setTextColor(Color.DKGRAY)
-                setBackgroundColor(Color.argb(60, 180, 200, 220))
+                setTextColor(Color.argb(255, 180, 200, 220))
+                setBackgroundColor(Color.argb(100, 50, 60, 80))
                 setPadding((12 * density).toInt(), (6 * density).toInt(), (12 * density).toInt(), (6 * density).toInt())
                 setOnClickListener { action() }
             }
@@ -772,8 +772,8 @@ class MiroirIME : InputMethodService() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0, 1f)
             textSize = 20f
-            setTextColor(Color.DKGRAY)
-            setBackgroundColor(Color.argb(30, 240, 240, 240))
+            setTextColor(Color.argb(255, 220, 220, 220))
+            setBackgroundColor(Color.argb(40, 255, 255, 255))
             setPadding((12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt())
             gravity = android.view.Gravity.TOP or android.view.Gravity.START
             text = ""
@@ -784,8 +784,8 @@ class MiroirIME : InputMethodService() {
         val backToCaptureBtn = android.widget.Button(this).apply {
             text = "✎ Retour écriture"
             textSize = 20f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.argb(220, 60, 60, 60))
+            setTextColor(Color.argb(255, 200, 200, 200))
+            setBackgroundColor(Color.argb(180, 50, 55, 65))
             setPadding((16 * density).toInt(), (14 * density).toInt(), (16 * density).toInt(), (14 * density).toInt())
             layoutParams = android.widget.LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -2165,12 +2165,15 @@ class MiroirIME : InputMethodService() {
             // ═══ MODE MISE EN FORME ═══
             // Forcer le mode clavier (non plein écran) → app hôte visible au-dessus
             updateFullscreenMode()
-            // Fond transparent pour voir l'app hôte
+            // Fond sombre semi-transparent pour le panneau
             root.setBackgroundColor(Color.TRANSPARENT)
-            panel.setBackgroundColor(Color.TRANSPARENT)
-            // Cacher la surface de capture, montrer le panneau
+            panel.setBackgroundColor(Color.argb(230, 18, 20, 26))
+            // Cacher la surface de capture + toolbar, montrer le panneau
             surface.visibility = View.GONE
             panel.visibility = View.VISIBLE
+            // Assombrir le champ texte
+            formattingTextField?.setBackgroundColor(Color.argb(80, 255, 255, 255))
+            formattingTextField?.setTextColor(Color.argb(255, 220, 220, 220))
             // Afficher le texte courant
             val ic = currentInputConnection
             val currentText = if (ic != null) {
