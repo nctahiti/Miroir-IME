@@ -111,6 +111,11 @@ class MiroirIME : InputMethodService() {
      /** Témoin de mode dans la barre d'outils (✍ plume · ⌛ montre · ↕ déplacement). */
      private var modeIndicator: android.widget.TextView? = null
 
+     // ── Vue clavier mise en forme ─────────────────────────────────────
+     private var formattingPanel: android.widget.LinearLayout? = null
+     private var isFormattingMode = false
+     private var formattingTextField: android.widget.TextView? = null
+
      /** Panneau overlay pour menus contextuels (affiche par-dessus la surface de capture). */
      private var overlayPanel: android.widget.LinearLayout? = null
 
@@ -645,6 +650,12 @@ class MiroirIME : InputMethodService() {
             updatePageIndicator()
         })
 
+        // ═══ Bascule capture / mise en forme ═══
+        val formattingToggleBtn = makeButton("📝") {
+            toggleFormattingMode()
+        }
+        toolbar.addView(formattingToggleBtn)
+
         toolbar.addView(makeButton("✕") {
             // ═══ Fermer le bloc (vider le champ + sauvegarder + libérer) ═══
             val ic = currentInputConnection
@@ -681,6 +692,103 @@ class MiroirIME : InputMethodService() {
          // Initialisation du séquenceur de modes (État A) — la surface IME est la cible EPD
          displayController = DisplayController(OnyxEpdPort(surface))
         mainContent.addView(surface)
+
+        // ═══ Panneau de mise en forme (caché par défaut) ═══
+        formattingPanel = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0, 1f)
+            setBackgroundColor(Color.WHITE)
+            setPadding((16 * density).toInt(), (12 * density).toInt(), (16 * density).toInt(), (12 * density).toInt())
+            visibility = View.GONE
+        }
+
+        // ── Rangée 1 : mise en forme markdown ──
+        val formatRow1 = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        fun makeFmtBtn(label: String, markdown: String): android.widget.Button {
+            return android.widget.Button(this).apply {
+                text = label
+                textSize = 18f
+                setTextColor(Color.DKGRAY)
+                setBackgroundColor(Color.argb(60, 200, 200, 200))
+                setPadding((10 * density).toInt(), (6 * density).toInt(), (10 * density).toInt(), (6 * density).toInt())
+                setOnClickListener { injectMarkdown(markdown) }
+            }
+        }
+        formatRow1.addView(makeFmtBtn("B", "**"))
+        formatRow1.addView(makeFmtBtn("I", "*"))
+        formatRow1.addView(makeFmtBtn("S", "~~"))
+        formatRow1.addView(makeFmtBtn("#", "# "))
+        formatRow1.addView(makeFmtBtn("•", "- "))
+        formatRow1.addView(makeFmtBtn("1.", "1. "))
+        formatRow1.addView(makeFmtBtn(">", "> "))
+        formattingPanel?.addView(formatRow1)
+
+        // ── Rangée 2 : ponctuation + espace + retour ligne ──
+        val formatRow2 = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        for (punct in listOf(".", ",", "!", "?", ";", ":", "—", "\"", "(", ")")) {
+            formatRow2.addView(makeFmtBtn(punct, punct))
+        }
+        formattingPanel?.addView(formatRow2)
+
+        // ── Rangée 3 : espace, retour, tab ──
+        val formatRow3 = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        fun makeActionBtn(label: String, action: () -> Unit): android.widget.Button {
+            return android.widget.Button(this).apply {
+                text = label
+                textSize = 16f
+                setTextColor(Color.DKGRAY)
+                setBackgroundColor(Color.argb(60, 180, 200, 220))
+                setPadding((12 * density).toInt(), (6 * density).toInt(), (12 * density).toInt(), (6 * density).toInt())
+                setOnClickListener { action() }
+            }
+        }
+        formatRow3.addView(makeActionBtn("␣ Espace") { injectText(" ") })
+        formatRow3.addView(makeActionBtn("↩ Retour") { injectText("\n") })
+        formatRow3.addView(makeActionBtn("⇥ Tab") { injectText("\t") })
+        formattingPanel?.addView(formatRow3)
+
+        // ── Champ texte (affichage du texte courant) ──
+        formattingTextField = android.widget.TextView(this).apply {
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0, 1f)
+            textSize = 20f
+            setTextColor(Color.DKGRAY)
+            setBackgroundColor(Color.argb(30, 240, 240, 240))
+            setPadding((12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt(), (12 * density).toInt())
+            gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            text = ""
+        }
+        formattingPanel?.addView(formattingTextField)
+
+        // ── Bouton retour capture ──
+        val backToCaptureBtn = android.widget.Button(this).apply {
+            text = "✎ Retour écriture"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.argb(220, 60, 60, 60))
+            setPadding((16 * density).toInt(), (14 * density).toInt(), (16 * density).toInt(), (14 * density).toInt())
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setOnClickListener { toggleFormattingMode() }
+        }
+        formattingPanel?.addView(backToCaptureBtn)
+
+        mainContent.addView(formattingPanel)
 
         root.post {
             // Mesurer la toolbar pour les taps stylet
@@ -2034,6 +2142,68 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
     // MENUS CONTEXTUELS (clic long ◀ et ▶)
     // ═══════════════════════════════════════════════════════════════════
+
+    // ═══ Bascule capture / mise en forme ═══
+
+    /** Active/désactive le panneau de mise en forme. */
+    private fun toggleFormattingMode() {
+        val panel = formattingPanel ?: return
+        val surface = imeView ?: return
+
+        isFormattingMode = !isFormattingMode
+        if (isFormattingMode) {
+            // Passer en mode mise en forme
+            surface.visibility = View.GONE
+            panel.visibility = View.VISIBLE
+            // Afficher le texte courant
+            val ic = currentInputConnection
+            val currentText = if (ic != null) {
+                val before = ic.getTextBeforeCursor(5000, 0) ?: ""
+                val after = ic.getTextAfterCursor(5000, 0) ?: ""
+                before.toString() + after.toString()
+            } else buildAllPagesText()
+            formattingTextField?.text = currentText
+            modeIndicator?.text = "📝"
+        } else {
+            // Revenir en mode capture
+            panel.visibility = View.GONE
+            surface.visibility = View.VISIBLE
+            modeIndicator?.text = "✍"
+            // Rafraîchir la surface
+            surface.invalidate()
+        }
+    }
+
+    /** Injecte du texte brut dans le champ hôte. */
+    private fun injectText(text: String) {
+        val ic = currentInputConnection
+        if (ic != null) {
+            ic.commitText(text, 1)
+            // Mettre à jour l'affichage
+            val before = ic.getTextBeforeCursor(5000, 0) ?: ""
+            val after = ic.getTextAfterCursor(5000, 0) ?: ""
+            formattingTextField?.text = before.toString() + after.toString()
+        }
+    }
+
+    /** Injecte une balise markdown (ex: **, *, # ). */
+    private fun injectMarkdown(markdown: String) {
+        val ic = currentInputConnection ?: return
+        // Si la balise est un préfixe (# , - , > , 1. ), on l'insère en début de ligne
+        if (markdown.endsWith(" ")) {
+            ic.commitText("\n$markdown", 1)
+        } else {
+            // Balise enveloppante (**, *, ~~) — insère aux deux extrémités de la sélection
+            val before = ic.getTextBeforeCursor(1000, 0) ?: ""
+            val after = ic.getTextAfterCursor(1000, 0) ?: ""
+            val combined = before.toString() + after.toString()
+            ic.commitText("$markdown$combined$markdown", 1)
+        }
+        // Mettre à jour l'affichage
+        val updatedBefore = ic.getTextBeforeCursor(5000, 0) ?: ""
+        val updatedAfter = ic.getTextAfterCursor(5000, 0) ?: ""
+        formattingTextField?.text = updatedBefore.toString() + updatedAfter.toString()
+    }
 
     /** Affiche un panneau overlay (cache la surface de capture). */
     private fun showOverlay(content: View, title: String) {
