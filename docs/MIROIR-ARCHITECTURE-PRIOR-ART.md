@@ -692,7 +692,92 @@ The Conduit V★ protocol is specified in its own prior art disclosure (CC0, Zen
 
 ---
 
-## 16. Original Contributions
+## 16. Portability & Hardware Abstraction
+
+### 16.1 Architecture Designed for Extension
+
+The reference implementation targets the Boox Note Air 5C running Onyx SDK. However, the architecture was designed with a **hardware abstraction boundary** that isolates device-specific code behind replaceable interfaces. The system is structured in three portability tiers:
+
+| Tier | Component | Portability | Replacement Cost |
+|------|-----------|-------------|------------------|
+| **Core** | GroupManager, BlobAbsorber, GroupStateMachine, StrokeProcessor | 🟢 100% portable — pure algorithms, zero hardware dependencies | None |
+| **Core** | UxK gesture dispatch, DigitalInkWrapper (ML Kit), GroupPersistence (.note), VStarWriter | 🟢 100% portable — Android standard APIs | None |
+| **Abstracted** | EPD controller (EpdPort interface → OnyxEpdPort implementation) | 🟡 Interface is portable; implementation is device-specific | Write a new EpdPort adapter (~100 lines) |
+| **Abstracted** | DisplayMode (DU/GU/REGAL enum) | 🟡 Applicable to any e-ink device; irrelevant on LCD | Disable DisplayController on LCD (~10 lines) |
+| **Device-specific** | TouchHelper (Onyx Pen SDK) | 🔴 Onyx-only proprietary API | Fall back to standard `MotionEvent` (~50 lines) |
+
+### 16.2 The EpdPort Abstraction
+
+The `EpdPort` interface is the single point of e-ink dependency:
+
+```kotlin
+interface EpdPort {
+    fun setDefaultMode(mode: DisplayMode)
+    fun enablePost(enabled: Boolean)
+    fun handwritingRepaint(view: View, l: Int, t: Int, r: Int, b: Int)
+    fun refreshScreen(view: View, mode: DisplayMode)
+}
+```
+
+A new implementation for another e-ink platform (Remarkable, Kindle Scribe, Kobo Elipsa) requires only implementing these four methods with the target platform's refresh API. On LCD/OLED devices, the entire `DisplayController` can be disabled — the standard Android rendering pipeline handles ink display without modification.
+
+### 16.3 Stylus Capture Without Onyx SDK
+
+The reference implementation uses `TouchHelper` (Onyx Pen SDK) for stylus capture, which provides hover distance, azimuth, tilt, and pressure at 60+ Hz. On devices without the Onyx SDK, the system falls back to standard Android `MotionEvent`:
+
+| Data | Onyx TouchHelper | Standard MotionEvent | Impact |
+|------|-----------------|---------------------|--------|
+| Position (x, y) | ✅ | ✅ | None |
+| Pressure | ✅ | ✅ (since API 21) | None |
+| Timestamp | ✅ | ✅ | None |
+| Azimuth (orientation) | ✅ | ❌ (0xFF in VStar) | Missing dimension in VStar stream |
+| Tilt | ✅ | ❌ (0xFF in VStar) | Missing dimension in VStar stream |
+| Hover distance | ✅ | ❌ | No near-field sensing |
+
+The grouping, recognition, and annotation pipelines function identically with standard MotionEvent. Only the VStar binary stream loses two dimensions (azimuth, tilt) on non-Onyx hardware — these dimensions are marked as unsupported (`0xFF`) and are ignored by readers.
+
+### 16.4 Community Extension Model
+
+The Miroir IME is published under Apache 2.0 with the explicit intention of building a **community of contributors** who extend hardware compatibility. The model is:
+
+```
+Core architecture (this disclosure)
+  │
+  ├── Reference implementation (Boox Note Air 5C, Onyx SDK)
+  │     └── github.com/nctahiti/Miroir-IME
+  │
+  ├── Community adapters (future contributions)
+  │     ├── Remarkable 2 adapter (EpdPort + stylus capture)
+  │     ├── Kindle Scribe adapter
+  │     ├── Samsung Galaxy Tab (S Pen, LCD)
+  │     ├── iPad + Apple Pencil (port to iOS)
+  │     ├── Wacom Intuos / Cintiq
+  │     └── Generic Android (standard MotionEvent, LCD)
+  │
+  └── Shared: all adapters use the same core (GroupManager, UxK, .note format)
+```
+
+Contributors are invited to:
+1. **Write an EpdPort adapter** for their e-ink device (implement 4 methods)
+2. **Write a stylus capture adapter** if their device has a non-standard stylus API
+3. **Submit as a pull request** to the reference repository under Apache 2.0
+4. **Maintain as a fork** if platform constraints require divergent changes
+
+The `.note` format serves as the universal interchange format: strokes captured on any device, through any adapter, produce the same `parnasse.note.v1` JSON structure. The open HTR dataset (ODbL) accepts contributions from all devices — diversity of hardware improves model robustness.
+
+### 16.5 Platform Scope
+
+The immediate scope is Android (API 29+). The architecture does not depend on any Android-specific framework beyond `InputMethodService` (for the IME mode) and `Canvas` (for rendering). Porting to other platforms requires:
+
+- **iOS / iPadOS** — Replace `InputMethodService` with `UIInputViewController`; use Core Graphics for rendering; PencilKit for stylus capture
+- **Desktop (Windows, macOS, Linux)** — Replace IME with standalone application; use Wintab / XInput / libinput for stylus
+- **Web** — Replace IME with custom text input component; use Pointer Events API for stylus capture
+
+In all cases, the core algorithms (GroupManager, BlobAbsorber, UxK state machine, reading order reconstruction) remain identical. The platform adapter layer is intentionally thin.
+
+---
+
+## 17. Original Contributions
 
 The following are claimed as original contributions, to the best of the author's knowledge as of June 27, 2026:
 
@@ -716,7 +801,7 @@ The following are claimed as original contributions, to the best of the author's
 
 ---
 
-## 17. Known Prior Art (Not Claimed)
+## 18. Known Prior Art (Not Claimed)
 
 The following concepts are established and are NOT claimed as original:
 
@@ -731,7 +816,7 @@ The following concepts are established and are NOT claimed as original:
 
 ---
 
-## 18. Relationship to Companion Disclosures
+## 19. Relationship to Companion Disclosures
 
 | Disclosure | Topic | License | Status |
 |------------|-------|---------|--------|
@@ -743,7 +828,7 @@ The three disclosures are designed to be read independently. UxK and Conduit cov
 
 ---
 
-## 19. Governance
+## 20. Governance
 
 | Layer | License | Philosophy |
 |-------|---------|------------|
@@ -754,7 +839,7 @@ The three disclosures are designed to be read independently. UxK and Conduit cov
 
 ---
 
-## 20. Reference Implementation
+## 21. Reference Implementation
 
 - **Repository:** https://github.com/nctahiti/Miroir-IME
 - **Language:** Kotlin (Android, API 29+)
@@ -764,7 +849,7 @@ The three disclosures are designed to be read independently. UxK and Conduit cov
 
 ---
 
-## 21. Prior Art Declaration
+## 22. Prior Art Declaration
 
 This document is released under Apache License 2.0. Its purpose is to establish public prior art and to serve as a reference architecture for developers building handwriting capture systems on e-ink Android devices. It does not constitute a patent application.
 
