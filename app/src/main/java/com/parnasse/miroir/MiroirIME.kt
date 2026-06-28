@@ -760,7 +760,9 @@ class MiroirIME : InputMethodService() {
                 setBackgroundColor(Color.argb(100, 50, 60, 80))
                 setPadding((12 * density).toInt(), (8 * density).toInt(), (12 * density).toInt(), (8 * density).toInt())
                 layoutParams = android.widget.LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, if (weight > 0f) weight else 0f)
+                    if (weight > 0f) 0 else ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    if (weight > 0f) weight else 0f)
                 setOnClickListener { action() }
             }
         }
@@ -2224,6 +2226,7 @@ class MiroirIME : InputMethodService() {
     private fun injectText(text: String) {
         val ic = currentInputConnection ?: return
         val out = if (isShiftLocked) text.uppercase() else text
+        ic.finishComposingText()
         ic.commitText(out, 1)
     }
 
@@ -2233,6 +2236,7 @@ class MiroirIME : InputMethodService() {
      *  - Sinon → insère la paire de balises et place le curseur au milieu */
     private fun injectMarkdown(markdown: String) {
         val ic = currentInputConnection ?: return
+        ic.finishComposingText()
         // Si la balise est un préfixe (# , - , > , 1. ), on l'insère en début de ligne
         if (markdown.endsWith(" ")) {
             ic.commitText("\n$markdown", 1)
