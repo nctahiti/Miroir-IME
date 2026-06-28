@@ -394,32 +394,33 @@ class CaptureView(context: Context) : View(context) {
         textSize = 28f
         isFakeBoldText = true
     }
-    // Transcriptions par groupe (firstStrokeIndex → texte), peuplé directement à l'inférence
-    private val groupTranscriptions = mutableMapOf<Int, String>()
+    // ═══ SOURCE UNIQUE : labels par groupe (firstStrokeIndex → texte) ═══
+    // Peuplé à l'inférence et au chargement. Plus de .transcription compagnon.
+    private val groupLabels = mutableMapOf<Int, String>()
     // Compteur d'inférences par groupe (pour détecter les ré-inférences inutiles)
     private val groupInferenceCount = mutableMapOf<Int, Int>()
     // Horodatage de la dernière inférence (ms)
     private var lastInferenceTime: Long = 0
 
-    /** Appelé par CaptureActivity quand un groupe vient d'être inféré. */
+    /** Appelé par StrokeProcessor quand un groupe vient d'être inféré. */
     internal fun onGroupInferred(firstIdx: Int, text: String) {
-        groupTranscriptions[firstIdx] = text
+        groupLabels[firstIdx] = text
+        Log.d(TAG, "LABEL set: firstIdx=$firstIdx -> '$text' (${groupLabels.size} labels total)")
         throttledInvalidate()  // rafraîchir le label immédiatement
     }
 
-    /** Accès lecture pour la synchro compagnon (CaptureActivity). */
-    internal fun getGroupTranscription(firstIdx: Int): String? = groupTranscriptions[firstIdx]
+    /** Accès lecture pour les consommateurs (CaptureActivity, MiroirIME). */
+    internal fun getGroupLabel(firstIdx: Int): String? = groupLabels[firstIdx]
 
     /**
-     * Retourne les transcriptions dans l'ordre des seedGroups (JSON → ordre spatial de sauvegarde).
-     * Les nouveaux groupes (post-chargement) sont ajoutés en fin de liste.
-     * Source : groupTranscriptions (firstIdx → texte), pas le .transcription.
+     * Retourne les transcriptions dans l'ordre spatial des groupes.
+     * Source : groupLabels (firstIdx → texte) — source unique.
      */
     internal fun getOrderedTranscriptions(): List<String> {
         val groups = getSpatialGroups()
         val result = groups.mapNotNull { group ->
             val firstIdx = group.firstOrNull() ?: return@mapNotNull null
-            groupTranscriptions[firstIdx]
+            groupLabels[firstIdx]
         }.filter { it.isNotBlank() }
         Log.i(TAG, "📋 getOrderedTranscriptions: ${groups.size} groupes → ${result.size} mots → ${result.take(6).joinToString(" | ")}")
         return result
@@ -1862,9 +1863,9 @@ class CaptureView(context: Context) : View(context) {
         for ((gi, group) in groups.withIndex()) {
             if (group.isEmpty()) continue
             val wordObj = org.json.JSONObject()
-            // ═══ Transcription depuis groupTranscriptions (stable, firstIdx) — pas le paramètre (corrompu par .transcription)
+            // ═══ Transcription depuis groupLabels (source unique) ═══
             val firstIdx = group.firstOrNull()
-            val tx = if (firstIdx != null) groupTranscriptions[firstIdx] ?: "" else ""
+            val tx = if (firstIdx != null) groupLabels[firstIdx] ?: "" else ""
             wordObj.put("transcription", tx)
             wordObj.put("correction", corrections?.getOrElse(gi) { "" } ?: "")
 
@@ -1981,7 +1982,7 @@ class CaptureView(context: Context) : View(context) {
             }
             Log.i(TAG, "Note chargee: ${loadedGroups.size} groupes enregistres dans GroupManager")
 
-            // ═══ Peupler inferredGroups + groupTranscriptions depuis le .note ═══
+            // ═══ Peupler inferredGroups + groupLabels depuis le .note ═══
             for (wi in 0 until words.length()) {
                 val word = words.getJSONObject(wi)
                 val transcription = word.optString("transcription", "")
@@ -1990,16 +1991,16 @@ class CaptureView(context: Context) : View(context) {
                     inferredGroups.add(firstIdx)
                     groupStrokeCountAtInference[firstIdx] = loadedGroups[wi].size
                     if (transcription.isNotEmpty()) {
-                        groupTranscriptions[firstIdx] = transcription
+                        groupLabels[firstIdx] = transcription
                     }
                 }
             }
-            Log.i(TAG, "Note chargée: ${inferredGroups.size} groupes marqués inférés, ${groupTranscriptions.size} transcriptions")
+            Log.i(TAG, "Note chargée: ${inferredGroups.size} groupes marqués inférés, ${groupLabels.size} transcriptions")
 
             // Log : ordre des groupes après chargement
             val seedPreview = loadedGroups.take(8).mapIndexed { i, g ->
                 val fi = g.firstOrNull()
-                val tx = if (fi != null) groupTranscriptions[fi] else "?"
+                val tx = if (fi != null) groupLabels[fi] else "?"
                 "[$i]${g.size}s:$tx"
             }?.joinToString(" | ") ?: "null"
             Log.i(TAG, "📋 seedGroups ordre: $seedPreview")
@@ -3554,7 +3555,7 @@ class CaptureView(context: Context) : View(context) {
             val isSelected = groupIndices.any { it in selectedIndices }
             val state = if (isSelected) "★" else "G$gi"
             val firstIdx = groupIndices.first()
-            val transcription = groupTranscriptions[firstIdx]
+            val transcription = groupLabels[firstIdx]
             val infCount = groupInferenceCount[firstIdx]
             val countSuffix = if (infCount != null && infCount > 1) " #$infCount" else ""
             val label = "*$state-${groupIndices.size}S${transcription?.let { " $it" } ?: ""}$countSuffix"
@@ -3603,7 +3604,7 @@ class CaptureView(context: Context) : View(context) {
         inferredGroups.clear()
         groupStrokeCountAtInference.clear()
         groupLastModifiedMs.clear()
-        groupTranscriptions.clear()
+        groupLabels.clear()
         // Nettoyer les timers par groupe
         groupTimers.values.forEach { it.cancel(false) }
         groupTimers.clear()

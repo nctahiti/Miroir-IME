@@ -74,9 +74,6 @@ class StrokeProcessor(
     /** Callback optionnel appelé sur UI thread avec le bitmap rastérisé */
     var onRasterized: ((Bitmap, groupIndex: Int) -> Unit)? = null
 
-    /** Source unique de vérité pour le texte reconnu (écrit chaque mot dans .transcription) */
-    var transcriptionWriter: TranscriptionWriter? = null
-
     /**
      * Traite un groupe de strokes en arrière-plan.
      *
@@ -136,8 +133,6 @@ class StrokeProcessor(
                 // ── ÉTAPE 2 : Inférence ML Kit ──
                 val text = rec.recognize(strokesCopy, groupCopy)
                 if (text.isNotBlank()) {
-                    // ═══ SOURCE UNIQUE HORIZON : écrire dans .transcription ═══
-                    transcriptionWriter?.writeWord(snapY, text, orderIndex = groupIndex)
                     uiHandler.post { onResult(text) }
                 }
             } catch (e: Exception) {

@@ -63,11 +63,7 @@ class CaptureActivity : Activity() {
     // ── Reconnaissance ─────────────────────────────────────────────────
     private var wordRecognizer: DigitalInkWrapper? = null
     private var accumulatedText: String = ""
-    private val wordTranscriptions = mutableListOf<String>()  // pour sauvegarde
-
-    // ═══ SOURCE UNIQUE HORIZON ═══
-    /** Source unique de vérité pour le texte reconnu (fichier .transcription) */
-    private var transcriptionWriter: TranscriptionWriter? = null
+    private val wordTranscriptions = mutableListOf<String>()  // pour sauvegarde (transitoire, sera supprimé)
 
     // ── Mode ───────────────────────────────────────────────────────────
     private var isBlocNote = true
@@ -77,10 +73,6 @@ class CaptureActivity : Activity() {
     // ── Navigation pages ──────────────────────────────────────────────
     private var blocNoteFiles = mutableListOf<java.io.File>()
     private var currentPageIndex = -1  // -1 = nouvelle page
-
-    // ── Synchro compagnon .transcription (debounce 1s) ─────────────────
-    private val syncHandler = Handler(Looper.getMainLooper())
-    private var syncCompanionRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,13 +88,6 @@ class CaptureActivity : Activity() {
 
         // ── StrokeProcessor (thread background dédié) ─────
         val processor = StrokeProcessor(wordRecognizer)
-
-        // ═══ SOURCE UNIQUE HORIZON : fichier .transcription ═══
-        val noteDir = java.io.File(filesDir, "blocnote")
-        val baseName = "note_${java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())}"
-        val tw = TranscriptionWriter(noteDir, baseName, CalibrationActivity.getSpatialDistanceY(this).toFloat())
-        transcriptionWriter = tw
-        processor.transcriptionWriter = tw
 
         // ═══ RASTÉRISATION DE CONTRÔLE (V4 Horizon) ═══
         // Rastérise les strokes AVANT inférence ML Kit dans une zone
@@ -121,6 +106,8 @@ class CaptureActivity : Activity() {
         }
 
         // ── CaptureView ───────────────────────────────────
+        val noteDir = java.io.File(filesDir, "blocnote")
+        val baseName = "note_${java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())}"
         captureView = CaptureView(this).also { cv ->
             cv.strokeProcessor = processor
             // Reconnaissance automatique via StrokeProcessor (thread background)
@@ -198,8 +185,8 @@ class CaptureActivity : Activity() {
 
         // ✕ Fermer
         topBar.addView(makeToolbarButton("✕", android.graphics.Color.argb(200, 150, 0, 0)) {
-            syncTranscriptionFromGroups()
-            captureView?.saveCurrentNote(mode = "blocnote", transcriptions = transcriptionWriter?.getOrderedWords() ?: wordTranscriptions.toList())
+            Log.i(TAG, "✕ Fermeture — sauvegarde via groupLabels")
+            captureView?.saveCurrentNote(mode = "blocnote", transcriptions = captureView?.getOrderedTranscriptions() ?: emptyList())
             finish()
         })
 
@@ -240,10 +227,9 @@ class CaptureActivity : Activity() {
 
         // 💾 Sauvegarder sans changer la vue
         topBar.addView(makeToolbarButton("💾", android.graphics.Color.argb(200, 0, 100, 50)) {
-            syncTranscriptionFromGroups()
             val path = captureView?.saveCurrentNote(
                 mode = "blocnote",
-                transcriptions = transcriptionWriter?.getOrderedWords() ?: wordTranscriptions.toList()
+                transcriptions = captureView?.getOrderedTranscriptions() ?: emptyList()
             )
             if (path != null) {
                 Toast.makeText(this, "💾 Sauvegardé", Toast.LENGTH_SHORT).show()
@@ -409,105 +395,31 @@ class CaptureActivity : Activity() {
 
     /** Appelé par StrokeProcessor quand un mot est reconnu (déjà sur UI thread). */
     private fun onWordRecognized(text: String) {
-        // Le mot est DÉJÀ écrit dans le .transcription par StrokeProcessor.
-        // On recharge simplement depuis le fichier pour afficher.
-        if (isBlocNote) {
-            reloadFromTranscription()
-            scheduleCompanionSync()
-        } else {
-            // Mode Dictée : comparer au mot cible
-            val match = text.equals(currentWord, ignoreCase = true)
-            if (match) {
-            } else {
-            }
-        }
-        Log.i(TAG, "Reconnu: '$text'")
-    }
-
-    /**
-     * Recharge le texte depuis le fichier .transcription (source unique Horizon).
-     * Appelé après chaque mot reconnu, et lors du chargement d'une page existante.
-     */
-    private fun reloadFromTranscription() {
-        val tw = transcriptionWriter ?: return
-        wordTranscriptions.clear()
-        wordTranscriptions.addAll(tw.getOrderedWords())
-    }
-
-    // ── Synchro compagnon .transcription ───────────────────────────────
-
-    /** Synchronise le fichier .transcription depuis groupTranscriptions (source stable).
-     *  Efface et réécrit TOUT le fichier avec les transcriptions actuelles,
-     *  dans l'ordre spatial des groupes. */
-    private fun syncTranscriptionFromGroups() {
-        val tw = transcriptionWriter ?: return
-        val cv = captureView ?: return
-        val groups = cv.getSpatialGroups()
-        if (groups.isEmpty()) return
-        val strokes = cv.getStrokeRegistry()
-        val words = groups.mapIndexedNotNull { idx, group ->
-            val firstIdx = group.firstOrNull() ?: return@mapIndexedNotNull null
-            val text = cv.getGroupTranscription(firstIdx) ?: return@mapIndexedNotNull null
-            if (text.isBlank()) return@mapIndexedNotNull null
-            val snapY = StrokeRenderer.computeSnapY(strokes, group)
-            Triple(snapY, idx, text)
-        }
-        if (words.isEmpty()) return
-        tw.rewriteAll(words)
-        Log.i(TAG, "📝 Compagnon .transcription synchronise: ${words.size} mots")
-    }
-
-    /** Programme une synchro du compagnon après 1s d'inactivité (debounce).
-     *  Appelé après chaque inférence — si une autre arrive dans la seconde, on repousse. */
-    private fun scheduleCompanionSync() {
-        syncCompanionRunnable?.let { syncHandler.removeCallbacks(it) }
-        val runnable = Runnable { syncTranscriptionFromGroups() }
-        syncCompanionRunnable = runnable
-        syncHandler.postDelayed(runnable, 1000L)
+        // Le label est DÉJÀ dans CaptureView.groupLabels (source unique).
+        // Plus de fichier .transcription à synchroniser.
+        Log.i(TAG, "Reconnu: '$text' → groupLabels")
     }
 
     // ── Actions ────────────────────────────────────────────────────────
 
     private fun onValidate() {
-        Log.i(TAG, "✓ Validation")
-        syncTranscriptionFromGroups()
+        Log.i(TAG, "✓ Validation — source unique groupLabels")
         captureView?.saveCurrentNote(
             mode = "blocnote",
-            transcriptions = transcriptionWriter?.getOrderedWords() ?: wordTranscriptions.toList()
+            transcriptions = captureView?.getOrderedTranscriptions() ?: emptyList()
         )
-
-        if (isBlocNote) {
-            // Nouvelle page blanche
-            captureView?.startBlocNoteSession()
-            // ═══ Recréer le .transcription pour la nouvelle page ═══
-            transcriptionWriter?.delete()
-            val noteDir = java.io.File(filesDir, "blocnote")
-            val baseName = "note_${java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())}"
-            val newTw = TranscriptionWriter(noteDir, baseName, CalibrationActivity.getSpatialDistanceY(this).toFloat())
-            transcriptionWriter = newTw
-            captureView?.strokeProcessor?.transcriptionWriter = newTw
-            // Persistance des groupes pour la nouvelle page
-            captureView?.groupManager?.persistence = GroupPersistence(GroupPersistence.groupsFile(noteDir, baseName))
-            accumulatedText = ""
-            wordTranscriptions.clear()
-            currentPageIndex = -1  // nouvelle page
-            scanBlocnoteFiles()
-        } else {
-            // Mot suivant
-            captureView?.clear()
-            pickWord()
-        }
+        // Nouvelle page blanche
+        captureView?.startBlocNoteSession()
+        captureView?.clear()
+        wordTranscriptions.clear()
+        Log.i(TAG, "✓ Nouvelle page")
     }
 
     private fun onReset() {
         Log.i(TAG, "↺ Reset")
         captureView?.clear()
-        if (isBlocNote) {
-            accumulatedText = ""
-            wordTranscriptions.clear()
-        } else {
-            pickWord()
-        }
+        accumulatedText = ""
+        wordTranscriptions.clear()
     }
 
     // ── Cycle de vie ───────────────────────────────────────────────────
@@ -546,8 +458,8 @@ class CaptureActivity : Activity() {
         
         // Sauver la page courante d'abord
         if (currentPageIndex < 0 && captureView?.hasStrokes() == true) {
-            syncTranscriptionFromGroups()
-            captureView?.saveCurrentNote(mode = "blocnote", transcriptions = transcriptionWriter?.getOrderedWords() ?: wordTranscriptions.toList())
+            Log.i(TAG, "⬅ Sauvegarde page courante avant navigation")
+            captureView?.saveCurrentNote(mode = "blocnote", transcriptions = captureView?.getOrderedTranscriptions() ?: emptyList())
             scanBlocnoteFiles()
         }
         
@@ -568,34 +480,15 @@ class CaptureActivity : Activity() {
         currentPageIndex = index
         val file = blocNoteFiles[index]
         
-        // Charger la note
+        // Charger la note — groupLabels est peuplé par loadNoteFile()
         captureView?.loadNoteFile(file)
         
-        // ═══ SOURCE UNIQUE HORIZON : charger le .transcription compagnon ═══
-        val noteDir = file.parentFile ?: java.io.File(filesDir, "blocnote")
-        val baseName = file.nameWithoutExtension  // ex: "note_20260614-001101"
-        val tw = TranscriptionWriter(noteDir, baseName, CalibrationActivity.getSpatialDistanceY(this).toFloat())
-        transcriptionWriter = tw
-        captureView?.strokeProcessor?.transcriptionWriter = tw
         // Persistance des groupes pour le chargement de page
+        val noteDir = file.parentFile ?: java.io.File(filesDir, "blocnote")
+        val baseName = file.nameWithoutExtension
         captureView?.groupManager?.persistence = GroupPersistence(GroupPersistence.groupsFile(noteDir, baseName))
         
-        // Afficher les transcriptions depuis le .transcription (source unique)
-        if (tw.exists()) {
-            reloadFromTranscription()
-        } else {
-            // Fallback : charger depuis le .note (ancien format)
-            val tx = captureView?.getNoteTranscriptions()
-            if (tx != null && tx.isNotEmpty()) {
-                // Migrer vers .transcription
-                accumulatedText = tx.joinToString(" ")
-                wordTranscriptions.clear(); wordTranscriptions.addAll(tx)
-            } else {
-                accumulatedText = ""
-                wordTranscriptions.clear()
-            }
-        }
-        Log.i(TAG, "Page ${index + 1}/${blocNoteFiles.size}: ${file.name} (transcription: ${tw.exists()})")
+        Log.i(TAG, "Page ${index + 1}/${blocNoteFiles.size}: ${file.name} (labels: ${captureView?.getOrderedTranscriptions()?.size ?: 0})")
     }
 
     // ── Rafraîchir toutes les transcriptions ─────────────────────────
@@ -608,53 +501,23 @@ class CaptureActivity : Activity() {
         val groups = captureView?.computeWordGroupsForSave() ?: return
         if (groups.isEmpty()) return
 
-        // Vider le .transcription et recréer
-        val tw = transcriptionWriter
-        tw?.delete()
-        val newTw = tw ?: run {
-            val noteDir = java.io.File(filesDir, "blocnote")
-            val baseName = "note_${java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())}"
-            TranscriptionWriter(noteDir, baseName, CalibrationActivity.getSpatialDistanceY(this).toFloat()).also { transcriptionWriter = it }
-        }
-        // Mettre à jour le processor
-        captureView?.strokeProcessor?.transcriptionWriter = newTw
-
-        accumulatedText = ""
-        wordTranscriptions.clear()
-
         Log.i(TAG, "🔄 Rafraîchissement de ${groups.size} groupes...")
         
         Thread {
-            val results = mutableListOf<String>()
             for ((idx, group) in groups.withIndex()) {
                 val text = recognizer.recognize(strokes, group)
-                results.add(text.ifBlank { "?" })
-                // Écrire dans le .transcription avec snapY et ordre
-                val snapY = StrokeRenderer.computeSnapY(strokes, group)
+                val firstIdx = group.firstOrNull() ?: continue
                 if (text.isNotBlank()) {
-                    newTw.writeWord(snapY, text, orderIndex = idx)
+                    runOnUiThread {
+                        captureView?.onGroupInferred(firstIdx, text)
+                    }
                 }
             }
             runOnUiThread {
-                reloadFromTranscription()
-                Log.i(TAG, "🔄 Transcriptions rafraîchies: $accumulatedText")
-                // Peupler les labels d'interligne
-                for ((idx, group) in groups.withIndex()) {
-                    if (group.isNotEmpty() && idx < results.size) {
-                        captureView?.onGroupInferred(group.first(), results[idx])
-                    }
-                }
-                // Sauvegarder dans le fichier .note aussi
-                val txWords = newTw.getOrderedWords()
-                val path = captureView?.saveCurrentNote(mode = "blocnote", transcriptions = txWords)
-                if (path != null) {
-                    Toast.makeText(this@CaptureActivity, "💾 Transcriptions sauvegardées", Toast.LENGTH_SHORT).show()
-                    Log.i(TAG, "💾 Transcriptions sauvegardées dans .note: $path")
-                } else {
-                    Log.w(TAG, "⚠️ Échec sauvegarde après refresh")
-                }
+                Log.i(TAG, "🔄 Transcriptions rafraîchies: ${captureView?.getOrderedTranscriptions()?.size ?: 0} labels")
+                Toast.makeText(this, "🔄 ${groups.size} groupes rafraîchis", Toast.LENGTH_SHORT).show()
             }
-        }.apply { name = "refresh-transcriptions"; start() }
+        }.start()
     }
 
     // ── UI helpers ─────────────────────────────────────────────────────
