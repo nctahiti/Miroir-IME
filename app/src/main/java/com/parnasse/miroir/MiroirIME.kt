@@ -599,13 +599,17 @@ class MiroirIME : InputMethodService() {
         }
 
         toolbar.addView(makeButton("✓") {
-            savePage()
-            val ic = currentInputConnection
-            if (ic != null) {
-                val fullText = buildAllPagesText()
-                ic.commitText(fullText.ifEmpty { "\n" }, 1)
+            if (isInsertionMode) {
+                finishInsertionMode()
+            } else {
+                savePage()
+                val ic = currentInputConnection
+                if (ic != null) {
+                    val fullText = buildAllPagesText()
+                    ic.commitText(fullText.ifEmpty { "\n" }, 1)
+                }
+                requestHideSelf(0)
             }
-            requestHideSelf(0)
         })
 
         toolbar.addView(makeButton("⚙") {
@@ -2256,6 +2260,28 @@ class MiroirIME : InputMethodService() {
         isInsertionMode = true
         // Basculer vers la capture plein écran
         toggleFormattingMode()
+    }
+
+    /** Termine la sous-session d'insertion : injecte le texte à la position sauvegardée,
+     *  sauvegarde les strokes, et réinitialise l'état. */
+    private fun finishInsertionMode() {
+        Log.i(TAG, "✎ Insertion validée — injection pos=$insertionCursorPos")
+        savePage()  // sauvegarder les strokes de l'insertion
+        val ic = currentInputConnection
+        if (ic != null) {
+            val text = buildReadingOrderText()
+            if (text.isNotBlank()) {
+                ic.finishComposingText()
+                ic.commitText(text, 1)
+                Log.i(TAG, "✎ Texte inséré: '${text.take(60)}'")
+            }
+        }
+        isInsertionMode = false
+        insertionCursorPos = -1
+        // Forcer le retour au mode clavier
+        if (!isFormattingMode) {
+            toggleFormattingMode()
+        }
     }
 
     /** Injecte du texte brut dans le champ hôte. Respecte le verrou shift. */
