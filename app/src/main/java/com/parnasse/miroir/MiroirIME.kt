@@ -2265,15 +2265,21 @@ class MiroirIME : InputMethodService() {
     /** Termine la sous-session d'insertion : injecte le texte à la position sauvegardée,
      *  sauvegarde les strokes, et réinitialise l'état. */
     private fun finishInsertionMode() {
-        Log.i(TAG, "✎ Insertion validée — injection pos=$insertionCursorPos")
+        val savedPos = insertionCursorPos
+        Log.i(TAG, "✎ Insertion validée — injection pos=$savedPos")
         savePage()  // sauvegarder les strokes de l'insertion
         val ic = currentInputConnection
         if (ic != null) {
-            val text = buildReadingOrderText()
-            if (text.isNotBlank()) {
+            // trim() : pas de lignes vides avant/après, pas d'espace superflu
+            val text = buildReadingOrderText().trim()
+            if (text.isNotEmpty()) {
                 ic.finishComposingText()
                 ic.commitText(text, 1)
-                Log.i(TAG, "✎ Texte inséré: '${text.take(60)}'")
+                // Replacer le curseur au début de l'insertion
+                ic.setSelection(-text.length, -text.length)
+                Log.i(TAG, "✎ Texte inséré (${text.length}c): '${text.take(60)}' → curseur replacé")
+            } else {
+                Log.w(TAG, "✎ Insertion vide — aucun texte à injecter")
             }
         }
         isInsertionMode = false
