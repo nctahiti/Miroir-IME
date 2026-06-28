@@ -115,6 +115,8 @@ class MiroirIME : InputMethodService() {
      private var formattingPanel: android.widget.LinearLayout? = null
      private var isFormattingMode = false
      private var isShiftLocked = false
+     private var isInsertionMode = false          // sous-session capture pour insertion ciblée
+     private var insertionCursorPos: Int = -1     // position du curseur hôte sauvegardée
      private var rootView: android.widget.FrameLayout? = null  // pour ajuster la hauteur au toggle
 
      /** Panneau overlay pour menus contextuels (affiche par-dessus la surface de capture). */
@@ -709,7 +711,7 @@ class MiroirIME : InputMethodService() {
             visibility = View.GONE
         }
 
-        // ── Rangée 1 : mise en forme markdown ──
+        // ── Rangée 1 : mise en forme markdown (+ bouton insertion) ──
         val formatRow1 = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
             layoutParams = android.widget.LinearLayout.LayoutParams(
@@ -725,6 +727,16 @@ class MiroirIME : InputMethodService() {
                 setOnClickListener { injectMarkdown(markdown) }
             }
         }
+        // ── Bouton Insertion manuscrite (sous-session capture) ──
+        val insertBtn = android.widget.Button(this).apply {
+            text = "✎ Insérer"
+            textSize = 16f
+            setTextColor(Color.argb(255, 100, 220, 160))  // vert distinct
+            setBackgroundColor(Color.argb(140, 30, 60, 40))
+            setPadding((10 * density).toInt(), (6 * density).toInt(), (10 * density).toInt(), (6 * density).toInt())
+            setOnClickListener { startInsertionMode() }
+        }
+        formatRow1.addView(insertBtn)
         formatRow1.addView(makeFmtBtn("B", "**"))
         formatRow1.addView(makeFmtBtn("I", "*"))
         formatRow1.addView(makeFmtBtn("S", "~~"))
@@ -2201,6 +2213,12 @@ class MiroirIME : InputMethodService() {
         isFormattingMode = !isFormattingMode
         if (isFormattingMode) {
             // ═══ MODE MISE EN FORME ═══
+            // Si on revient au clavier depuis le mode insertion, annuler l'insertion
+            if (isInsertionMode) {
+                Log.i(TAG, "✎ Insertion annulée (retour clavier)")
+                isInsertionMode = false
+                insertionCursorPos = -1
+            }
             // Forcer le mode clavier (non plein écran) → app hôte visible au-dessus
             updateFullscreenMode()
             // Fond sombre semi-transparent pour le panneau
@@ -2217,9 +2235,27 @@ class MiroirIME : InputMethodService() {
             root.setBackgroundColor(Color.WHITE)
             panel.visibility = View.GONE
             surface.visibility = View.VISIBLE
-            modeIndicator?.text = "✍"
+            modeIndicator?.text = if (isInsertionMode) "↩" else "✍"
             surface.invalidate()
         }
+    }
+
+    /** Ouvre une sous-session de capture pour insertion manuscrite ciblée.
+     *  Sauvegarde la position du curseur hôte, puis bascule en mode capture. */
+    private fun startInsertionMode() {
+        val ic = currentInputConnection
+        if (ic != null) {
+            // Sauvegarder la position du curseur dans le champ hôte
+            val before = ic.getTextBeforeCursor(1000, 0)
+            insertionCursorPos = before?.length ?: 0
+            Log.i(TAG, "✎ Insertion: curseur sauvé pos=$insertionCursorPos, contexte='${before?.take(30) ?: ""}'")
+        } else {
+            insertionCursorPos = 0
+            Log.w(TAG, "✎ Insertion: pas d'InputConnection, pos=0")
+        }
+        isInsertionMode = true
+        // Basculer vers la capture plein écran
+        toggleFormattingMode()
     }
 
     /** Injecte du texte brut dans le champ hôte. Respecte le verrou shift. */
