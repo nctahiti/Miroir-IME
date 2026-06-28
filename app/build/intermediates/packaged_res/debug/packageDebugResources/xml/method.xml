@@ -1,8 +1,0 @@
-<input-method xmlns:android="http://schemas.android.com/apk/res/android"
-    android:settingsActivity="com.parnasse.miroir.CalibrationActivity">
-    <subtype
-        android:label="Miroir manuscrit"
-        android:languageTag="fr"
-        android:imeSubtypeLocale="fr_FR"
-        android:imeSubtypeMode="handwriting" />
-</input-method>

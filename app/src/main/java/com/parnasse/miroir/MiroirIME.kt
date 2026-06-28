@@ -111,6 +111,12 @@ class MiroirIME : InputMethodService() {
      /** Témoin de mode dans la barre d'outils (✍ plume · ⌛ montre · ↕ déplacement). */
      private var modeIndicator: android.widget.TextView? = null
 
+     // ── Vue clavier mise en forme ─────────────────────────────────────
+     private var formattingPanel: android.widget.LinearLayout? = null
+     private var isFormattingMode = false
+     private var isShiftLocked = false
+     private var rootView: android.widget.FrameLayout? = null  // pour ajuster la hauteur au toggle
+
      /** Panneau overlay pour menus contextuels (affiche par-dessus la surface de capture). */
      private var overlayPanel: android.widget.LinearLayout? = null
 
@@ -501,6 +507,9 @@ class MiroirIME : InputMethodService() {
     // LIFECYCLE IME
     // ═══════════════════════════════════════════════════════════════════
 
+    /** Mode plein écran uniquement en capture (✍) ; mode clavier en mise en forme (📝). */
+    override fun onEvaluateFullscreenMode(): Boolean = !isFormattingMode
+
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "MiroirIME — Portail d'écriture universel — création")
@@ -539,6 +548,7 @@ class MiroirIME : InputMethodService() {
                 ViewGroup.LayoutParams.MATCH_PARENT)
             setBackgroundColor(Color.WHITE)
         }
+        rootView = root
 
         // ── Contenu principal (toolbar + surface) ─────────────────────
         val mainContent = android.widget.LinearLayout(this).apply {
@@ -645,6 +655,12 @@ class MiroirIME : InputMethodService() {
             updatePageIndicator()
         })
 
+        // ═══ Bascule capture / mise en forme ═══
+        val formattingToggleBtn = makeButton("📝") {
+            toggleFormattingMode()
+        }
+        toolbar.addView(formattingToggleBtn)
+
         toolbar.addView(makeButton("✕") {
             // ═══ Fermer le bloc (vider le champ + sauvegarder + libérer) ═══
             val ic = currentInputConnection
@@ -681,6 +697,91 @@ class MiroirIME : InputMethodService() {
          // Initialisation du séquenceur de modes (État A) — la surface IME est la cible EPD
          displayController = DisplayController(OnyxEpdPort(surface))
         mainContent.addView(surface)
+
+        // ═══ Panneau de mise en forme (caché par défaut) ═══
+        formattingPanel = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0, 1f)
+            setBackgroundColor(Color.WHITE)
+            setPadding((16 * density).toInt(), (12 * density).toInt(), (16 * density).toInt(), (12 * density).toInt())
+            visibility = View.GONE
+        }
+
+        // ── Rangée 1 : mise en forme markdown ──
+        val formatRow1 = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        fun makeFmtBtn(label: String, markdown: String): android.widget.Button {
+            return android.widget.Button(this).apply {
+                text = label
+                textSize = 18f
+                setTextColor(Color.argb(255, 200, 200, 200))
+                setBackgroundColor(Color.argb(100, 60, 60, 70))
+                setPadding((10 * density).toInt(), (6 * density).toInt(), (10 * density).toInt(), (6 * density).toInt())
+                setOnClickListener { injectMarkdown(markdown) }
+            }
+        }
+        formatRow1.addView(makeFmtBtn("B", "**"))
+        formatRow1.addView(makeFmtBtn("I", "*"))
+        formatRow1.addView(makeFmtBtn("S", "~~"))
+        formatRow1.addView(makeFmtBtn("#", "# "))
+        formatRow1.addView(makeFmtBtn("•", "- "))
+        formatRow1.addView(makeFmtBtn("1.", "1. "))
+        formatRow1.addView(makeFmtBtn(">", "> "))
+        formattingPanel?.addView(formatRow1)
+
+        // ── Rangée 2 : ponctuation + espace + retour ligne ──
+        val formatRow2 = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        for (punct in listOf(".", ",", "!", "?", ";", ":", "—", "\"", "(", ")")) {
+            formatRow2.addView(makeFmtBtn(punct, punct))
+        }
+        formattingPanel?.addView(formatRow2)
+
+        // ── Rangée 3 : Shift · TAB · ESPACE (étendu) · Retour ──
+        val formatRow3 = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+        fun makeActionBtn(label: String, weight: Float = 0f, action: () -> Unit): android.widget.Button {
+            return android.widget.Button(this).apply {
+                text = label
+                textSize = 16f
+                setTextColor(Color.argb(255, 180, 200, 220))
+                setBackgroundColor(Color.argb(100, 50, 60, 80))
+                setPadding((12 * density).toInt(), (8 * density).toInt(), (12 * density).toInt(), (8 * density).toInt())
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, if (weight > 0f) weight else 0f)
+                setOnClickListener { action() }
+            }
+        }
+        // ── Bouton Shift (maj/min) ──
+        var shiftBtnRef: android.widget.Button? = null
+        val shiftBtn = makeActionBtn("⇧") {
+            isShiftLocked = !isShiftLocked
+            shiftBtnRef?.text = if (isShiftLocked) "⇧" else "⇩"
+            shiftBtnRef?.setTextColor(if (isShiftLocked) Color.argb(255, 255, 200, 100) else Color.argb(255, 180, 200, 220))
+        }
+        shiftBtnRef = shiftBtn
+        formatRow3.addView(shiftBtn)
+        // ── TAB (gauche) ──
+        formatRow3.addView(makeActionBtn("⇥ TAB") { injectText("\t") })
+        // ── ESPACE (étendu centre) ──
+        formatRow3.addView(makeActionBtn("␣ ESPACE", weight = 1f) { injectText(" ") })
+        // ── RETOUR (droite) ──
+        formatRow3.addView(makeActionBtn("↩") { injectText("\n") })
+        formattingPanel?.addView(formatRow3)
+
+        mainContent.addView(formattingPanel)
 
         root.post {
             // Mesurer la toolbar pour les taps stylet
@@ -793,6 +894,11 @@ class MiroirIME : InputMethodService() {
                         groupBlobs[gid]?.let { canvas.drawPath(it.path, blobPaint) }
                     }
                 }
+                // ═══ Blob témoin de sélection (toujours visible sur le groupe SELECTED) ═══
+                val selectedGroup = groupManager?.groupsInState(GroupState.SELECTED)?.firstOrNull()
+                if (selectedGroup != null) {
+                    groupBlobs[selectedGroup.id]?.let { canvas.drawPath(it.path, blobPaint) }
+                }
             }
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             // ═══ Mode correction : cadre-tampon + filtre ═══
@@ -850,6 +956,8 @@ class MiroirIME : InputMethodService() {
         }
         override fun onTouchEvent(event: MotionEvent): Boolean {
             if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
+            // En mode mise en forme, le stylet agit comme curseur (pas de capture)
+            if (isFormattingMode) return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> { /* ignoré — IME ne reçoit pas ces événements */ }
                 MotionEvent.ACTION_DOWN -> {
@@ -891,7 +999,7 @@ class MiroirIME : InputMethodService() {
                         return true
                     }
 
-                    // ═══ Sélection visuelle (sans transition GroupManager) ═══
+                    // ═══ Détection du blob sous le stylet (pour long-press, pas d'affichage) ═══
                     activeBlobGroupId = null
                     for ((gid, data) in groupBlobs) {
                         if (data.bounds.contains(event.x, event.y)) {
@@ -1560,10 +1668,12 @@ class MiroirIME : InputMethodService() {
 
         // ═══ GroupManager : groupement spatial ═══
         val inkStroke = strokeRecordToInkStroke(stroke, inkId)
-        groupManager?.onStrokeSealed(inkStroke)
+        val affectedGroup = groupManager?.onStrokeSealed(inkStroke)
 
-        // Armer le timer d'inférence pour les groupes modifiés
-        scheduleGroupInference()
+        // Armer le timer d'inférence UNIQUEMENT pour le groupe modifié
+        if (affectedGroup != null && !isFormattingMode) {
+            armTimerForGroup(affectedGroup)
+        }
 
         // ═══ Rafraîchir uniquement la zone du stroke ═══
         // En mode correction → pas de refreshRect (le cadre tampon gère l'affichage)
@@ -1635,6 +1745,47 @@ class MiroirIME : InputMethodService() {
             timer.cancel(false)
         }
         groupTimers.clear()
+    }
+
+    /** Arme le timer d'inférence pour UN SEUL groupe (O(1) au lieu de O(n)). */
+    private fun armTimerForGroup(group: InkGroup) {
+        val gm = groupManager ?: return
+        if (group.strokeIds.isEmpty()) return
+        val firstIdx = inkStrokeIdToRegistryIndex[group.strokeIds.first()] ?: return
+        val strokeCount = group.strokeIds.size
+        val now = System.currentTimeMillis()
+
+        // Déjà inféré mais modifié → permettre la ré-inférence
+        val infCount = groupStrokeCountAtInference[firstIdx]
+        if (firstIdx in inferredGroupFirstIdxs) {
+            if (infCount != null && strokeCount == infCount) return  // vraiment inchangé
+            inferredGroupFirstIdxs.remove(firstIdx)
+        }
+
+        // Réarmer seulement si le groupe a changé
+        val countChanged = timerArmedStrokeCount[firstIdx] != strokeCount
+        if (groupTimers.containsKey(firstIdx) && !countChanged) return
+
+        val inferDelay = CalibrationActivity.getAutoInferDelay(this)
+        groupLastModifiedMs[firstIdx] = now
+        groupTimers.remove(firstIdx)?.cancel(false)
+
+        // Ancrer le groupe si nouveau
+        if (groupAnchor[firstIdx] == null) {
+            val cx = if (!group.bounds.isEmpty) group.bounds.centerX()
+                     else strokeRegistry.getOrNull(firstIdx)?.points?.firstOrNull()?.first ?: 0f
+            val cy = if (!group.bounds.isEmpty) group.bounds.centerY()
+                     else strokeRegistry.getOrNull(firstIdx)?.points?.firstOrNull()?.second ?: 0f
+            groupAnchor[firstIdx] = Pair(cx, cy)
+        }
+        timerArmedAt[firstIdx] = now
+        timerArmedStrokeCount[firstIdx] = strokeCount
+
+        val capturedFirstIdx = firstIdx
+        val timer = inferExecutor.schedule({
+            armGroupInference(capturedFirstIdx)
+        }, inferDelay, java.util.concurrent.TimeUnit.MILLISECONDS)
+        groupTimers[firstIdx] = timer
     }
 
     /** Appelé après chaque stroke pour armer le timer du groupe modifié. */
@@ -2034,6 +2185,74 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
     // MENUS CONTEXTUELS (clic long ◀ et ▶)
     // ═══════════════════════════════════════════════════════════════════
+
+    // ═══ Bascule capture / mise en forme ═══
+
+    /** Active/désactive le panneau de mise en forme.
+     *  En mode 📝 : mode clavier (non plein écran) → l'app hôte est visible au-dessus.
+     *  Le stylet n'est plus en mode capture : il sert de curseur. */
+    private fun toggleFormattingMode() {
+        val panel = formattingPanel ?: return
+        val surface = imeView ?: return
+        val root = rootView ?: return
+
+        isFormattingMode = !isFormattingMode
+        if (isFormattingMode) {
+            // ═══ MODE MISE EN FORME ═══
+            // Forcer le mode clavier (non plein écran) → app hôte visible au-dessus
+            updateFullscreenMode()
+            // Fond sombre semi-transparent pour le panneau
+            root.setBackgroundColor(Color.TRANSPARENT)
+            panel.setBackgroundColor(Color.argb(230, 18, 20, 26))
+            // Cacher la surface de capture + toolbar, montrer le panneau
+            surface.visibility = View.GONE
+            panel.visibility = View.VISIBLE
+            modeIndicator?.text = "📝"
+        } else {
+            // ═══ MODE CAPTURE ═══
+            // Repasser en plein écran
+            updateFullscreenMode()
+            root.setBackgroundColor(Color.WHITE)
+            panel.visibility = View.GONE
+            surface.visibility = View.VISIBLE
+            modeIndicator?.text = "✍"
+            surface.invalidate()
+        }
+    }
+
+    /** Injecte du texte brut dans le champ hôte. Respecte le verrou shift. */
+    private fun injectText(text: String) {
+        val ic = currentInputConnection ?: return
+        val out = if (isShiftLocked) text.uppercase() else text
+        ic.commitText(out, 1)
+    }
+
+    /** Injecte une balise markdown (ex: **, *, # ).
+     *  Pour les balises enveloppantes (**B**, *I*, ~~S~~) :
+     *  - Si du texte est sélectionné → enveloppe la sélection
+     *  - Sinon → insère la paire de balises et place le curseur au milieu */
+    private fun injectMarkdown(markdown: String) {
+        val ic = currentInputConnection ?: return
+        // Si la balise est un préfixe (# , - , > , 1. ), on l'insère en début de ligne
+        if (markdown.endsWith(" ")) {
+            ic.commitText("\n$markdown", 1)
+            return
+        }
+        // Balise enveloppante (**, *, ~~)
+        val selection = ic.getSelectedText(0)
+        if (!selection.isNullOrEmpty()) {
+            // Envelopper la sélection existante
+            ic.commitText("$markdown$selection$markdown", 1)
+        } else {
+            // Pas de sélection → insérer la paire et placer le curseur au milieu
+            ic.commitText("$markdown$markdown", 1)
+            // Reculer le curseur de la longueur d'une balise
+            val len = markdown.length
+            if (len > 0) {
+                ic.setSelection(-len, -len)
+            }
+        }
+    }
 
     /** Affiche un panneau overlay (cache la surface de capture). */
     private fun showOverlay(content: View, title: String) {
