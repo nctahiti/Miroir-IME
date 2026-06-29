@@ -659,7 +659,7 @@ class CaptureView(context: Context) : View(context) {
         val found = spatialGroups.withIndex().firstOrNull { (gi, group) ->
             val r = spatialBounds[gi]
             val groupLine = snapToLine((r.top + r.bottom) / 2f)
-            r.left < Float.MAX_VALUE && x >= r.left && x <= r.right && Math.abs(y - groupLine) < 50f
+            r.left < Float.MAX_VALUE && x >= r.left && x <= r.right && Math.abs(y - groupLine) < groupManager.params.lineSnapMarginPx
         }
         val newWordGroup = found?.value
         val newStrokeIdx = newWordGroup?.firstOrNull()

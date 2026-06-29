@@ -68,7 +68,7 @@ class GroupManager(
             expanded.inset(-params.spatialDistancePx, -params.spatialDistanceY)
             RectF.intersects(expanded, strokeBounds)
         }
-        Log.i(TAG, "onStrokeSealed: pendingGroupId=${machine.pendingGroupId}, selected=${selected?.id} state=${selected?.state} strokes=${selected?.strokeCount}, bounds=${selected?.bounds?.toShortString()}, fastReject=${if (selected != null) nearSelected else "N/A"}, params(rx=${params.spatialDistancePx}, ry=${params.spatialDistanceY})")
+        Log.i(TAG, "onStrokeSealed: pendingGroupId=${machine.pendingGroupId}, selected=${selected?.id} state=${selected?.state} strokes=${selected?.strokeCount}, bounds=${selected?.bounds?.toShortString()}, fastReject=${if (selected != null) nearSelected else "N/A"}, params(rx=${params.spatialDistancePx}, ry=${params.spatialDistanceY}, lineSnap=${params.lineSnapMarginPx})")
         
         val group = if (nearSelected && isStrokeNearGroup(stroke, selected!!)) {
             Log.i(TAG, "Absorption SELECTED " + selected.id + " (stroke proche)")
@@ -142,7 +142,8 @@ class GroupManager(
         if (selectedId != null) {
             val selectedGroup = groups[selectedId]
             if (selectedGroup != null && selectedGroup.state == GroupState.SELECTED) {
-                Log.i(TAG, "SELECTED present (${selectedId.take(8)}), pas de deselec automatique")
+                Log.i(TAG, "SELECTED present (${selectedId.take(8)}), deselection automatique — nouveau mot hors zone")
+                deselectGroup(selectedId)
             }
         }
         evictAllStored()
@@ -163,6 +164,13 @@ class GroupManager(
         if (!machine.canTransition(group.state, GroupState.SELECTED)) {
             Log.w(TAG, "Transition refusee: " + group.state + " -> PENDING")
             return false
+        }
+        // ═══ Garantir UN SEUL groupe SELECTED à la fois ═══
+        groupsInState(GroupState.SELECTED).forEach { g ->
+            if (g.id != group.id) {
+                Log.i(TAG, "Auto-deselection (requestTranscription): groupe " + g.id)
+                deselectGroup(g.id)
+            }
         }
         return machine.transition(group, GroupState.SELECTED)
     }

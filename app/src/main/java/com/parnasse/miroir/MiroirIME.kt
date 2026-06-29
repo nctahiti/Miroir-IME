@@ -102,6 +102,13 @@ class MiroirIME : InputMethodService() {
         isAntiAlias = false  // mode DU : pas de gris
         typeface = Typeface.DEFAULT_BOLD
     }
+    // Version estompée pour les labels non sélectionnés
+    private val dimLabelPaint = Paint().apply {
+        color = Color.GRAY   // gris pour contraste e-ink
+        textSize = 42f
+        isAntiAlias = false
+        typeface = Typeface.DEFAULT
+    }
     // ── Dessin ────────────────────────────────────────────────────────
     private var imeView: CaptureSurfaceView? = null
 
@@ -906,12 +913,6 @@ class MiroirIME : InputMethodService() {
             drawCount++
             if (drawCount % 30 == 1) Log.v(TAG, "onDraw #$drawCount showOverlays=$showOverlays labels=${groupLabels.size} template=${cachedTemplateLines.size}")
             if (showOverlays) {
-                // Blob du groupe actif (sélection visuelle, pas transition GM)
-                if (showOverlays) {
-                    activeBlobGroupId?.let { gid ->
-                        groupBlobs[gid]?.let { canvas.drawPath(it.path, blobPaint) }
-                    }
-                }
                 // ═══ Blob témoin de sélection (toujours visible sur le groupe SELECTED) ═══
                 val selectedGroup = groupManager?.groupsInState(GroupState.SELECTED)?.firstOrNull()
                 if (selectedGroup != null) {
@@ -1019,10 +1020,16 @@ class MiroirIME : InputMethodService() {
 
                     // ═══ Détection du blob sous le stylet (pour long-press, pas d'affichage) ═══
                     activeBlobGroupId = null
+                    val snapMargin = groupManager?.params?.lineSnapMarginPx ?: 30f
                     for ((gid, data) in groupBlobs) {
                         if (data.bounds.contains(event.x, event.y)) {
-                            activeBlobGroupId = gid
-                            break
+                            // Restreindre à l'interligne du groupe (évite les sélections parasites)
+                            val groupCenterY = data.bounds.centerY()
+                            val groupLine = snapToLine(groupCenterY)
+                            if (Math.abs(event.y - groupLine) < snapMargin) {
+                                activeBlobGroupId = gid
+                                break
+                            }
                         }
                     }
                     // ═══ Armer le long-press (500ms) pour sélection + absorption ═══
@@ -2274,10 +2281,14 @@ class MiroirIME : InputMethodService() {
             val text = buildReadingOrderText().trim()
             if (text.isNotEmpty()) {
                 ic.finishComposingText()
+                // Forcer la position sauvegardée (perdue après le toggle formattingMode)
+                ic.setSelection(savedPos, savedPos)
                 ic.commitText(text, 1)
-                // Replacer le curseur au début de l'insertion
-                ic.setSelection(-text.length, -text.length)
-                Log.i(TAG, "✎ Texte inséré (${text.length}c): '${text.take(60)}' → curseur replacé")
+                // Sélectionner uniquement le texte qui vient d'être injecté
+                val selStart = savedPos
+                val selEnd = savedPos + text.length
+                ic.setSelection(selStart, selEnd)
+                Log.i(TAG, "✎ Texte inséré (${text.length}c): '${text.take(60)}' → sélection [$selStart, $selEnd]")
             } else {
                 Log.w(TAG, "✎ Insertion vide — aucun texte à injecter")
             }
@@ -2314,7 +2325,10 @@ class MiroirIME : InputMethodService() {
         val selection = ic.getSelectedText(0)
         if (!selection.isNullOrEmpty()) {
             // Envelopper la sélection existante
-            ic.commitText("$markdown$selection$markdown", 1)
+            val wrapped = "$markdown$selection$markdown"
+            ic.commitText(wrapped, 1)
+            // Sélectionner le texte qui vient d'être enveloppé (balises incluses)
+            ic.setSelection(-wrapped.length, 0)
         } else {
             // Pas de sélection → insérer la paire et placer le curseur au milieu
             ic.commitText("$markdown$markdown", 1)
@@ -2628,9 +2642,15 @@ class MiroirIME : InputMethodService() {
         refreshAll()
     }
 
-    /** Dessine les labels à la position du groupe. */
+    /** Dessine les labels à la position du groupe.
+     *  Le groupe SELECTED est en noir gras, les autres en gris normal. */
     private fun drawGroupLabels(canvas: Canvas) {
         if (groupLabels.isEmpty()) return
+        // ═══ Déterminer le firstIdx du groupe SELECTED (pour le mettre en évidence) ═══
+        val selectedFirstIdx: Int? = groupManager?.groupsInState(GroupState.SELECTED)
+            ?.firstOrNull()?.strokeIds?.firstOrNull()?.let { sid ->
+                inkStrokeIdToRegistryIndex[sid]
+            }
         var drawn = 0
         for ((firstIdx, label) in groupLabels) {
             val anchor = groupAnchor[firstIdx]
@@ -2643,7 +2663,9 @@ class MiroirIME : InputMethodService() {
             }?.bounds?.left ?: anchor.first
             val x = leftEdge                               // aligné à gauche du groupe
             val y = snapToLine(anchor.second) + labelPaint.textSize - 4f
-            canvas.drawText(label, x, y, labelPaint)
+            // ═══ Noir gras pour le SELECTED, gris normal pour les autres ═══
+            val paint = if (firstIdx == selectedFirstIdx) labelPaint else dimLabelPaint
+            canvas.drawText(label, x, y, paint)
             drawn++
         }
         if (drawn < groupLabels.size) Log.d(TAG, "LABEL drawn: $drawn/${groupLabels.size}")
