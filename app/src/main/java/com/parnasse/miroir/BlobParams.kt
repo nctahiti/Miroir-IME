@@ -13,6 +13,7 @@ import android.content.SharedPreferences
  * @param minOverlapPercent  % de chevauchement horizontal minimum requis
  * @param temporalDistanceMs Distance temporelle max entre deux strokes
  * @param transcriptionTimeoutMs Délai avant déclenchement transcription
+ * @param lineSnapMarginPx    Marge verticale autour de l'interligne pour autoriser l'absorption (0=désactivé)
  * @param groupLevel         Niveau de groupement (WORD/LINE/PARAGRAPH)
  * @param captureAnchor      Ancrage de la zone de capture (BOTTOM/TOP)
  */
@@ -22,6 +23,7 @@ data class BlobParams(
     val minOverlapPercent: Int = DEFAULT_MIN_OVERLAP_PERCENT,
     val temporalDistanceMs: Long = DEFAULT_TEMPORAL_DISTANCE_MS,
     val transcriptionTimeoutMs: Long = DEFAULT_TRANSCRIPTION_TIMEOUT_MS,
+    val lineSnapMarginPx: Float = DEFAULT_LINE_SNAP_MARGIN_PX,
     val groupLevel: GroupLevel = GroupLevel.WORD,
     val captureAnchor: CaptureAnchor = CaptureAnchor.BOTTOM
 ) {
@@ -32,6 +34,7 @@ data class BlobParams(
         const val DEFAULT_MIN_OVERLAP_PERCENT     = 30
         const val DEFAULT_TEMPORAL_DISTANCE_MS    = 800L
         const val DEFAULT_TRANSCRIPTION_TIMEOUT_MS = 2000L
+        const val DEFAULT_LINE_SNAP_MARGIN_PX  = 30f  // 30px autour de l'interligne
 
         // Limites des curseurs
         const val MIN_SPATIAL_PX  = 2f
@@ -52,6 +55,7 @@ data class BlobParams(
             minOverlapPercent       = prefs.getInt(KEY_OVERLAP, DEFAULT_MIN_OVERLAP_PERCENT),
             temporalDistanceMs      = prefs.getLong(KEY_TEMPORAL, DEFAULT_TEMPORAL_DISTANCE_MS),
             transcriptionTimeoutMs  = prefs.getLong(KEY_TIMEOUT, DEFAULT_TRANSCRIPTION_TIMEOUT_MS),
+            lineSnapMarginPx        = prefs.getFloat(KEY_LINE_SNAP, DEFAULT_LINE_SNAP_MARGIN_PX),
             groupLevel              = GroupLevel.valueOf(
                 prefs.getString(KEY_LEVEL, GroupLevel.WORD.name) ?: GroupLevel.WORD.name
             ),
@@ -68,6 +72,7 @@ data class BlobParams(
                 .putInt(KEY_OVERLAP, params.minOverlapPercent)
                 .putLong(KEY_TEMPORAL, params.temporalDistanceMs)
                 .putLong(KEY_TIMEOUT, params.transcriptionTimeoutMs)
+                .putFloat(KEY_LINE_SNAP, params.lineSnapMarginPx)
                 .putString(KEY_LEVEL, params.groupLevel.name)
                 .putString(KEY_ANCHOR, params.captureAnchor.name)
                 .apply()
@@ -80,6 +85,7 @@ data class BlobParams(
         private const val KEY_OVERLAP  = "min_overlap_pct"
         private const val KEY_TEMPORAL = "temporal_distance_ms"
         private const val KEY_TIMEOUT  = "transcription_timeout_ms"
+        private const val KEY_LINE_SNAP = "line_snap_margin_px"
         private const val KEY_LEVEL    = "group_level"
         private const val KEY_ANCHOR   = "capture_anchor"
 
