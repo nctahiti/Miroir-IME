@@ -1,1 +1,9 @@
+# Android / Gradle
+.gradle/
+app/build/
+local.properties
+*.iml
+.idea/
+
+# Parnasse
 parnasse-data/

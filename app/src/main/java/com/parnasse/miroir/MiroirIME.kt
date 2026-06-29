@@ -755,20 +755,28 @@ class MiroirIME : InputMethodService() {
         formatRow1.addView(makeFmtBtn("•", "- "))
         formatRow1.addView(makeFmtBtn("1.", "1. "))
         formatRow1.addView(makeFmtBtn(">", "> "))
-        formattingPanel?.addView(formatRow1)
-
-        // ── Rangée 2 : ponctuation + espace + retour ligne ──
+        // ── Constructeur ponctuation (injectText, pas markdown — un seul caractère) ──
+        fun makePunctBtn(label: String): android.widget.Button {
+            return android.widget.Button(this).apply {
+                text = label
+                textSize = 18f
+                setTextColor(Color.argb(255, 200, 200, 200))
+                setBackgroundColor(Color.argb(100, 60, 60, 70))
+                setPadding((10 * density).toInt(), (6 * density).toInt(), (10 * density).toInt(), (6 * density).toInt())
+                setOnClickListener { injectText(label) }
+            }
+        }
+        // ── Rangée 2 : ponctuation ──
         val formatRow2 = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
             layoutParams = android.widget.LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         for (punct in listOf(".", ",", "!", "?", ";", ":", "—", "\"", "(", ")")) {
-            formatRow2.addView(makeFmtBtn(punct, punct))
+            formatRow2.addView(makePunctBtn(punct))
         }
-        formattingPanel?.addView(formatRow2)
 
-        // ── Rangée 3 : Shift · TAB · ESPACE (étendu) · Retour ──
+        // ── Rangée 3 : Shift · TAB · ESPACE (étendu) ──
         val formatRow3 = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
             layoutParams = android.widget.LinearLayout.LayoutParams(
@@ -802,9 +810,37 @@ class MiroirIME : InputMethodService() {
         formatRow3.addView(makeActionBtn("⇥ TAB") { injectText("\t") })
         // ── ESPACE (étendu centre) ──
         formatRow3.addView(makeActionBtn("␣ ESPACE", weight = 1f) { injectText(" ") })
-        // ── RETOUR (droite) ──
-        formatRow3.addView(makeActionBtn("↩") { injectText("\n") })
-        formattingPanel?.addView(formatRow3)
+
+        // ═══ Enveloppe clavier + retour vertical (couvre les 3 rangées) ═══
+        val keyRows = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        keyRows.addView(formatRow1)
+        keyRows.addView(formatRow2)
+        keyRows.addView(formatRow3)
+
+        val keyboardWrapper = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        keyboardWrapper.addView(keyRows)
+        // ── RETOUR (droite, hauteur = 3 rangées, plus étroit) ──
+        val returnBtn = android.widget.Button(this).apply {
+            text = "↩"
+            textSize = 18f
+            setTextColor(Color.argb(255, 180, 200, 220))
+            setBackgroundColor(Color.argb(100, 50, 60, 80))
+            setPadding((8 * density).toInt(), (12 * density).toInt(), (8 * density).toInt(), (12 * density).toInt())
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT)
+            setOnClickListener { injectText("\n") }
+        }
+        keyboardWrapper.addView(returnBtn)
+        formattingPanel?.addView(keyboardWrapper)
 
         mainContent.addView(formattingPanel)
 
@@ -2340,15 +2376,22 @@ class MiroirIME : InputMethodService() {
             // Envelopper la sélection existante
             val wrapped = "$markdown$selection$markdown"
             ic.commitText(wrapped, 1)
-            // Sélectionner le texte qui vient d'être enveloppé (balises incluses)
-            ic.setSelection(-wrapped.length, 0)
+            // Calculer la position absolue après insertion (positions négatives = invalid)
+            val beforeLen = (ic.getTextBeforeCursor(5000, 0) ?: "").length
+            // Sélectionner le texte entre les balises (sans les balises)
+            val selStart = beforeLen - wrapped.length + markdown.length
+            val selEnd = beforeLen - markdown.length
+            if (selStart >= 0 && selEnd > selStart) {
+                ic.setSelection(selStart, selEnd)
+            }
         } else {
             // Pas de sélection → insérer la paire et placer le curseur au milieu
             ic.commitText("$markdown$markdown", 1)
-            // Reculer le curseur de la longueur d'une balise
-            val len = markdown.length
-            if (len > 0) {
-                ic.setSelection(-len, -len)
+            // Calculer la position absolue du curseur entre les deux balises
+            val beforeLen = (ic.getTextBeforeCursor(5000, 0) ?: "").length
+            val cursorPos = beforeLen - markdown.length
+            if (cursorPos >= 0) {
+                ic.setSelection(cursorPos, cursorPos)
             }
         }
     }
