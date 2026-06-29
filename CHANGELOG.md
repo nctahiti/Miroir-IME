@@ -1,5 +1,25 @@
 # Changelog — Miroir IME
 
+## 2026-06-29 — Session « Clavier — disposition & curseur »
+
+### `2d23feb` — fix: clavier — ponctuation injectText + retour 3 rangées + curseur markdown absolu
+
+**Disposition du clavier** (`MiroirIME.kt`) :
+- Retour ↩ : bouton vertical couvrant les 3 rangées (MATCH_PARENT en hauteur), plus étroit, à droite
+- Structure : `keyboardWrapper` horizontal → `keyRows` vertical (rangées 1-2-3) + `returnBtn`
+
+**Ponctuation** (`MiroirIME.kt`) :
+- `makePunctBtn` : utilise `injectText` au lieu d'`injectMarkdown` → 1 seul caractère inséré, curseur reste après
+- Avant : `injectMarkdown(".")` insérait `..` et déplaçait le curseur au début du champ
+
+**Curseur markdown** (`MiroirIME.kt`) :
+- `injectMarkdown` : positions absolues via `getTextBeforeCursor()` au lieu de `setSelection(-n)`
+- Les positions négatives étaient clampées à 0 → curseur renvoyé au début du champ
+- Sans sélection : curseur placé entre les balises (`**|**`)
+- Avec sélection : le texte entre les balises est sélectionné
+
+**.gitignore** : ajout des exclusions Gradle/Android (`.gradle/`, `app/build/`, `local.properties`, `*.iml`, `.idea/`)
+
 ## 2026-06-29 — Session « UxK — Cinématique »
 
 ### `932ed3c` — fix: UxK — cinématique de sélection, curseur d'insertion, labels grisés
