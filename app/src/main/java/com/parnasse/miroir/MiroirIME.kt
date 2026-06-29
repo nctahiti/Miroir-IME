@@ -840,6 +840,10 @@ class MiroirIME : InputMethodService() {
         val v = imeView
         if (v != null) initTouchHelper(v)
         rebuildBitmap()
+        // ═══ Toujours ouvrir sur le clavier de mise en forme ═══
+        if (!isFormattingMode && formattingPanel != null && imeView != null && rootView != null) {
+            toggleFormattingMode()
+        }
     }
 
     /** Redessine tous les strokes du registre dans le bitmap. */
@@ -2241,12 +2245,21 @@ class MiroirIME : InputMethodService() {
             modeIndicator?.text = "📝"
         } else {
             // ═══ MODE CAPTURE ═══
-            // Repasser en plein écran
             updateFullscreenMode()
             root.setBackgroundColor(Color.WHITE)
             panel.visibility = View.GONE
             surface.visibility = View.VISIBLE
             modeIndicator?.text = if (isInsertionMode) "↩" else "✍"
+            // ═══ Initialiser le bitmap et le template si pas encore fait (surface était GONE au démarrage) ═══
+            if (bitmap == null && surface.width > 0 && surface.height > 0) {
+                bitmap = Bitmap.createBitmap(surface.width, surface.height, Bitmap.Config.ARGB_8888)
+                bitmapCanvas = Canvas(bitmap!!)
+                bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+                updateTemplateSpacing(surface.height)
+            }
+            isWriteMode = false     // forcer la réinitialisation EPD
+            enterWriteMode()        // réactiver DU pour le tracé fluide
+            rebuildBitmap()         // rafraîchir l'affichage des strokes
             surface.invalidate()
         }
     }
