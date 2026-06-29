@@ -31,6 +31,7 @@ UxK is the gesture vocabulary that makes Miroir an annotation tool, not just a k
 All editing happens on the writing surface — no dialogs, no mode switches.
 
 ### State machine
+<img width="360" height="480" alt="themirror" src="https://github.com/user-attachments/assets/ba793aca-6666-41fb-865a-47732d344294" />
 
 ```
 WRITING MODE (default)
