@@ -1827,6 +1827,7 @@ class MiroirIME : InputMethodService() {
     }
 
     private fun onStylusPoint(x: Float, y: Float, pressure: Float) {
+        if (!isStylusDown) return  // pas de stroke en cours → ignorer
         currentPath.lineTo(x, y)
         currentStroke?.let { stroke ->
             stroke.points.add(Pair(x, y))
