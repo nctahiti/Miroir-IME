@@ -1641,6 +1641,7 @@ class MiroirIME : InputMethodService() {
             cachedGMCacheSize = -1
             displayController?.poserLabelPuisDU(DisplayMode.GU)
             updateModeIndicator()
+            imeView?.postInvalidate()  // rafraîchir la vue (effacer le cadre de correction)
             Log.i(TAG, "🔚 Sortie édition → retour DU")
         }
 
