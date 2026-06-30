@@ -82,7 +82,8 @@ class MiroirIME : InputMethodService() {
 
     private var correctionGroupFirstIdx: Int = -1  // firstIdx du groupe en cours de correction
     private var correctionOriginalLabel: String = ""  // label avant correction (pour la paire)
-    private var correctLetterIndex: Int = -1  // index de la lettre ciblée
+    private var correctLetterIndex: Int = -1  // index de la lettre ciblée (remplacement)
+    private var insertAtIndex: Int = -1  // position d'insertion (-1 = pas d'insertion, 0..label.length)
     private var correctionSavedGroup: InkGroup? = null  // groupe original sauvegardé (ré-enregistré après correction)
     private val correctionPaths = mutableListOf<android.graphics.Path>()  // paths des strokes de correction (dessin uniquement)
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -585,16 +586,26 @@ class MiroirIME : InputMethodService() {
             orientation = android.widget.LinearLayout.HORIZONTAL
             layoutParams = android.widget.LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, toolbarHeight)
-            setBackgroundColor(Color.argb(180, 240, 240, 240))
+            setBackgroundColor(Color.BLACK)
             gravity = android.view.Gravity.CENTER
+        }
+
+        // ── Helper : fond + liseré blanc ──
+        fun borderedBg(bgColor: Int): android.graphics.drawable.Drawable {
+            return android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                setStroke((1 * density).toInt(), Color.WHITE)
+                setColor(bgColor)
+                cornerRadius = (4 * density)
+            }
         }
 
         fun makeButton(label: String, onLongClick: (() -> Unit)? = null, onClick: () -> Unit): android.widget.Button {
             return android.widget.Button(this).apply {
                 text = label
                 textSize = 22f  // ×5 par rapport à 12f
-                setTextColor(Color.DKGRAY)
-                setBackgroundColor(Color.TRANSPARENT)
+                setTextColor(Color.WHITE)
+                background = borderedBg(Color.argb(60, 60, 60, 70))
                 setPadding((16 * density).toInt(), (12 * density).toInt(), (16 * density).toInt(), (12 * density).toInt())
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
@@ -675,13 +686,8 @@ class MiroirIME : InputMethodService() {
         toolbar.addView(formattingToggleBtn)
 
         toolbar.addView(makeButton("✕") {
-            // ═══ Fermer le bloc (vider le champ + sauvegarder + libérer) ═══
-            val ic = currentInputConnection
-            if (ic != null) {
-                ic.performContextMenuAction(android.R.id.selectAll)
-                ic.commitText("", 1)
-            }
-            closeBlock()   // sauvegarde et ferme le bloc
+            // ═══ Fermer la session de capture (ne touche pas au texte de l'app hôte) ═══
+            closeBlock()   // sauvegarde et ferme le bloc → prochain onStartInputView créera un nouveau bloc
             clearPage()    // nettoie la RAM
             refreshAll()
             requestHideSelf(0)
@@ -691,7 +697,7 @@ class MiroirIME : InputMethodService() {
             text = "✍"
             textSize = 22f
             gravity = android.view.Gravity.CENTER
-            setTextColor(Color.DKGRAY)
+            setTextColor(Color.WHITE)
             setBackgroundColor(Color.TRANSPARENT)
             layoutParams = android.widget.LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -733,7 +739,7 @@ class MiroirIME : InputMethodService() {
                 text = label
                 textSize = 18f
                 setTextColor(Color.argb(255, 200, 200, 200))
-                setBackgroundColor(Color.argb(100, 60, 60, 70))
+                background = borderedBg(Color.argb(100, 60, 60, 70))
                 setPadding((10 * density).toInt(), (6 * density).toInt(), (10 * density).toInt(), (6 * density).toInt())
                 setOnClickListener { injectMarkdown(markdown) }
             }
@@ -743,7 +749,7 @@ class MiroirIME : InputMethodService() {
             text = "✎ Insérer"
             textSize = 16f
             setTextColor(Color.argb(255, 100, 220, 160))  // vert distinct
-            setBackgroundColor(Color.argb(140, 30, 60, 40))
+            background = borderedBg(Color.argb(140, 30, 60, 40))
             setPadding((10 * density).toInt(), (6 * density).toInt(), (10 * density).toInt(), (6 * density).toInt())
             setOnClickListener { startInsertionMode() }
         }
@@ -761,7 +767,7 @@ class MiroirIME : InputMethodService() {
                 text = label
                 textSize = 18f
                 setTextColor(Color.argb(255, 200, 200, 200))
-                setBackgroundColor(Color.argb(100, 60, 60, 70))
+                background = borderedBg(Color.argb(100, 60, 60, 70))
                 setPadding((10 * density).toInt(), (6 * density).toInt(), (10 * density).toInt(), (6 * density).toInt())
                 setOnClickListener { injectText(label) }
             }
@@ -788,7 +794,7 @@ class MiroirIME : InputMethodService() {
                 text = label
                 textSize = 16f
                 setTextColor(Color.argb(255, 180, 200, 220))
-                setBackgroundColor(Color.argb(100, 50, 60, 80))
+                background = borderedBg(Color.argb(100, 50, 60, 80))
                 setPadding((12 * density).toInt(), (8 * density).toInt(), (12 * density).toInt(), (8 * density).toInt())
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     if (weight > 0f) 0 else ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -827,19 +833,45 @@ class MiroirIME : InputMethodService() {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         keyboardWrapper.addView(keyRows)
-        // ── RETOUR (droite, hauteur = 3 rangées, plus étroit) ──
+        // ═══ Colonne droite : BACKSPACE au-dessus de RETOUR ═══
+        val rightColumn = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT)
+        }
+        // ── BACKSPACE ⌫ ──
+        val backspaceBtn = android.widget.Button(this).apply {
+            text = "⌫"
+            textSize = 18f
+            setTextColor(Color.argb(255, 180, 200, 220))
+            background = borderedBg(Color.argb(100, 50, 60, 80))
+            setPadding((8 * density).toInt(), (8 * density).toInt(), (8 * density).toInt(), (8 * density).toInt())
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT)
+            setOnClickListener {
+                val ic = currentInputConnection
+                if (ic != null) {
+                    ic.deleteSurroundingText(1, 0)
+                }
+            }
+        }
+        rightColumn.addView(backspaceBtn)
+        // ── RETOUR ↩ (hauteur = espace restant) ──
         val returnBtn = android.widget.Button(this).apply {
             text = "↩"
             textSize = 18f
             setTextColor(Color.argb(255, 180, 200, 220))
-            setBackgroundColor(Color.argb(100, 50, 60, 80))
+            background = borderedBg(Color.argb(100, 50, 60, 80))
             setPadding((8 * density).toInt(), (12 * density).toInt(), (8 * density).toInt(), (12 * density).toInt())
             layoutParams = android.widget.LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.MATCH_PARENT)
+                0, 1f)  // weight=1 → prend l'espace restant dans la colonne
             setOnClickListener { injectText("\n") }
         }
-        keyboardWrapper.addView(returnBtn)
+        rightColumn.addView(returnBtn)
+        keyboardWrapper.addView(rightColumn)
         formattingPanel?.addView(keyboardWrapper)
 
         mainContent.addView(formattingPanel)
@@ -990,6 +1022,38 @@ class MiroirIME : InputMethodService() {
                         val p = if (i == this@MiroirIME.correctLetterIndex) activePaint else letterPaint
                         canvas.drawText(label[i].toString(), cx, cy, p)
                     }
+                    // ── Puces : INSERTION (+) entre les lettres (au-dessus) et SUPPRESSION (−) sous les lettres ──
+                    val chipRadius = maxOf(letterW * 0.3f, 14f)  // rayon minimum 14px
+                    val hitRadius = chipRadius + 6f              // zone cliquable élargie
+                    val chipBgPaint = android.graphics.Paint().apply { color = Color.argb(180, 40, 44, 52); style = Paint.Style.FILL; isAntiAlias = true }
+                    val chipBorderPaint = android.graphics.Paint().apply { color = Color.argb(100, 180, 180, 200); style = Paint.Style.STROKE; strokeWidth = 1.5f; isAntiAlias = true }
+                    val chipActiveBorderPaint = android.graphics.Paint().apply { color = Color.argb(255, 40, 200, 60); style = Paint.Style.STROKE; strokeWidth = 2f; isAntiAlias = true }
+                    val minusChipBorderPaint = android.graphics.Paint().apply { color = Color.argb(100, 200, 100, 100); style = Paint.Style.STROKE; strokeWidth = 1.5f; isAntiAlias = true }
+                    val minusChipActiveBorderPaint = android.graphics.Paint().apply { color = Color.RED; style = Paint.Style.STROKE; strokeWidth = 2f; isAntiAlias = true }
+                    val plusTextPaint = android.graphics.Paint().apply { color = Color.argb(220, 140, 200, 140); textSize = chipRadius * 1.2f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+                    val plusActiveTextPaint = android.graphics.Paint().apply { color = Color.argb(255, 80, 240, 80); textSize = chipRadius * 1.2f; isAntiAlias = true; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
+                    val minusTextPaint = android.graphics.Paint().apply { color = Color.argb(220, 200, 140, 140); textSize = chipRadius * 1.2f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+                    val minusActiveTextPaint = android.graphics.Paint().apply { color = Color.argb(255, 255, 60, 60); textSize = chipRadius * 1.2f; isAntiAlias = true; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
+                    // ── Puces + entre les lettres (au-dessus du cadre) ──
+                    for (i in 0..label.length) {
+                        val chipCenterX = startX + letterW * i
+                        val chipCenterY = startY - chipRadius - 4f
+                        canvas.drawCircle(chipCenterX, chipCenterY, chipRadius, chipBgPaint)
+                        val border = if (i == this@MiroirIME.insertAtIndex) chipActiveBorderPaint else chipBorderPaint
+                        canvas.drawCircle(chipCenterX, chipCenterY, chipRadius, border)
+                        val tp = if (i == this@MiroirIME.insertAtIndex) plusActiveTextPaint else plusTextPaint
+                        canvas.drawText("+", chipCenterX, chipCenterY + chipRadius * 0.4f, tp)
+                    }
+                    // ── Puces − sous chaque lettre (en dessous du cadre) ──
+                    for (i in label.indices) {
+                        val chipCenterX = startX + letterW * i + letterW / 2f
+                        val chipCenterY = startY + letterW + chipRadius + 4f
+                        canvas.drawCircle(chipCenterX, chipCenterY, chipRadius, chipBgPaint)
+                        val border = if (i == this@MiroirIME.correctLetterIndex) minusChipActiveBorderPaint else minusChipBorderPaint
+                        canvas.drawCircle(chipCenterX, chipCenterY, chipRadius, border)
+                        val tp = if (i == this@MiroirIME.correctLetterIndex) minusActiveTextPaint else minusTextPaint
+                        canvas.drawText("−", chipCenterX, chipCenterY + chipRadius * 0.4f, tp)
+                    }
                 }
                 // Filtre : pas de labels normaux en mode correction, mais le template oui
                 // Lignes de template (au-dessus du cadre, pour rester visibles)
@@ -1020,6 +1084,8 @@ class MiroirIME : InputMethodService() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> { /* ignoré — IME ne reçoit pas ces événements */ }
                 MotionEvent.ACTION_DOWN -> {
+                    // ═══ Nettoyage cinétique : reset du path avant tout traitement ═══
+                    currentPath.reset()
                     // ═══ Suivi du tap et long-press — on diffère onStylusDown ═══
                     tapStartX = event.x; tapStartY = event.y
                     tapStartTime = System.currentTimeMillis()
@@ -1030,16 +1096,63 @@ class MiroirIME : InputMethodService() {
                     // ═══ Si on était en mode édition, vérifier si on reste dans le blob ═══
                     if (editMode != EditMode.NONE) {
                         if (editMode == EditMode.CORRECT_TRANSCRIPTION) {
-                            // Détecter clic sur une lettre de l'overlay
+                            // ═══ Détecter clic sur − (suppression de lettre) ═══
+                            val minusIdx = hitTestMinus(event.x, event.y)
+                            if (minusIdx >= 0) {
+                                val origFirstIdx = correctionGroupFirstIdx
+                                val origLabel = groupLabels[origFirstIdx] ?: return true
+                                if (minusIdx < origLabel.length) {
+                                    // ═══ Désélectionner le groupe original pour que le TouchHelper ne l'absorbe pas ═══
+                                    groupManager?.allGroups()?.find { it.state == GroupState.SELECTED }?.let {
+                                        groupManager?.deselectGroup(it.id)
+                                    }
+                                    val newLabel = origLabel.removeRange(minusIdx, minusIdx + 1)
+                                    groupLabels[origFirstIdx] = newLabel
+                                    correctLetterIndex = -1
+                                    insertAtIndex = -1
+                                    isStylusDown = false  // verrou cinétique : pas de stroke après clic puce
+                                    Log.i(TAG, "Correction: suppression #$minusIdx → '$origLabel' → '$newLabel'")
+                                    imeView?.postInvalidate()
+                                }
+                                return true
+                            }
+                            // ═══ Détecter clic sur + (insertion) ═══
+                            val plusIdx = hitTestPlus(event.x, event.y)
+                            if (plusIdx >= 0) {
+                                // ═══ Désélectionner le groupe original pour que le TouchHelper ne l'absorbe pas ═══
+                                groupManager?.allGroups()?.find { it.state == GroupState.SELECTED }?.let {
+                                    groupManager?.deselectGroup(it.id)
+                                }
+                                insertAtIndex = plusIdx
+                                correctLetterIndex = -1  // mutuellement exclusif
+                                correctionPaths.clear()
+                                isStylusDown = false  // verrou cinétique : pas de stroke après clic puce
+                                Log.i(TAG, "Correction: insertion à la position #$plusIdx")
+                                imeView?.postInvalidate()
+                                return true
+                            }
+                            // ═══ Détecter clic sur une lettre (remplacement) ═══
                             val idx = hitTestLetter(event.x, event.y)
                             if (idx >= 0) {
+                                // ═══ Désélectionner le groupe original pour que le TouchHelper ne l'absorbe pas ═══
+                                groupManager?.allGroups()?.find { it.state == GroupState.SELECTED }?.let {
+                                    groupManager?.deselectGroup(it.id)
+                                }
                                 correctLetterIndex = idx
+                                insertAtIndex = -1  // mutuellement exclusif
                                 correctionPaths.clear()  // nouveau caractère → vider les anciens strokes
+                                isStylusDown = false  // verrou cinétique : pas de stroke après clic lettre
                                 Log.i(TAG, "Correction: lettre #$idx ciblée")
                                 imeView?.postInvalidate()
                                 return true
                             }
-                            // Clic hors des lettres → sortir du mode
+                            // ═══ Si une cible est active (remplacement ou insertion), commencer l'écriture ═══
+                            if (correctLetterIndex >= 0 || insertAtIndex >= 0) {
+                                onStylusDown(event.x, event.y)
+                                tapStrokeStarted = true
+                                return true
+                            }
+                            // Clic hors des lettres sans cible → sortir du mode
                             exitEditMode()
                             currentPath.reset()  // ═══ pas de trait fantôme ═══
                             tapStrokeStarted = true  // ═══ pas de groupe parasite au prochain MOVE ═══
@@ -1125,6 +1238,7 @@ class MiroirIME : InputMethodService() {
                                 Log.i(TAG, "SWIPE HAUT détecté dy=$dy gid=$activeBlobGroupId longPress=$longPressTriggered")
                                 editMode = EditMode.CORRECT_TRANSCRIPTION
                                 correctLetterIndex = -1
+                                insertAtIndex = -1
                                 val gid = activeBlobGroupId
                                 Log.i(TAG, "SWIPE HAUT: gid=$gid")
                                 if (gid != null) {
@@ -1313,7 +1427,7 @@ class MiroirIME : InputMethodService() {
         fun isCorrecting(): Boolean = editMode == EditMode.CORRECT_TRANSCRIPTION
 
         /** Retourne l'index de la lettre touchée, ou -1. */
-        private fun hitTestLetter(x: Float, y: Float): Int {
+        internal fun hitTestLetter(x: Float, y: Float): Int {
             val firstIdx = this@MiroirIME.correctionGroupFirstIdx
             val label = groupLabels[firstIdx] ?: return -1
             val anchor = groupAnchor[firstIdx] ?: return -1
@@ -1325,6 +1439,48 @@ class MiroirIME : InputMethodService() {
             val startY = snapToLine(anchor.second) - spacing * 0.8f
             if (x < startX || x > startX + totalW || y < startY || y > startY + letterW) return -1
             return ((x - startX) / letterW).toInt().coerceIn(0, label.length - 1)
+        }
+
+        /** Retourne l'index de la lettre dont la puce − est touchée, ou -1. */
+        internal fun hitTestMinus(x: Float, y: Float): Int {
+            val firstIdx = this@MiroirIME.correctionGroupFirstIdx
+            val label = groupLabels[firstIdx] ?: return -1
+            val anchor = groupAnchor[firstIdx] ?: return -1
+            if (label.isEmpty()) return -1
+            val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+            val letterW = spacing * 0.7f
+            val chipRadius = maxOf(letterW * 0.3f, 14f)
+            val totalW = letterW * label.length
+            val startX = anchor.first - totalW / 2f
+            val startY = snapToLine(anchor.second) - spacing * 0.8f
+            // Zone rectangulaire : toute la largeur de la lettre, du bas du cadre jusqu'en dessous des puces
+            val zoneTop = startY + letterW
+            val zoneBottom = startY + letterW + chipRadius * 2f + 14f
+            if (y < zoneTop || y > zoneBottom) return -1
+            if (x < startX || x > startX + totalW) return -1
+            return ((x - startX) / letterW).toInt().coerceIn(0, label.length - 1)
+        }
+
+        /** Retourne la position d'insertion (0..label.length) si une puce + est touchée, ou -1. */
+        internal fun hitTestPlus(x: Float, y: Float): Int {
+            val firstIdx = this@MiroirIME.correctionGroupFirstIdx
+            val label = groupLabels[firstIdx] ?: return -1
+            val anchor = groupAnchor[firstIdx] ?: return -1
+            val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+            val letterW = spacing * 0.7f
+            val chipRadius = maxOf(letterW * 0.3f, 14f)
+            val totalW = letterW * label.length
+            val startX = anchor.first - totalW / 2f
+            val startY = snapToLine(anchor.second) - spacing * 0.8f
+            // Zone rectangulaire : toute la hauteur au-dessus du cadre, divisée en N+1 colonnes
+            val zoneTop = startY - chipRadius * 2f - 14f
+            val zoneBottom = startY
+            if (y < zoneTop || y > zoneBottom) return -1
+            // Étendre légèrement à gauche du premier + et à droite du dernier
+            val extendedStart = startX - letterW * 0.3f
+            val extendedEnd = startX + totalW + letterW * 0.3f
+            if (x < extendedStart || x > extendedEnd) return -1
+            return ((x - startX + letterW / 2f) / letterW).toInt().coerceIn(0, label.length)
         }
 
         /** Redessine tous les strokes dans le bitmap, SANS refreshScreen. */
@@ -1485,6 +1641,7 @@ class MiroirIME : InputMethodService() {
             cachedGMCacheSize = -1
             displayController?.poserLabelPuisDU(DisplayMode.GU)
             updateModeIndicator()
+            imeView?.postInvalidate()  // rafraîchir la vue (effacer le cadre de correction)
             Log.i(TAG, "🔚 Sortie édition → retour DU")
         }
 
@@ -1600,10 +1757,7 @@ class MiroirIME : InputMethodService() {
             touchHelper = TouchHelper.create(target, TouchHelper.FEATURE_APP_TOUCH_RENDER,
                 object : RawInputCallback() {
                     override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
-                        // ═══ Activer DU au premier contact du stylet (quel que soit le chemin d'accès) ═══
-                        // Ne pas dupliquer si onStylusDown déjà déclenché par onTouchEvent
-                        // Ne pas créer de stroke si on est en mode édition (geste de sortie)
-                        if (!isStylusDown && !(imeView?.isEditing() == true)) onStylusDown(p1.x, p1.y)
+                        if (!isStylusDown) onStylusDown(p1.x, p1.y)
                     }
                     override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {}
                     override fun onRawDrawingTouchPointListReceived(list: TouchPointList?) {}
@@ -1648,9 +1802,13 @@ class MiroirIME : InputMethodService() {
     private var isStylusDown = false
 
     private fun onStylusDown(x: Float, y: Float) {
+        // ═══ Mode correction sans cible → clic dans le vide (sortie) → pas de stroke ═══
+        if (imeView?.isCorrecting() == true && correctLetterIndex < 0 && insertAtIndex < 0) {
+            return  // le TouchHelper forward, onTouchEvent → exitEditMode
+        }
         isStylusDown = true
         // Mode correction → désélectionner le groupe original pour que les strokes forment un NOUVEAU groupe
-        if (imeView?.isCorrecting() == true && correctLetterIndex >= 0) {
+        if (imeView?.isCorrecting() == true && (correctLetterIndex >= 0 || insertAtIndex >= 0)) {
             groupManager?.allGroups()?.find { it.state == GroupState.SELECTED }?.let {
                 groupManager?.deselectGroup(it.id)
             }
@@ -1670,6 +1828,7 @@ class MiroirIME : InputMethodService() {
     }
 
     private fun onStylusPoint(x: Float, y: Float, pressure: Float) {
+        if (!isStylusDown) return  // pas de stroke en cours → ignorer
         currentPath.lineTo(x, y)
         currentStroke?.let { stroke ->
             stroke.points.add(Pair(x, y))
@@ -1700,20 +1859,30 @@ class MiroirIME : InputMethodService() {
         val stroke = currentStroke
         currentStroke = null
         if (stroke == null || stroke.points.isEmpty()) return
-        // ═══ Ignorer les taps dans le vide (un seul point) ═══
-        if (stroke.points.size < 2) {
-            currentPath.reset()
-            return
-        }
 
-        // ═══ Mode correction → chemin normal (strokeRegistry + GroupManager + inférence standard) ═══
-        val isCorrection = imeView?.isCorrecting() == true && correctLetterIndex >= 0
-
-        if (isCorrection) {
-            // Sauvegarder le path pour dessin au-dessus du cadre (pas dans le bitmap principal)
+        // ═══ Mode correction → filtrer selon le contexte ═══
+        val correcting = imeView?.isCorrecting() == true
+        val hasTarget = correcting && (correctLetterIndex >= 0 || insertAtIndex >= 0)
+        if (correcting) {
+            if (!hasTarget) {
+                // Clic dans le vide (sortie) ou sur puce − (suppression) → jeter le stroke
+                currentPath.reset()
+                return
+            }
+            // Cible active (remplacement ou insertion) → écriture de correction
+            // Accepter même les strokes courts (1 point) — l'e-ink peut rater des points
+            if (stroke.points.isEmpty()) {
+                currentPath.reset()
+                return
+            }
             correctionPaths.add(android.graphics.Path(currentPath))
             currentPath.reset()
         } else {
+            // Ignorer les taps dans le vide (un seul point)
+            if (stroke.points.size < 2) {
+                currentPath.reset()
+                return
+            }
             // Rastériser le stroke dans le bitmap
             val canvas = bitmapCanvas ?: return
             if (stroke.points.size < 2) {
@@ -1733,7 +1902,17 @@ class MiroirIME : InputMethodService() {
 
         // ═══ GroupManager : groupement spatial ═══
         val inkStroke = strokeRecordToInkStroke(stroke, inkId)
-        val affectedGroup = groupManager?.onStrokeSealed(inkStroke)
+        var affectedGroup = groupManager?.onStrokeSealed(inkStroke)
+
+        // ═══ Mode correction : si le stroke est trop petit (bounds vides), forcer un groupe ═══
+        if (affectedGroup == null && correcting && hasTarget) {
+            val gm = groupManager
+            if (gm != null) {
+                val forcedGroup = gm.getOrCreateActiveGroup()
+                forcedGroup.strokeIds.add(inkStroke.id)
+                affectedGroup = forcedGroup
+            }
+        }
 
         // Armer le timer d'inférence UNIQUEMENT pour le groupe modifié
         if (affectedGroup != null && !isFormattingMode) {
@@ -1997,7 +2176,9 @@ class MiroirIME : InputMethodService() {
                     val firstIdx = indices.firstOrNull() ?: return@post
 
                     // ═══ Mode correction → corriger la lettre du groupe ORIGINAL ═══
-                    if (imeView?.isCorrecting() == true && correctLetterIndex >= 0) {
+                    // Ne traiter que si c'est un groupe temporaire (firstIdx != correctionGroupFirstIdx)
+                    val isTempGroup = firstIdx != correctionGroupFirstIdx
+                    if (imeView?.isCorrecting() == true && correctLetterIndex >= 0 && isTempGroup) {
                         val origFirstIdx = correctionGroupFirstIdx
                         val origLabel = groupLabels[origFirstIdx] ?: return@post
                         if (correctLetterIndex < origLabel.length) {
@@ -2026,6 +2207,9 @@ class MiroirIME : InputMethodService() {
                                 }
                                 groupBlobs.remove(tempGroup.id)
                                 gm.removeGroup(tempGroup.id)
+                                // ═══ Nettoyer les traces d'inférence pour ce firstIdx ═══
+                                inferredGroupFirstIdxs.remove(firstIdx)
+                                groupStrokeCountAtInference.remove(firstIdx)
                             }
                             // Ré-animer le blob du groupe original (le groupe peut être évincé)
                             val savedGroup = correctionSavedGroup
@@ -2035,8 +2219,52 @@ class MiroirIME : InputMethodService() {
                                 }
                             }
                             correctionPaths.clear()
+                            correctLetterIndex = -1  // cible consommée → prêt pour sortie ou nouvelle cible
                             imeView?.postInvalidate()
                         }
+                        return@post
+                    }
+
+                    // ═══ Mode insertion → insérer le résultat dans le groupe ORIGINAL ═══
+                    if (imeView?.isCorrecting() == true && insertAtIndex >= 0 && isTempGroup) {
+                        val origFirstIdx = correctionGroupFirstIdx
+                        val origLabel = groupLabels[origFirstIdx] ?: return@post
+                        val newLabel = origLabel.substring(0, insertAtIndex) + result +
+                                       origLabel.substring(insertAtIndex)
+                        groupLabels[origFirstIdx] = newLabel
+                        Log.i(TAG, "Insertion: '$origLabel' → '$newLabel' (position #$insertAtIndex: '$result')")
+                        // Supprimer le groupe temporaire et ses strokes du strokeRegistry
+                        val gm = groupManager
+                        val tempGroup = gm?.allGroups()?.find { g ->
+                            g.strokeIds.firstOrNull()?.let { sid -> inkStrokeIdToRegistryIndex[sid] == firstIdx } == true
+                        }
+                        if (tempGroup != null) {
+                            val removedIndices = tempGroup.strokeIds.mapNotNull { sid ->
+                                inkStrokeIdToRegistryIndex.remove(sid)
+                            }.sortedDescending()
+                            for (idx in removedIndices) {
+                                if (idx < strokeRegistry.size) strokeRegistry.removeAt(idx)
+                            }
+                            for (entry in inkStrokeIdToRegistryIndex.entries) {
+                                val shift = removedIndices.count { it < entry.value }
+                                if (shift > 0) entry.setValue(entry.value - shift)
+                            }
+                            groupBlobs.remove(tempGroup.id)
+                            gm.removeGroup(tempGroup.id)
+                            // ═══ Nettoyer les traces d'inférence pour ce firstIdx ═══
+                            inferredGroupFirstIdxs.remove(firstIdx)
+                            groupStrokeCountAtInference.remove(firstIdx)
+                        }
+                        // Ré-animer le blob du groupe original
+                        val savedGroup = correctionSavedGroup
+                        if (savedGroup != null) {
+                            computeBlobPath(savedGroup)?.let { blob ->
+                                groupBlobs[savedGroup.id] = blob
+                            }
+                        }
+                        correctionPaths.clear()
+                        insertAtIndex = -1  // réinitialiser après insertion
+                        imeView?.postInvalidate()
                         return@post
                     }
 
@@ -2123,13 +2351,15 @@ class MiroirIME : InputMethodService() {
                 wordIdx++
             }
             if (wordsOnThisLine.isEmpty()) {
-                // Ligne vide → compter
+                // Ligne vide → compter (ne sera injectée que si du texte précède)
                 emptyLineCount++
             } else {
-                // Ligne avec mots → vider le compteur de lignes vides
-                if (emptyLineCount > 0) {
+                // Ligne avec mots → injecter les lignes vides seulement si on a déjà du contenu
+                if (emptyLineCount > 0 && sb.isNotEmpty()) {
                     for (i in 0 until emptyLineCount) sb.append("\n")
                     emptyLineCount = 0
+                } else {
+                    emptyLineCount = 0  // lignes vides avant le premier mot : ignorées
                 }
                 for (w in wordsOnThisLine) {
                     sb.append(w.text).append(" ")
@@ -2287,11 +2517,16 @@ class MiroirIME : InputMethodService() {
             surface.visibility = View.VISIBLE
             modeIndicator?.text = if (isInsertionMode) "↩" else "✍"
             // ═══ Initialiser le bitmap et le template si pas encore fait (surface était GONE au démarrage) ═══
-            if (bitmap == null && surface.width > 0 && surface.height > 0) {
-                bitmap = Bitmap.createBitmap(surface.width, surface.height, Bitmap.Config.ARGB_8888)
-                bitmapCanvas = Canvas(bitmap!!)
-                bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-                updateTemplateSpacing(surface.height)
+            if (bitmap == null) {
+                surface.post {
+                    if (surface.width > 0 && surface.height > 0) {
+                        bitmap = Bitmap.createBitmap(surface.width, surface.height, Bitmap.Config.ARGB_8888)
+                        bitmapCanvas = Canvas(bitmap!!)
+                        bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+                        updateTemplateSpacing(surface.height)
+                        surface.invalidate()
+                    }
+                }
             }
             isWriteMode = false     // forcer la réinitialisation EPD
             enterWriteMode()        // réactiver DU pour le tracé fluide
@@ -2552,6 +2787,7 @@ class MiroirIME : InputMethodService() {
                 }
                 correctionOriginalLabel = ""
                 correctLetterIndex = -1
+                insertAtIndex = -1
                 imeView?.exitEditMode()
                 hideOverlay()
             }
@@ -2564,6 +2800,7 @@ class MiroirIME : InputMethodService() {
                 // Restaurer le label original
                 groupLabels[correctionGroupFirstIdx] = correctionOriginalLabel
                 correctLetterIndex = -1
+                insertAtIndex = -1
                 imeView?.exitEditMode()
                 hideOverlay()
             }
