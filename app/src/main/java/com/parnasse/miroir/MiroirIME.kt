@@ -1227,6 +1227,7 @@ class MiroirIME : InputMethodService() {
                                 editMode = EditMode.CORRECT_TRANSCRIPTION
                                 correctLetterIndex = -1
                                 insertAtIndex = -1
+                                touchHelper?.setRawDrawingEnabled(false)  // ═══ pas de strokes TouchHelper en correction ═══
                                 val gid = activeBlobGroupId
                                 Log.i(TAG, "SWIPE HAUT: gid=$gid")
                                 if (gid != null) {
@@ -1630,6 +1631,9 @@ class MiroirIME : InputMethodService() {
             cachedGMCacheSize = -1
             displayController?.poserLabelPuisDU(DisplayMode.GU)
             updateModeIndicator()
+            // ═══ Réactiver le TouchHelper (désactivé en mode correction) ═══
+            touchHelper?.setRawDrawingEnabled(true)
+            try { touchHelper?.openRawDrawing() } catch (_: Exception) {}
             Log.i(TAG, "🔚 Sortie édition → retour DU")
         }
 
@@ -1745,11 +1749,7 @@ class MiroirIME : InputMethodService() {
             touchHelper = TouchHelper.create(target, TouchHelper.FEATURE_APP_TOUCH_RENDER,
                 object : RawInputCallback() {
                     override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
-                        // ═══ Activer DU au premier contact du stylet (quel que soit le chemin d'accès) ═══
-                        // Ne pas dupliquer si onStylusDown déjà déclenché par onTouchEvent
-                        // Ne pas créer de stroke si on est en mode correction (garde-fou explicite)
-                        val correcting = this@MiroirIME.imeView?.isCorrecting() ?: false
-                        if (!isStylusDown && !correcting) onStylusDown(p1.x, p1.y)
+                        if (!isStylusDown) onStylusDown(p1.x, p1.y)
                     }
                     override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {}
                     override fun onRawDrawingTouchPointListReceived(list: TouchPointList?) {}
