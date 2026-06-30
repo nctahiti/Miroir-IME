@@ -1,5 +1,29 @@
 # Changelog — Miroir IME
 
+## 2026-06-30 — Session « Correction de label — insertion/suppression + cinétique »
+
+### `14af910` — feat: correction label — insertion/suppression + cinétique robuste
+
+**Correction de label (swipe ↑)** :
+- Puces `+` (insertion) et `−` (suppression) avec hit-test rectangulaire large
+- Désélection précoce du groupe original → anti-absorption parasite des strokes de correction
+- `onStylusUp` : filtrage des strokes sans cible en mode correction
+- `recognizeGroup` : détection groupe temporaire par `firstIdx` (au lieu de `correctionPaths.isNotEmpty()`)
+- Nettoyage `inferredGroupFirstIdxs` après suppression groupe temporaire
+- `correctLetterIndex` réinitialisé après correction (permet la sortie du mode)
+
+**Cinétique** :
+- `onStylusDown` : muet si correction sans cible → clic de sortie sans trait
+- `onStylusPoint` : protégé par `isStylusDown` → anti trait fantôme (0,0)→clic
+- TouchHelper : fonctionnement normal, le filtrage se fait dans `onStylusUp`
+
+**Démarrage** :
+- `bitmap`/`template` via `surface.post` au premier basculement capture (surface `GONE` → dimensions 0)
+- `postInvalidate()` dans `exitEditMode()` → rafraîchissement vue après sortie correction
+
+**Clavier** :
+- Bouton backspace `⌫` au-dessus de `↩` retour, dans une colonne droite
+
 ## 2026-06-29 — Session « Clavier — disposition & curseur »
 
 ### `2d23feb` — fix: clavier — ponctuation injectText + retour 3 rangées + curseur markdown absolu
