@@ -2201,6 +2201,9 @@ class MiroirIME : InputMethodService() {
                                 }
                                 groupBlobs.remove(tempGroup.id)
                                 gm.removeGroup(tempGroup.id)
+                                // ═══ Nettoyer les traces d'inférence pour ce firstIdx ═══
+                                inferredGroupFirstIdxs.remove(firstIdx)
+                                groupStrokeCountAtInference.remove(firstIdx)
                             }
                             // Ré-animer le blob du groupe original (le groupe peut être évincé)
                             val savedGroup = correctionSavedGroup
@@ -2241,6 +2244,9 @@ class MiroirIME : InputMethodService() {
                             }
                             groupBlobs.remove(tempGroup.id)
                             gm.removeGroup(tempGroup.id)
+                            // ═══ Nettoyer les traces d'inférence pour ce firstIdx ═══
+                            inferredGroupFirstIdxs.remove(firstIdx)
+                            groupStrokeCountAtInference.remove(firstIdx)
                         }
                         // Ré-animer le blob du groupe original
                         val savedGroup = correctionSavedGroup
