@@ -1753,6 +1753,11 @@ class MiroirIME : InputMethodService() {
                                 view.hitTestLetter(p1.x, p1.y) >= 0) {
                                 return  // clic sur puce/lettre → onTouchEvent s'en charge
                             }
+                            // ═══ Clic dans le vide SANS cible active → sortie mode (onTouchEvent → exitEditMode) ═══
+                            if (correctLetterIndex < 0 && insertAtIndex < 0) {
+                                return  // pas de stroke, onTouchEvent gère la sortie
+                            }
+                            // Clic dans le vide AVEC cible active → écriture de correction
                         }
                         if (!isStylusDown) onStylusDown(p1.x, p1.y)
                     }
