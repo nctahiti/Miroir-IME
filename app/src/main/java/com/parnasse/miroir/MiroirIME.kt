@@ -97,6 +97,8 @@ class MiroirIME : InputMethodService() {
     private var groupManager: GroupManager? = null
     // Map firstIdx → texte reconnu (labels)
     private val groupLabels = mutableMapOf<Int, String>()
+    // Map firstIdx → label original (avant correction) — conservé tant que les strokes n'ont pas changé
+    private val originalLabels = mutableMapOf<Int, String>()
     private val labelPaint = Paint().apply {
         color = Color.BLACK  // noir pur pour mode DU
         textSize = 42f
@@ -199,6 +201,7 @@ class MiroirIME : InputMethodService() {
     private fun clearPage() {
         strokeRegistry.clear()
         groupLabels.clear()
+        originalLabels.clear()
         inkStrokeIdToRegistryIndex.clear()
         inkStrokeIdCounter = 0L
         groupAnchor.clear()
@@ -274,6 +277,10 @@ class MiroirIME : InputMethodService() {
             val labelsObj = org.json.JSONObject()
             for ((k, v) in groupLabels) labelsObj.put(k.toString(), v)
             json.put("labels", labelsObj)
+            // Labels originaux (avant correction)
+            val origLabelsObj = org.json.JSONObject()
+            for ((k, v) in originalLabels) origLabelsObj.put(k.toString(), v)
+            json.put("originalLabels", origLabelsObj)
             // Anchors: firstIdx → (x, y)
             val anchorsObj = org.json.JSONObject()
             for ((k, v) in groupAnchor) {
@@ -357,6 +364,14 @@ class MiroirIME : InputMethodService() {
                 if (labelsObj != null) {
                     for (key in labelsObj.keys()) {
                         groupLabels[key.toInt()] = labelsObj.optString(key, "")
+                    }
+                }
+                // Labels originaux (avant correction)
+                val origLabelsObj = json.optJSONObject("originalLabels")
+                originalLabels.clear()
+                if (origLabelsObj != null) {
+                    for (key in origLabelsObj.keys()) {
+                        originalLabels[key.toInt()] = origLabelsObj.optString(key, "")
                     }
                 }
                 // Anchors: firstIdx → (x, y)
@@ -1553,6 +1568,7 @@ class MiroirIME : InputMethodService() {
                         erasedSids.add(sid)
                         // ═══ Nettoyer le label du groupe (avant de retirer de la map) ═══
                         groupLabels.remove(idx)
+                        originalLabels.remove(idx)
                         inferredGroupFirstIdxs.remove(idx)
                         groupStrokeCountAtInference.remove(idx)
                         inkStrokeIdToRegistryIndex.remove(sid)
@@ -1577,6 +1593,7 @@ class MiroirIME : InputMethodService() {
                         val firstIdxInMap = inkStrokeIdToRegistryIndex[sid]
                         if (firstIdxInMap != null) {
                             groupLabels.remove(firstIdxInMap)
+                            originalLabels.remove(firstIdxInMap)
                             inferredGroupFirstIdxs.remove(firstIdxInMap)
                             groupStrokeCountAtInference.remove(firstIdxInMap)
                         }
@@ -2269,6 +2286,7 @@ class MiroirIME : InputMethodService() {
                     }
 
                     groupLabels[firstIdx] = result
+                    originalLabels[firstIdx] = result  // sauvegarder l'original (avant toute correction)
                     Log.i(TAG, "LABEL set: firstIdx=$firstIdx -> '$result' (${groupLabels.size} labels total)")
                     cachedGMCacheSize = -1
                     // Calculer et cacher le blob pour ce groupe
