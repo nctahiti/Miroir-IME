@@ -73,7 +73,6 @@ class MiroirIME : InputMethodService() {
 
     // ── TouchHelper Onyx ───────────────────────────────────────────────
     private var touchHelper: TouchHelper? = null
-    private var touchHelperBlocked = false  // bloqué en mode correction
 
     // ── Reconnaissance ML Kit ──────────────────────────────────────────
     private var recognizer: DigitalInkWrapper? = null
@@ -1228,7 +1227,6 @@ class MiroirIME : InputMethodService() {
                                 editMode = EditMode.CORRECT_TRANSCRIPTION
                                 correctLetterIndex = -1
                                 insertAtIndex = -1
-                                touchHelperBlocked = true  // ═══ pas de strokes TouchHelper en correction ═══
                                 val gid = activeBlobGroupId
                                 Log.i(TAG, "SWIPE HAUT: gid=$gid")
                                 if (gid != null) {
@@ -1631,7 +1629,6 @@ class MiroirIME : InputMethodService() {
             cachedGMCacheSize = -1
             displayController?.poserLabelPuisDU(DisplayMode.GU)
             updateModeIndicator()
-            touchHelperBlocked = false  // ═══ réactiver le TouchHelper ═══
             Log.i(TAG, "🔚 Sortie édition → retour DU")
         }
 
@@ -1747,7 +1744,6 @@ class MiroirIME : InputMethodService() {
             touchHelper = TouchHelper.create(target, TouchHelper.FEATURE_APP_TOUCH_RENDER,
                 object : RawInputCallback() {
                     override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
-                        if (touchHelperBlocked) return
                         if (!isStylusDown) onStylusDown(p1.x, p1.y)
                     }
                     override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {}
@@ -1851,11 +1847,16 @@ class MiroirIME : InputMethodService() {
             return
         }
 
-        // ═══ Mode correction → chemin normal (strokeRegistry + GroupManager + inférence standard) ═══
-        val isCorrection = imeView?.isCorrecting() == true && (correctLetterIndex >= 0 || insertAtIndex >= 0)
-
-        if (isCorrection) {
-            // Sauvegarder le path pour dessin au-dessus du cadre (pas dans le bitmap principal)
+        // ═══ Mode correction → filtrer selon le contexte ═══
+        val correcting = imeView?.isCorrecting() == true
+        if (correcting) {
+            val hasTarget = correctLetterIndex >= 0 || insertAtIndex >= 0
+            if (!hasTarget) {
+                // Clic dans le vide (sortie) ou sur puce − (suppression) → jeter le stroke
+                currentPath.reset()
+                return
+            }
+            // Cible active (remplacement ou insertion) → écriture de correction
             correctionPaths.add(android.graphics.Path(currentPath))
             currentPath.reset()
         } else {
