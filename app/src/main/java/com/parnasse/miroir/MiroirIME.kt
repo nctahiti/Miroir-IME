@@ -1801,6 +1801,10 @@ class MiroirIME : InputMethodService() {
     private var isStylusDown = false
 
     private fun onStylusDown(x: Float, y: Float) {
+        // ═══ Mode correction sans cible → clic dans le vide (sortie) → pas de stroke ═══
+        if (imeView?.isCorrecting() == true && correctLetterIndex < 0 && insertAtIndex < 0) {
+            return  // le TouchHelper forward, onTouchEvent → exitEditMode
+        }
         isStylusDown = true
         // Mode correction → désélectionner le groupe original pour que les strokes forment un NOUVEAU groupe
         if (imeView?.isCorrecting() == true && (correctLetterIndex >= 0 || insertAtIndex >= 0)) {
