@@ -2213,6 +2213,7 @@ class MiroirIME : InputMethodService() {
                                 }
                             }
                             correctionPaths.clear()
+                            correctLetterIndex = -1  // cible consommée → prêt pour sortie ou nouvelle cible
                             imeView?.postInvalidate()
                         }
                         return@post
