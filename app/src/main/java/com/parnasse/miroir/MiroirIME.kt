@@ -1853,11 +1853,6 @@ class MiroirIME : InputMethodService() {
         val stroke = currentStroke
         currentStroke = null
         if (stroke == null || stroke.points.isEmpty()) return
-        // ═══ Ignorer les taps dans le vide (un seul point) ═══
-        if (stroke.points.size < 2) {
-            currentPath.reset()
-            return
-        }
 
         // ═══ Mode correction → filtrer selon le contexte ═══
         val correcting = imeView?.isCorrecting() == true
@@ -1869,9 +1864,19 @@ class MiroirIME : InputMethodService() {
                 return
             }
             // Cible active (remplacement ou insertion) → écriture de correction
+            // Accepter même les strokes courts (1 point) — l'e-ink peut rater des points
+            if (stroke.points.isEmpty()) {
+                currentPath.reset()
+                return
+            }
             correctionPaths.add(android.graphics.Path(currentPath))
             currentPath.reset()
         } else {
+            // Ignorer les taps dans le vide (un seul point)
+            if (stroke.points.size < 2) {
+                currentPath.reset()
+                return
+            }
             // Rastériser le stroke dans le bitmap
             val canvas = bitmapCanvas ?: return
             if (stroke.points.size < 2) {
