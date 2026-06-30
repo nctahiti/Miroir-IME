@@ -1134,7 +1134,13 @@ class MiroirIME : InputMethodService() {
                                 imeView?.postInvalidate()
                                 return true
                             }
-                            // Clic hors des lettres → sortir du mode
+                            // ═══ Si une cible est active (remplacement ou insertion), commencer l'écriture ═══
+                            if (correctLetterIndex >= 0 || insertAtIndex >= 0) {
+                                onStylusDown(event.x, event.y)
+                                tapStrokeStarted = true
+                                return true
+                            }
+                            // Clic hors des lettres sans cible → sortir du mode
                             exitEditMode()
                             currentPath.reset()  // ═══ pas de trait fantôme ═══
                             tapStrokeStarted = true  // ═══ pas de groupe parasite au prochain MOVE ═══
@@ -2137,7 +2143,7 @@ class MiroirIME : InputMethodService() {
                     val firstIdx = indices.firstOrNull() ?: return@post
 
                     // ═══ Mode correction → corriger la lettre du groupe ORIGINAL ═══
-                    if (imeView?.isCorrecting() == true && correctLetterIndex >= 0) {
+                    if (imeView?.isCorrecting() == true && correctLetterIndex >= 0 && correctionPaths.isNotEmpty()) {
                         val origFirstIdx = correctionGroupFirstIdx
                         val origLabel = groupLabels[origFirstIdx] ?: return@post
                         if (correctLetterIndex < origLabel.length) {
@@ -2181,7 +2187,7 @@ class MiroirIME : InputMethodService() {
                     }
 
                     // ═══ Mode insertion → insérer le résultat dans le groupe ORIGINAL ═══
-                    if (imeView?.isCorrecting() == true && insertAtIndex >= 0) {
+                    if (imeView?.isCorrecting() == true && insertAtIndex >= 0 && correctionPaths.isNotEmpty()) {
                         val origFirstIdx = correctionGroupFirstIdx
                         val origLabel = groupLabels[origFirstIdx] ?: return@post
                         val newLabel = origLabel.substring(0, insertAtIndex) + result +
