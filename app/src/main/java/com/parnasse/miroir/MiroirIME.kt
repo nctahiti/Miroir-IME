@@ -73,6 +73,7 @@ class MiroirIME : InputMethodService() {
 
     // ── TouchHelper Onyx ───────────────────────────────────────────────
     private var touchHelper: TouchHelper? = null
+    private var touchHelperBlocked = false  // bloqué en mode correction
 
     // ── Reconnaissance ML Kit ──────────────────────────────────────────
     private var recognizer: DigitalInkWrapper? = null
@@ -1227,6 +1228,7 @@ class MiroirIME : InputMethodService() {
                                 editMode = EditMode.CORRECT_TRANSCRIPTION
                                 correctLetterIndex = -1
                                 insertAtIndex = -1
+                                touchHelperBlocked = true  // ═══ pas de strokes TouchHelper en correction ═══
                                 val gid = activeBlobGroupId
                                 Log.i(TAG, "SWIPE HAUT: gid=$gid")
                                 if (gid != null) {
@@ -1629,6 +1631,7 @@ class MiroirIME : InputMethodService() {
             cachedGMCacheSize = -1
             displayController?.poserLabelPuisDU(DisplayMode.GU)
             updateModeIndicator()
+            touchHelperBlocked = false  // ═══ réactiver le TouchHelper ═══
             Log.i(TAG, "🔚 Sortie édition → retour DU")
         }
 
@@ -1744,8 +1747,7 @@ class MiroirIME : InputMethodService() {
             touchHelper = TouchHelper.create(target, TouchHelper.FEATURE_APP_TOUCH_RENDER,
                 object : RawInputCallback() {
                     override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
-                        // ═══ En mode correction, le TouchHelper est muet — onTouchEvent pilote tout ═══
-                        if (this@MiroirIME.imeView?.isCorrecting() ?: false) return
+                        if (touchHelperBlocked) return
                         if (!isStylusDown) onStylusDown(p1.x, p1.y)
                     }
                     override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {}
