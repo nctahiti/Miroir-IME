@@ -1415,7 +1415,7 @@ class MiroirIME : InputMethodService() {
         fun isCorrecting(): Boolean = editMode == EditMode.CORRECT_TRANSCRIPTION
 
         /** Retourne l'index de la lettre touchée, ou -1. */
-        private fun hitTestLetter(x: Float, y: Float): Int {
+        internal fun hitTestLetter(x: Float, y: Float): Int {
             val firstIdx = this@MiroirIME.correctionGroupFirstIdx
             val label = groupLabels[firstIdx] ?: return -1
             val anchor = groupAnchor[firstIdx] ?: return -1
@@ -1430,7 +1430,7 @@ class MiroirIME : InputMethodService() {
         }
 
         /** Retourne l'index de la lettre dont la puce − est touchée, ou -1. */
-        private fun hitTestMinus(x: Float, y: Float): Int {
+        internal fun hitTestMinus(x: Float, y: Float): Int {
             val firstIdx = this@MiroirIME.correctionGroupFirstIdx
             val label = groupLabels[firstIdx] ?: return -1
             val anchor = groupAnchor[firstIdx] ?: return -1
@@ -1452,7 +1452,7 @@ class MiroirIME : InputMethodService() {
         }
 
         /** Retourne la position d'insertion (0..label.length) si une puce + est touchée, ou -1. */
-        private fun hitTestPlus(x: Float, y: Float): Int {
+        internal fun hitTestPlus(x: Float, y: Float): Int {
             val firstIdx = this@MiroirIME.correctionGroupFirstIdx
             val label = groupLabels[firstIdx] ?: return -1
             val anchor = groupAnchor[firstIdx] ?: return -1
@@ -1745,11 +1745,16 @@ class MiroirIME : InputMethodService() {
             touchHelper = TouchHelper.create(target, TouchHelper.FEATURE_APP_TOUCH_RENDER,
                 object : RawInputCallback() {
                     override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
-                        // ═══ Activer DU au premier contact du stylet (quel que soit le chemin d'accès) ═══
-                        // Ne pas dupliquer si onStylusDown déjà déclenché par onTouchEvent
-                        // Ne pas créer de stroke si on est en mode correction (garde-fou explicite)
-                        val correcting = this@MiroirIME.imeView?.isCorrecting() ?: false
-                        if (!isStylusDown && !correcting) onStylusDown(p1.x, p1.y)
+                        // ═══ En mode correction, vérifier si le stylet est sur une puce/lettre ═══
+                        val view = this@MiroirIME.imeView
+                        if (view != null && view.isCorrecting()) {
+                            if (view.hitTestMinus(p1.x, p1.y) >= 0 ||
+                                view.hitTestPlus(p1.x, p1.y) >= 0 ||
+                                view.hitTestLetter(p1.x, p1.y) >= 0) {
+                                return  // clic sur puce/lettre → onTouchEvent s'en charge
+                            }
+                        }
+                        if (!isStylusDown) onStylusDown(p1.x, p1.y)
                     }
                     override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {}
                     override fun onRawDrawingTouchPointListReceived(list: TouchPointList?) {}
