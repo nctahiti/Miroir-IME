@@ -2143,7 +2143,9 @@ class MiroirIME : InputMethodService() {
                     val firstIdx = indices.firstOrNull() ?: return@post
 
                     // ═══ Mode correction → corriger la lettre du groupe ORIGINAL ═══
-                    if (imeView?.isCorrecting() == true && correctLetterIndex >= 0 && correctionPaths.isNotEmpty()) {
+                    // Ne traiter que si c'est un groupe temporaire (firstIdx != correctionGroupFirstIdx)
+                    val isTempGroup = firstIdx != correctionGroupFirstIdx
+                    if (imeView?.isCorrecting() == true && correctLetterIndex >= 0 && isTempGroup) {
                         val origFirstIdx = correctionGroupFirstIdx
                         val origLabel = groupLabels[origFirstIdx] ?: return@post
                         if (correctLetterIndex < origLabel.length) {
@@ -2187,7 +2189,7 @@ class MiroirIME : InputMethodService() {
                     }
 
                     // ═══ Mode insertion → insérer le résultat dans le groupe ORIGINAL ═══
-                    if (imeView?.isCorrecting() == true && insertAtIndex >= 0 && correctionPaths.isNotEmpty()) {
+                    if (imeView?.isCorrecting() == true && insertAtIndex >= 0 && isTempGroup) {
                         val origFirstIdx = correctionGroupFirstIdx
                         val origLabel = groupLabels[origFirstIdx] ?: return@post
                         val newLabel = origLabel.substring(0, insertAtIndex) + result +
