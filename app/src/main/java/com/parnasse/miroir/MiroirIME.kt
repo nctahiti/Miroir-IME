@@ -1856,8 +1856,8 @@ class MiroirIME : InputMethodService() {
 
         // ═══ Mode correction → filtrer selon le contexte ═══
         val correcting = imeView?.isCorrecting() == true
+        val hasTarget = correcting && (correctLetterIndex >= 0 || insertAtIndex >= 0)
         if (correcting) {
-            val hasTarget = correctLetterIndex >= 0 || insertAtIndex >= 0
             if (!hasTarget) {
                 // Clic dans le vide (sortie) ou sur puce − (suppression) → jeter le stroke
                 currentPath.reset()
@@ -1896,7 +1896,17 @@ class MiroirIME : InputMethodService() {
 
         // ═══ GroupManager : groupement spatial ═══
         val inkStroke = strokeRecordToInkStroke(stroke, inkId)
-        val affectedGroup = groupManager?.onStrokeSealed(inkStroke)
+        var affectedGroup = groupManager?.onStrokeSealed(inkStroke)
+
+        // ═══ Mode correction : si le stroke est trop petit (bounds vides), forcer un groupe ═══
+        if (affectedGroup == null && correcting && hasTarget) {
+            val gm = groupManager
+            if (gm != null) {
+                val forcedGroup = gm.getOrCreateActiveGroup()
+                forcedGroup.strokeIds.add(inkStroke.id)
+                affectedGroup = forcedGroup
+            }
+        }
 
         // Armer le timer d'inférence UNIQUEMENT pour le groupe modifié
         if (affectedGroup != null && !isFormattingMode) {
