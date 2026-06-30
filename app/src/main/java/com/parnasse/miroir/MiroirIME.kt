@@ -1102,6 +1102,10 @@ class MiroirIME : InputMethodService() {
                                 val origFirstIdx = correctionGroupFirstIdx
                                 val origLabel = groupLabels[origFirstIdx] ?: return true
                                 if (minusIdx < origLabel.length) {
+                                    // ═══ Désélectionner le groupe original pour que le TouchHelper ne l'absorbe pas ═══
+                                    groupManager?.allGroups()?.find { it.state == GroupState.SELECTED }?.let {
+                                        groupManager?.deselectGroup(it.id)
+                                    }
                                     val newLabel = origLabel.removeRange(minusIdx, minusIdx + 1)
                                     groupLabels[origFirstIdx] = newLabel
                                     correctLetterIndex = -1
@@ -1115,6 +1119,10 @@ class MiroirIME : InputMethodService() {
                             // ═══ Détecter clic sur + (insertion) ═══
                             val plusIdx = hitTestPlus(event.x, event.y)
                             if (plusIdx >= 0) {
+                                // ═══ Désélectionner le groupe original pour que le TouchHelper ne l'absorbe pas ═══
+                                groupManager?.allGroups()?.find { it.state == GroupState.SELECTED }?.let {
+                                    groupManager?.deselectGroup(it.id)
+                                }
                                 insertAtIndex = plusIdx
                                 correctLetterIndex = -1  // mutuellement exclusif
                                 correctionPaths.clear()
@@ -1126,6 +1134,10 @@ class MiroirIME : InputMethodService() {
                             // ═══ Détecter clic sur une lettre (remplacement) ═══
                             val idx = hitTestLetter(event.x, event.y)
                             if (idx >= 0) {
+                                // ═══ Désélectionner le groupe original pour que le TouchHelper ne l'absorbe pas ═══
+                                groupManager?.allGroups()?.find { it.state == GroupState.SELECTED }?.let {
+                                    groupManager?.deselectGroup(it.id)
+                                }
                                 correctLetterIndex = idx
                                 insertAtIndex = -1  // mutuellement exclusif
                                 correctionPaths.clear()  // nouveau caractère → vider les anciens strokes
