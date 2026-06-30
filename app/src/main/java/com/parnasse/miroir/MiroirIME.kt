@@ -1745,7 +1745,7 @@ class MiroirIME : InputMethodService() {
                 object : RawInputCallback() {
                     override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
                         // ═══ En mode correction, le TouchHelper est muet — onTouchEvent pilote tout ═══
-                        if (this@MiroirIME.imeView?.isCorrecting() == true) return
+                        if (this@MiroirIME.imeView?.isCorrecting() ?: false) return
                         if (!isStylusDown) onStylusDown(p1.x, p1.y)
                     }
                     override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {}
