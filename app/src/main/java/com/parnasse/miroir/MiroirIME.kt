@@ -1438,17 +1438,15 @@ class MiroirIME : InputMethodService() {
             val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
             val letterW = spacing * 0.7f
             val chipRadius = maxOf(letterW * 0.3f, 14f)
-            val hitR = chipRadius + 6f
             val totalW = letterW * label.length
             val startX = anchor.first - totalW / 2f
             val startY = snapToLine(anchor.second) - spacing * 0.8f
-            for (i in label.indices) {
-                val cx = startX + letterW * i + letterW / 2f
-                val cy = startY + letterW + chipRadius + 4f
-                val dx = x - cx; val dy = y - cy
-                if (dx * dx + dy * dy <= hitR * hitR) return i
-            }
-            return -1
+            // Zone rectangulaire : toute la largeur de la lettre, du bas du cadre jusqu'en dessous des puces
+            val zoneTop = startY + letterW
+            val zoneBottom = startY + letterW + chipRadius * 2f + 14f
+            if (y < zoneTop || y > zoneBottom) return -1
+            if (x < startX || x > startX + totalW) return -1
+            return ((x - startX) / letterW).toInt().coerceIn(0, label.length - 1)
         }
 
         /** Retourne la position d'insertion (0..label.length) si une puce + est touchée, ou -1. */
@@ -1459,17 +1457,18 @@ class MiroirIME : InputMethodService() {
             val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
             val letterW = spacing * 0.7f
             val chipRadius = maxOf(letterW * 0.3f, 14f)
-            val hitR = chipRadius + 6f
             val totalW = letterW * label.length
             val startX = anchor.first - totalW / 2f
             val startY = snapToLine(anchor.second) - spacing * 0.8f
-            for (i in 0..label.length) {
-                val cx = startX + letterW * i
-                val cy = startY - chipRadius - 4f
-                val dx = x - cx; val dy = y - cy
-                if (dx * dx + dy * dy <= hitR * hitR) return i
-            }
-            return -1
+            // Zone rectangulaire : toute la hauteur au-dessus du cadre, divisée en N+1 colonnes
+            val zoneTop = startY - chipRadius * 2f - 14f
+            val zoneBottom = startY
+            if (y < zoneTop || y > zoneBottom) return -1
+            // Étendre légèrement à gauche du premier + et à droite du dernier
+            val extendedStart = startX - letterW * 0.3f
+            val extendedEnd = startX + totalW + letterW * 0.3f
+            if (x < extendedStart || x > extendedEnd) return -1
+            return ((x - startX + letterW / 2f) / letterW).toInt().coerceIn(0, label.length)
         }
 
         /** Redessine tous les strokes dans le bitmap, SANS refreshScreen. */
