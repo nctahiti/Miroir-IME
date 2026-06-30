@@ -1747,9 +1747,9 @@ class MiroirIME : InputMethodService() {
                     override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
                         // ═══ Activer DU au premier contact du stylet (quel que soit le chemin d'accès) ═══
                         // Ne pas dupliquer si onStylusDown déjà déclenché par onTouchEvent
-                        // Ne pas créer de stroke si on est en mode édition OU correction (garde-fou explicite)
-                        val editing = imeView?.isEditing() ?: false
-                        if (!isStylusDown && !editing) onStylusDown(p1.x, p1.y)
+                        // Ne pas créer de stroke si on est en mode correction (garde-fou explicite)
+                        val correcting = this@MiroirIME.imeView?.isCorrecting() ?: false
+                        if (!isStylusDown && !correcting) onStylusDown(p1.x, p1.y)
                     }
                     override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {}
                     override fun onRawDrawingTouchPointListReceived(list: TouchPointList?) {}
