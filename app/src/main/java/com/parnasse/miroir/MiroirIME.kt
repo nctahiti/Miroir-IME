@@ -1021,22 +1021,38 @@ class MiroirIME : InputMethodService() {
                         canvas.drawRect(startX + letterW * i, startY, startX + letterW * (i + 1), startY + letterW, casePaint)
                         val p = if (i == this@MiroirIME.correctLetterIndex) activePaint else letterPaint
                         canvas.drawText(label[i].toString(), cx, cy, p)
-                        // ── Bouton SUPPRESSION (−) sous la lettre ──
-                        val minusY = startY + letterW + 14f
-                        val minusPaint = if (i == this@MiroirIME.correctLetterIndex)
-                            android.graphics.Paint().apply { color = Color.RED; textSize = letterW * 0.6f; isAntiAlias = true; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
-                        else
-                            android.graphics.Paint().apply { color = Color.argb(180, 180, 60, 60); textSize = letterW * 0.6f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
-                        canvas.drawText("−", cx, minusY, minusPaint)
                     }
-                    // ── Boutons INSERTION (+) entre les lettres (au-dessus) ──
-                    val plusPaint = android.graphics.Paint().apply { color = Color.argb(180, 60, 160, 80); textSize = letterW * 0.6f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
-                    val plusActivePaint = android.graphics.Paint().apply { color = Color.argb(255, 40, 200, 60); textSize = letterW * 0.6f; isAntiAlias = true; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
+                    // ── Puces : INSERTION (+) entre les lettres (au-dessus) et SUPPRESSION (−) sous les lettres ──
+                    val chipRadius = maxOf(letterW * 0.3f, 14f)  // rayon minimum 14px
+                    val hitRadius = chipRadius + 6f              // zone cliquable élargie
+                    val chipBgPaint = android.graphics.Paint().apply { color = Color.argb(180, 40, 44, 52); style = Paint.Style.FILL; isAntiAlias = true }
+                    val chipBorderPaint = android.graphics.Paint().apply { color = Color.argb(100, 180, 180, 200); style = Paint.Style.STROKE; strokeWidth = 1.5f; isAntiAlias = true }
+                    val chipActiveBorderPaint = android.graphics.Paint().apply { color = Color.argb(255, 40, 200, 60); style = Paint.Style.STROKE; strokeWidth = 2f; isAntiAlias = true }
+                    val minusChipBorderPaint = android.graphics.Paint().apply { color = Color.argb(100, 200, 100, 100); style = Paint.Style.STROKE; strokeWidth = 1.5f; isAntiAlias = true }
+                    val minusChipActiveBorderPaint = android.graphics.Paint().apply { color = Color.RED; style = Paint.Style.STROKE; strokeWidth = 2f; isAntiAlias = true }
+                    val plusTextPaint = android.graphics.Paint().apply { color = Color.argb(220, 140, 200, 140); textSize = chipRadius * 1.2f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+                    val plusActiveTextPaint = android.graphics.Paint().apply { color = Color.argb(255, 80, 240, 80); textSize = chipRadius * 1.2f; isAntiAlias = true; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
+                    val minusTextPaint = android.graphics.Paint().apply { color = Color.argb(220, 200, 140, 140); textSize = chipRadius * 1.2f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+                    val minusActiveTextPaint = android.graphics.Paint().apply { color = Color.argb(255, 255, 60, 60); textSize = chipRadius * 1.2f; isAntiAlias = true; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
+                    // ── Puces + entre les lettres (au-dessus du cadre) ──
                     for (i in 0..label.length) {
-                        val plusX = startX + letterW * i
-                        val plusY = startY - 14f
-                        val pp = if (i == this@MiroirIME.insertAtIndex) plusActivePaint else plusPaint
-                        canvas.drawText("+", plusX, plusY, pp)
+                        val chipCenterX = startX + letterW * i
+                        val chipCenterY = startY - chipRadius - 4f
+                        canvas.drawCircle(chipCenterX, chipCenterY, chipRadius, chipBgPaint)
+                        val border = if (i == this@MiroirIME.insertAtIndex) chipActiveBorderPaint else chipBorderPaint
+                        canvas.drawCircle(chipCenterX, chipCenterY, chipRadius, border)
+                        val tp = if (i == this@MiroirIME.insertAtIndex) plusActiveTextPaint else plusTextPaint
+                        canvas.drawText("+", chipCenterX, chipCenterY + chipRadius * 0.4f, tp)
+                    }
+                    // ── Puces − sous chaque lettre (en dessous du cadre) ──
+                    for (i in label.indices) {
+                        val chipCenterX = startX + letterW * i + letterW / 2f
+                        val chipCenterY = startY + letterW + chipRadius + 4f
+                        canvas.drawCircle(chipCenterX, chipCenterY, chipRadius, chipBgPaint)
+                        val border = if (i == this@MiroirIME.correctLetterIndex) minusChipActiveBorderPaint else minusChipBorderPaint
+                        canvas.drawCircle(chipCenterX, chipCenterY, chipRadius, border)
+                        val tp = if (i == this@MiroirIME.correctLetterIndex) minusActiveTextPaint else minusTextPaint
+                        canvas.drawText("−", chipCenterX, chipCenterY + chipRadius * 0.4f, tp)
                     }
                 }
                 // Filtre : pas de labels normaux en mode correction, mais le template oui
@@ -1402,7 +1418,7 @@ class MiroirIME : InputMethodService() {
             return ((x - startX) / letterW).toInt().coerceIn(0, label.length - 1)
         }
 
-        /** Retourne l'index de la lettre dont le bouton − est touché, ou -1. */
+        /** Retourne l'index de la lettre dont la puce − est touchée, ou -1. */
         private fun hitTestMinus(x: Float, y: Float): Int {
             val firstIdx = this@MiroirIME.correctionGroupFirstIdx
             val label = groupLabels[firstIdx] ?: return -1
@@ -1410,35 +1426,39 @@ class MiroirIME : InputMethodService() {
             if (label.isEmpty()) return -1
             val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
             val letterW = spacing * 0.7f
+            val chipRadius = maxOf(letterW * 0.3f, 14f)
+            val hitR = chipRadius + 6f
             val totalW = letterW * label.length
             val startX = anchor.first - totalW / 2f
             val startY = snapToLine(anchor.second) - spacing * 0.8f
-            val minusTop = startY + letterW + 6f
-            val minusBottom = minusTop + 20f
-            if (y < minusTop || y > minusBottom || x < startX || x > startX + totalW) return -1
-            return ((x - startX) / letterW).toInt().coerceIn(0, label.length - 1)
+            for (i in label.indices) {
+                val cx = startX + letterW * i + letterW / 2f
+                val cy = startY + letterW + chipRadius + 4f
+                val dx = x - cx; val dy = y - cy
+                if (dx * dx + dy * dy <= hitR * hitR) return i
+            }
+            return -1
         }
 
-        /** Retourne la position d'insertion (0..label.length) si un + est touché, ou -1. */
+        /** Retourne la position d'insertion (0..label.length) si une puce + est touchée, ou -1. */
         private fun hitTestPlus(x: Float, y: Float): Int {
             val firstIdx = this@MiroirIME.correctionGroupFirstIdx
             val label = groupLabels[firstIdx] ?: return -1
             val anchor = groupAnchor[firstIdx] ?: return -1
-            if (label.isEmpty() && x != anchor.first) return -1  // label vide : seul le + au début est valide
             val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
             val letterW = spacing * 0.7f
+            val chipRadius = maxOf(letterW * 0.3f, 14f)
+            val hitR = chipRadius + 6f
             val totalW = letterW * label.length
             val startX = anchor.first - totalW / 2f
             val startY = snapToLine(anchor.second) - spacing * 0.8f
-            val plusTop = startY - 24f
-            val plusBottom = startY
-            if (y < plusTop || y > plusBottom) return -1
-            // + sont espacés de letterW, centrés sur startX + letterW * i
-            val idx = Math.round((x - startX) / letterW).toInt().coerceIn(0, label.length)
-            // Vérifier que x est proche du centre du +
-            val plusCenterX = startX + letterW * idx
-            if (Math.abs(x - plusCenterX) > letterW * 0.4f) return -1
-            return idx
+            for (i in 0..label.length) {
+                val cx = startX + letterW * i
+                val cy = startY - chipRadius - 4f
+                val dx = x - cx; val dy = y - cy
+                if (dx * dx + dy * dy <= hitR * hitR) return i
+            }
+            return -1
         }
 
         /** Redessine tous les strokes dans le bitmap, SANS refreshScreen. */
