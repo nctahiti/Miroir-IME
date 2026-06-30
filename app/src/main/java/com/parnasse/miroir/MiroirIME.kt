@@ -1084,6 +1084,8 @@ class MiroirIME : InputMethodService() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> { /* ignoré — IME ne reçoit pas ces événements */ }
                 MotionEvent.ACTION_DOWN -> {
+                    // ═══ Nettoyage cinétique : reset du path avant tout traitement ═══
+                    currentPath.reset()
                     // ═══ Suivi du tap et long-press — on diffère onStylusDown ═══
                     tapStartX = event.x; tapStartY = event.y
                     tapStartTime = System.currentTimeMillis()
@@ -1104,6 +1106,7 @@ class MiroirIME : InputMethodService() {
                                     groupLabels[origFirstIdx] = newLabel
                                     correctLetterIndex = -1
                                     insertAtIndex = -1
+                                    isStylusDown = false  // verrou cinétique : pas de stroke après clic puce
                                     Log.i(TAG, "Correction: suppression #$minusIdx → '$origLabel' → '$newLabel'")
                                     imeView?.postInvalidate()
                                 }
@@ -1115,6 +1118,7 @@ class MiroirIME : InputMethodService() {
                                 insertAtIndex = plusIdx
                                 correctLetterIndex = -1  // mutuellement exclusif
                                 correctionPaths.clear()
+                                isStylusDown = false  // verrou cinétique : pas de stroke après clic puce
                                 Log.i(TAG, "Correction: insertion à la position #$plusIdx")
                                 imeView?.postInvalidate()
                                 return true
@@ -1125,6 +1129,7 @@ class MiroirIME : InputMethodService() {
                                 correctLetterIndex = idx
                                 insertAtIndex = -1  // mutuellement exclusif
                                 correctionPaths.clear()  // nouveau caractère → vider les anciens strokes
+                                isStylusDown = false  // verrou cinétique : pas de stroke après clic lettre
                                 Log.i(TAG, "Correction: lettre #$idx ciblée")
                                 imeView?.postInvalidate()
                                 return true
@@ -1736,8 +1741,9 @@ class MiroirIME : InputMethodService() {
                     override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
                         // ═══ Activer DU au premier contact du stylet (quel que soit le chemin d'accès) ═══
                         // Ne pas dupliquer si onStylusDown déjà déclenché par onTouchEvent
-                        // Ne pas créer de stroke si on est en mode édition (geste de sortie)
-                        if (!isStylusDown && !(imeView?.isEditing() == true)) onStylusDown(p1.x, p1.y)
+                        // Ne pas créer de stroke si on est en mode édition OU correction (garde-fou explicite)
+                        val editing = imeView?.isEditing() ?: false
+                        if (!isStylusDown && !editing) onStylusDown(p1.x, p1.y)
                     }
                     override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {}
                     override fun onRawDrawingTouchPointListReceived(list: TouchPointList?) {}
