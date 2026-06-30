@@ -1745,20 +1745,6 @@ class MiroirIME : InputMethodService() {
             touchHelper = TouchHelper.create(target, TouchHelper.FEATURE_APP_TOUCH_RENDER,
                 object : RawInputCallback() {
                     override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
-                        // ═══ En mode correction, vérifier si le stylet est sur une puce/lettre ═══
-                        val view = this@MiroirIME.imeView
-                        if (view != null && view.isCorrecting()) {
-                            if (view.hitTestMinus(p1.x, p1.y) >= 0 ||
-                                view.hitTestPlus(p1.x, p1.y) >= 0 ||
-                                view.hitTestLetter(p1.x, p1.y) >= 0) {
-                                return  // clic sur puce/lettre → onTouchEvent s'en charge
-                            }
-                            // ═══ Clic dans le vide SANS cible active → sortie mode (onTouchEvent → exitEditMode) ═══
-                            if (correctLetterIndex < 0 && insertAtIndex < 0) {
-                                return  // pas de stroke, onTouchEvent gère la sortie
-                            }
-                            // Clic dans le vide AVEC cible active → écriture de correction
-                        }
                         if (!isStylusDown) onStylusDown(p1.x, p1.y)
                     }
                     override fun onRawDrawingTouchPointMoveReceived(point: OnyxTouchPoint?) {}
@@ -1804,6 +1790,19 @@ class MiroirIME : InputMethodService() {
     private var isStylusDown = false
 
     private fun onStylusDown(x: Float, y: Float) {
+        // ═══ Mode correction : filtrer les strokes selon le contexte ═══
+        val view = imeView
+        if (view != null && view.isCorrecting()) {
+            // Clic sur puce/lettre → onTouchEvent gère (suppression/insertion/remplacement)
+            if (view.hitTestMinus(x, y) >= 0 || view.hitTestPlus(x, y) >= 0 || view.hitTestLetter(x, y) >= 0) {
+                return
+            }
+            // Clic dans le vide SANS cible → onTouchEvent → exitEditMode (pas de stroke)
+            if (correctLetterIndex < 0 && insertAtIndex < 0) {
+                return
+            }
+            // Clic dans le vide AVEC cible → écriture de correction (continue)
+        }
         isStylusDown = true
         // Mode correction → désélectionner le groupe original pour que les strokes forment un NOUVEAU groupe
         if (imeView?.isCorrecting() == true && (correctLetterIndex >= 0 || insertAtIndex >= 0)) {
