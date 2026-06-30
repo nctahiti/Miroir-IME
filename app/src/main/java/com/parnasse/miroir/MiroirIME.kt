@@ -2517,11 +2517,16 @@ class MiroirIME : InputMethodService() {
             surface.visibility = View.VISIBLE
             modeIndicator?.text = if (isInsertionMode) "↩" else "✍"
             // ═══ Initialiser le bitmap et le template si pas encore fait (surface était GONE au démarrage) ═══
-            if (bitmap == null && surface.width > 0 && surface.height > 0) {
-                bitmap = Bitmap.createBitmap(surface.width, surface.height, Bitmap.Config.ARGB_8888)
-                bitmapCanvas = Canvas(bitmap!!)
-                bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-                updateTemplateSpacing(surface.height)
+            if (bitmap == null) {
+                surface.post {
+                    if (surface.width > 0 && surface.height > 0) {
+                        bitmap = Bitmap.createBitmap(surface.width, surface.height, Bitmap.Config.ARGB_8888)
+                        bitmapCanvas = Canvas(bitmap!!)
+                        bitmapCanvas?.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+                        updateTemplateSpacing(surface.height)
+                        surface.invalidate()
+                    }
+                }
             }
             isWriteMode = false     // forcer la réinitialisation EPD
             enterWriteMode()        // réactiver DU pour le tracé fluide
