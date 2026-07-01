@@ -9,7 +9,9 @@
 
 > *"The intention to write: words are pushed onto a baseline that gives them a position in the reading direction."* — Nicolas
 
-Miroir is an Android `InputMethodService` that replaces the standard keyboard with a full-screen handwriting surface. It captures stylus strokes at 284 Hz, groups them into words by spatial and temporal proximity, transcribes them via ML Kit Digital Ink Recognition, and lets you correct, move, or erase by natural gesture — without ever leaving the text field.
+Miroir is an Android `InputMethodService` that replaces the standard keyboard with a full-screen handwriting surface. It captures stylus strokes at 284 Hz, groups them into words by spatial and temporal proximity, transcribes them via ML Kit Digital Ink Recognition (on-device, real-time), and lets you correct, move, or erase by natural gesture — without ever leaving the text field.
+
+For server-side batch transcription, a parallel raster pipeline sends JPEG renderings to **EasyOCR** via the Cœur's `SingulariteHttpTranscriber` (see [ARCHITECTURE.md](ARCHITECTURE.md#-circuits-dinférence)).
 
 ---
 
@@ -17,7 +19,7 @@ Miroir is an Android `InputMethodService` that replaces the standard keyboard wi
 
 - **Native stylus capture** — automatic stylus detection on any Android text field
 - **Intelligent grouping** — strokes fused into words by spatial + temporal proximity
-- **Real-time transcription** — ML Kit Digital Ink Recognition, re-inference after correction
+- **Dual transcription** — ML Kit Digital Ink (real-time, on-device) + EasyOCR (batch, server-side via Cœur/Singularité)
 - **Visual feedback** — absorption blob around words, transcription labels, baselines
 - **Optimized for e-ink** — DU/GU/REGAL modes, partial refresh, double buffer
 - **Standalone notepad** — CaptureActivity for decoupled use without a host application
@@ -102,7 +104,8 @@ You correct because it is useful — the community benefits as a side effect.
 | `CaptureView.kt` | Full-screen writing surface, EPD-aware rendering |
 | `GroupManager.kt` | Stroke grouping, blob absorption, group state machine |
 | `GroupPersistence.kt` | JSON serialization of pages (.note format) |
-| `WordRecognizer.kt` | ML Kit Digital Ink wrapper |
+| `WordRecognizer.kt` | ML Kit Digital Ink wrapper (online, on-device) |
+| `singularite_transcriber.go` | EasyOCR HTTP client (raster, server-side — Cœur Go) |
 | `DisplayController.kt` | EPD refresh orchestration (DU/GU/REGAL) |
 | `VStarWriter.kt` | Conduit V★ binary delta encoder (see below) |
 
