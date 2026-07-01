@@ -110,6 +110,49 @@ RECONNAISSANCE (ML Kit)
   │   └─ refreshAll
 ```
 
+## 🔀 Circuits d'inférence
+
+Le Miroir utilise **deux circuits de reconnaissance parallèles**, reflet de son architecture à deux vitesses :
+
+### ① Circuit Online — ML Kit Digital Ink (tablette, temps réel)
+
+```
+Stylet → strokes vectoriels (x,y,t) → DigitalInkWrapper → ML Kit Digital Ink → texte
+                                              ↑
+                              com.google.mlkit:digital-ink-recognition:18.1.0
+```
+
+- **Où :** `MiroirIME.kt` / `DigitalInkWrapper.kt` — sur la tablette Android
+- **Input :** strokes natifs `(x, y, timestamp)` — pas de rasterisation
+- **Modèle :** Google ML Kit Digital Ink (propriétaire, on-device, français)
+- **Usage :** reconnaissance temps réel pendant l'écriture, injection IME
+- **Latence :** < 100 ms après le dernier stroke
+
+### ② Circuit Raster — EasyOCR (serveur, différé)
+
+```
+Stylet → strokes → MiroirRasterizer → JPEG 1600×2000 → La Singularité (EasyOCR) → texte
+                         ↑                                         ↑
+                    rasterisation                          Python/HTTP :7701
+```
+
+- **Où :** `singularite_transcriber.go` (Cœur Go) → service Python « La Singularité »
+- **Input :** JPEG rasterisé (fond blanc, traits noirs, 1600×2000 px)
+- **Modèle :** EasyOCR (CRAFT + CRNN, Apache 2.0, 80+ langues)
+- **Usage :** transcription différée des notes synchronisées, traitement par lots
+- **Latence :** 2-10 secondes selon la charge
+
+### 🧭 Pourquoi deux circuits ?
+
+| | Circuit ① Online | Circuit ② Raster |
+|---|---|---|
+| **Rôle** | Reconnaissance immédiate | Transcription server-side |
+| **Fidélité** | Préserve les vecteurs natifs | Perte d'information (pression, vitesse) |
+| **Indépendance** | 100% on-device, pas de réseau | Dépend du serveur La Singularité |
+| **Évolutivité** | Modèle Google figé | Modèle interchangeable (Fourier, TrOCR…) |
+
+Les deux circuits convergent vers **Panoptis** — un modèle HTR propriétaire entraîné directement sur les vecteurs V★, sans rasterisation, alimenté par le dataset ODbL.
+
 ## 🎯 Principes
 
 1. **Le blob n'est pas l'inférence.** Le blob = zone d'absorption. Le label = témoin d'inférence. Désynchronisés.
