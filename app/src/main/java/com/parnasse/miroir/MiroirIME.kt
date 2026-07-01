@@ -175,14 +175,58 @@ class MiroirIME : InputMethodService() {
             val safeName = appName.replace(".", "_")
             blockDir = java.io.File(cacheDir, "blocks/${safeName}_$ts").also { it.mkdirs() }
             currentPageIndex = 0
+            // Lancer le cleanup en background pour ne pas bloquer le thread UI
+            val bd = blockDir!!
+            Thread {
+                cleanupEmptyPages(bd)
+            }.start()
             Log.i(TAG, "Bloc ouvert: ${blockDir!!.name}")
         }
         return blockDir!!
     }
 
-    /** Ferme le bloc courant — sauvegarde la page active et libère. */
+    /** Supprime les pages vides (state.json sans strokes ni labels) du bloc donné. */
+    private fun cleanupEmptyPages(bd: java.io.File) {
+        val pageDirs = bd.listFiles()?.filter { it.isDirectory && it.name.startsWith("page_") } ?: return
+        for (dir in pageDirs) {
+            val stateFile = java.io.File(dir, "state.json")
+            if (stateFile.exists()) {
+                try {
+                    val json = org.json.JSONObject(stateFile.readText())
+                    val strokes = json.optJSONArray("strokes")
+                    val labels = json.optJSONObject("labels")
+                    val hasContent = (strokes != null && strokes.length() > 0) ||
+                                     (labels != null && labels.length() > 0)
+                    if (!hasContent) {
+                        dir.deleteRecursively()
+                        Log.i(TAG, "Page vide supprimée: ${dir.name} du bloc ${bd.name}")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Erreur lecture ${dir.name}/state.json: ${e.message}")
+                }
+            } else {
+                // Pas de state.json du tout → page vide, la supprimer
+                dir.deleteRecursively()
+                Log.i(TAG, "Page sans state.json supprimée: ${dir.name} du bloc ${bd.name}")
+            }
+        }
+        // Note: ne pas supprimer le bloc ici (thread background, race avec UI).
+        // La suppression du bloc vide est gérée par closeBlock() et onFinishInputView().
+    }
+
+    /** Ferme le bloc courant — sauvegarde la page active et libère.
+     *  Supprime le dossier du bloc s'il ne contient plus de pages après sauvegarde. */
     private fun closeBlock() {
         savePage()
+        val bd = blockDir
+        // Supprimer le dossier du bloc s'il est vide (sans pages)
+        if (bd != null) {
+            val remainingPages = bd.listFiles()?.count { it.isDirectory && it.name.startsWith("page_") } ?: 0
+            if (remainingPages == 0) {
+                bd.deleteRecursively()
+                Log.i(TAG, "Bloc vide supprimé: ${bd.name}")
+            }
+        }
         currentPageIndex = 0
         blockDir = null
         hostAppName = "unknown"
@@ -701,11 +745,13 @@ class MiroirIME : InputMethodService() {
         toolbar.addView(formattingToggleBtn)
 
         toolbar.addView(makeButton("✕") {
-            // ═══ Fermer la session de capture (ne touche pas au texte de l'app hôte) ═══
-            closeBlock()   // sauvegarde et ferme le bloc → prochain onStartInputView créera un nouveau bloc
-            clearPage()    // nettoie la RAM
+            // ═══ Vider la page : fermer le bloc courant, en créer un nouveau (reste en capture) ═══
+            val appName = hostAppName  // capturer avant que closeBlock() ne le réinitialise
+            closeBlock()
+            clearPage()
+            ensureBlockDir(appName, System.currentTimeMillis())  // nouveau bloc pour la même app
             refreshAll()
-            requestHideSelf(0)
+            // Pas de requestHideSelf — on reste en mode capture
         })
         // ═══ Témoin de mode (plume/montre/déplacement) ═══
         toolbar.addView(android.widget.TextView(this).apply {
@@ -971,6 +1017,16 @@ class MiroirIME : InputMethodService() {
         super.onFinishInputView(finishingInput)
         if (finishingInput) {
             Log.i(TAG, "onFinishInputView — fermeture")
+            // Si le bloc est vide (pas de pages sauvegardées, pas de strokes en cours), le supprimer
+            val bd = blockDir
+            if (bd != null) {
+                val pageCount = bd.listFiles()?.count { it.isDirectory && it.name.startsWith("page_") } ?: 0
+                if (pageCount == 0 && strokeRegistry.isEmpty()) {
+                    bd.deleteRecursively()
+                    blockDir = null
+                    Log.i(TAG, "Bloc vide supprimé à la fermeture: ${bd.name}")
+                }
+            }
             releaseTouchHelper()
         }
     }
@@ -2689,11 +2745,79 @@ class MiroirIME : InputMethodService() {
         imeView?.postInvalidate()
     }
 
+    /** Extrait un aperçu texte consolidé de toutes les pages d'un bloc.
+     *  Parcourt page_0, page_1, ... dans l'ordre et concatène les labels
+     *  triés par ordre de lecture (Y puis X, avec regroupement par interlignes).
+     *  Tronque à ~60 caractères. */
+    private fun getBlockPreview(dir: java.io.File): String {
+        val pageDirs = dir.listFiles()
+            ?.filter { it.isDirectory && it.name.startsWith("page_") && java.io.File(it, "state.json").exists() }
+            ?.sortedBy { it.name.removePrefix("page_").toIntOrNull() ?: -1 }
+            ?: emptyList()
+        if (pageDirs.isEmpty()) return ""
+
+        val allWords = mutableListOf<String>()
+        for (pd in pageDirs) {
+            try {
+                val json = org.json.JSONObject(java.io.File(pd, "state.json").readText())
+                val labelsObj = json.optJSONObject("labels") ?: continue
+                val anchorsObj = json.optJSONObject("anchors")
+                data class Word(val y: Float, val x: Float, val text: String)
+                val words = mutableListOf<Word>()
+                for (key in labelsObj.keys()) {
+                    val text = labelsObj.optString(key, "").trim()
+                    if (text.isEmpty()) continue
+                    var x = 0f; var y = key.toFloatOrNull() ?: 0f
+                    if (anchorsObj != null) {
+                        val arr = anchorsObj.optJSONArray(key)
+                        if (arr != null && arr.length() >= 2) {
+                            x = arr.optDouble(0).toFloat()
+                            y = arr.optDouble(1).toFloat()
+                        }
+                    }
+                    words.add(Word(y, x, text))
+                }
+                if (words.isEmpty()) continue
+                // Trier par Y puis X — le Y approxime les lignes
+                words.sortWith(compareBy({ it.y }, { it.x }))
+                // ═══ Regrouper en lignes (mots dont |ΔY| < spacing estimé) ═══
+                // Sans accès à CalibrationActivity, on estime le spacing à ~60px (e-ink typique)
+                // ou on le déduit des données si assez de mots sur plusieurs lignes
+                val estSpacing = if (words.size >= 4) {
+                    val yGaps = words.zipWithNext()
+                        .map { (a, b) -> Math.abs(a.y - b.y) }
+                        .filter { it > 10f }  // ignorer micro-variations
+                    if (yGaps.isNotEmpty()) yGaps.average().toFloat() * 1.2f else 80f
+                } else 80f
+                // Grouper par ligne
+                val lines = mutableListOf<MutableList<Word>>()
+                var i = 0
+                while (i < words.size) {
+                    val lineY = words[i].y
+                    val line = mutableListOf<Word>()
+                    while (i < words.size && Math.abs(words[i].y - lineY) < estSpacing * 0.5f) {
+                        line.add(words[i]); i++
+                    }
+                    line.sortBy { it.x }
+                    lines.add(line)
+                }
+                // Ajouter les mots dans l'ordre de lecture
+                for (line in lines) {
+                    if (allWords.isNotEmpty()) allWords.add("|")  // séparateur interligne
+                    allWords.addAll(line.map { it.text })
+                }
+            } catch (_: Exception) { }
+        }
+        if (allWords.isEmpty()) return ""
+        val full = allWords.joinToString(" ")
+        return if (full.length > 60) full.take(57) + "..." else full
+    }
+
     /** Clic long ◀ — Liste des blocs disponibles. */
     private fun showBlockList() {
         val blocksDir = java.io.File(cacheDir, "blocks")
         val blocks = blocksDir.listFiles()
-            ?.filter { it.isDirectory }
+            ?.filter { it.isDirectory && (it.listFiles()?.any { f -> f.isDirectory && f.name.startsWith("page_") } ?: false) }
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
 
@@ -2704,6 +2828,7 @@ class MiroirIME : InputMethodService() {
 
         val listView = android.widget.ListView(this).apply {
             setBackgroundColor(Color.WHITE)
+            val previewCache = mutableMapOf<String, String>()
             adapter = object : android.widget.BaseAdapter() {
                 override fun getCount() = blocks.size
                 override fun getItem(pos: Int) = blocks[pos]
@@ -2718,8 +2843,10 @@ class MiroirIME : InputMethodService() {
                     val pageCount = dir.listFiles()?.count { it.isDirectory && it.name.startsWith("page_") } ?: 0
                     val current = dir == blockDir
                     val prefix = if (current) "▸ " else "  "
+                    val preview = previewCache.getOrPut(dir.name) { getBlockPreview(dir) }
+                    val previewStr = if (preview.isNotEmpty()) " — $preview" else ""
                     val tv = android.widget.TextView(this@MiroirIME).apply {
-                        text = "$prefix$appName — $date ($pageCount p.)"
+                        text = "$prefix$date — $appName$previewStr ($pageCount p.)"
                         textSize = 18f
                         setTextColor(if (current) Color.BLACK else Color.DKGRAY)
                         setPadding(30, 20, 30, 20)
@@ -2729,7 +2856,8 @@ class MiroirIME : InputMethodService() {
             }
             setOnItemClickListener { _, _, pos, _ ->
                 val selected = blocks[pos]
-                closeBlock()
+                closeBlock()       // sauvegarde le bloc courant, met blockDir=null
+                clearPage()        // nettoie la RAM (blockDir est null → pas de suppression disque)
                 val name = selected.name
                 val lastUnderscore = name.lastIndexOf('_')
                 val appName = if (lastUnderscore > 0) name.substring(0, lastUnderscore).replace("_", ".") else "unknown"
@@ -2738,11 +2866,10 @@ class MiroirIME : InputMethodService() {
                 blockTimestamp = ts
                 blockDir = selected
                 currentPageIndex = 0
-                clearPage()
                 loadPage(0)
+                hideOverlay()
                 refreshAll()
                 updatePageIndicator()
-                hideOverlay()
                 Log.i(TAG, "Bloc chargé via menu: ${selected.name}")
             }
         }
