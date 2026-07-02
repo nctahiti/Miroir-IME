@@ -52,9 +52,11 @@ class VStarEncoder {
             // Header JSON
             val header = """{"format":"miroir-vstar","version":"1.0","dpi":$dpi,"strokes":${strokes.size},"groups":${groups.size}}"""
             out.write((header + HEADER_MARKER).toByteArray(Charsets.UTF_8))
+            Log.d(TAG, "ENC header écrit, ${groups.size} groupes")
 
             var strokeIdx = 0
             for ((groupIdx, group) in groups.withIndex()) {
+                Log.d(TAG, "ENC groupe $groupIdx: ${group.size} indices, firstIdx=${group.firstOrNull()}")
                 // Ancre du groupe (pour les strokes après le premier)
                 val firstIdx = group.firstOrNull() ?: continue
                 val anchor = anchors[firstIdx] ?: run {
@@ -88,7 +90,11 @@ class VStarEncoder {
                             val (ppx, ppy) = s.points[j - 1]
                             dx = ((px - ppx) * 8).roundToInt().coerceIn(-32768, 32767).toShort()
                             dy = ((py - ppy) * 8).roundToInt().coerceIn(-32768, 32767).toShort()
-                            dt = ((s.timestamps[j] - s.timestamps[j - 1]).toInt()).coerceIn(-32768, 32767).toShort()
+                            dt = if (j < s.timestamps.size) {
+                                ((s.timestamps[j] - s.timestamps.getOrElse(j - 1) { s.timestamps[j] }).toInt()).coerceIn(-32768, 32767).toShort()
+                            } else {
+                                10  // fallback 10ms si pas de timestamp
+                            }
                             ps = if (j == s.points.size - 1) VStarToken.PS_PENUP else VStarToken.PS_PENDOWN
                         }
 
@@ -139,7 +145,7 @@ class VStarEncoder {
             }
             Log.i(TAG, "Encodé: ${strokes.size} strokes, ${groups.size} groupes → ${destFile.length()} B")
         } catch (e: Exception) {
-            Log.e(TAG, "Erreur encodage: ${e.message}")
+            Log.e(TAG, "Erreur encodage: ${e.message}", e)
         }
     }
 }

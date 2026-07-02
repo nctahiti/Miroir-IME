@@ -389,14 +389,18 @@ class MiroirIME : InputMethodService() {
             // Les groupes/labels/ancres sont dans labels.json.
             // L'Encoder ne dépend plus du GroupManager → zéro risque de crash.
             val allLiveIndices = strokeRegistry.indices
-                .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() }
+                .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() && strokeRegistry[it].timestamps.isNotEmpty() }
                 .toList()
             val groupsForSave = if (allLiveIndices.isNotEmpty()) listOf(allLiveIndices) else emptyList()
+            val deletedCount = strokeRegistry.count { it.isDeleted }
+            val emptyCount = strokeRegistry.count { !it.isDeleted && it.points.isEmpty() }
+            Log.i(TAG, "V★ DIAG savePage: registrySize=${strokeRegistry.size} deleted=$deletedCount empty=$emptyCount liveIdx=${allLiveIndices.size} groups=${groupsForSave.size} labels=${groupLabels.size} anchors=${groupAnchor.size}")
             VStarEncoder().encode(
                 vstarFile, strokeRegistry, groupsForSave,
                 groupLabels, groupAnchor,
                 resources.displayMetrics.xdpi
             )
+            Log.i(TAG, "V★ DIAG savePage: vstarFile=${vstarFile.absolutePath} exists=${vstarFile.exists()} size=${vstarFile.length()}B")
             // Sauvegarder labels.json minimal (labels + ancres) — nécessaire pour V★ only
             val labelsJson = org.json.JSONObject()
             for ((firstIdx, label) in groupLabels) {
@@ -445,6 +449,7 @@ class MiroirIME : InputMethodService() {
             // State JSON
             val stateFile = java.io.File(dir, "state.json")
             if (stateFile.exists()) {
+                Log.i(TAG, "V★ DIAG loadPage: state.json présent (taille=${stateFile.length()}B) — chargement JSON prioritaire")
                 val json = org.json.JSONObject(stateFile.readText())
                 inkStrokeIdCounter = json.optLong("inkIdCounter", 0L)
                 // Strokes
@@ -520,8 +525,10 @@ class MiroirIME : InputMethodService() {
             } else {
                 // V★ mode — décoder depuis page.vstar (pixels natifs, groupes + labels inclus)
                 val vstarFile = java.io.File(dir, "page.vstar")
+                Log.i(TAG, "V★ DIAG loadPage: state.json absent, vstarFile=${vstarFile.absolutePath} exists=${vstarFile.exists()} size=${vstarFile.length()}B")
                 if (vstarFile.exists()) {
                     val result = VStarDecoder(vstarFile).decode()
+                    Log.i(TAG, "V★ DIAG loadPage: decode result=${if (result != null) "OK strokes=${result.strokes.size} groups=${result.groups.size}" else "NULL (échec)"}")
                     if (result != null) {
                         strokeRegistry.clear()
                         inkStrokeIdToRegistryIndex.clear()
@@ -557,7 +564,11 @@ class MiroirIME : InputMethodService() {
                             }
                         }
                         Log.i(TAG, "Page $index chargée via V★: ${result.strokes.size} strokes, ${result.labels.size} labels, ${result.groups.size} groupes")
+                    } else {
+                        Log.w(TAG, "V★ DIAG loadPage: decode a retourné NULL — fichier corrompu ?")
                     }
+                } else {
+                    Log.w(TAG, "V★ DIAG loadPage: vstarFile absent, ni state.json ni page.vstar trouvés dans $dir")
                 }
             }
             // Charger labels.json (labels + ancres) — utilisé par V★ only
