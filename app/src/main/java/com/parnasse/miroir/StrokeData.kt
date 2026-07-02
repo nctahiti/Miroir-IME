@@ -78,6 +78,7 @@ data class VStarToken(
         const val PS_HOVER = 2
         const val PS_END = 3
         const val PS_GROUP_SEP = 4
+        const val PS_GROUP_ANCRE = 5  // suivi de 12 octets: ancre X (Short) + Y (Short)
 
         /** Token separateur de groupe de mots (ps=4) */
         fun groupSepToken(): VStarToken {
