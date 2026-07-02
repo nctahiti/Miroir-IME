@@ -328,7 +328,9 @@ class MiroirIME : InputMethodService() {
                     it.compress(Bitmap.CompressFormat.PNG, 90, out)
                 }
             }
-            // Strokes + labels (JSON simple)
+            // Strokes + labels (JSON simple) - désactivable via CalibrationActivity
+            val useVStarOnly = CalibrationActivity.useVStarOnly(this)
+            if (!useVStarOnly) {
             val json = org.json.JSONObject()
             json.put("inkIdCounter", inkStrokeIdCounter)
             // strokeRegistry : liste de [points, timestamps, pressures]
@@ -370,7 +372,8 @@ class MiroirIME : InputMethodService() {
             if (allGroups.isNotEmpty()) {
                 GroupPersistence(java.io.File(dir, "groups.json")).writeAllGroups(allGroups)
             }
-            Log.i(TAG, "Page $currentPageIndex sauvegardée: ${strokeRegistry.size} strokes, ${groupLabels.size} labels, ${allGroups.size} groupes")
+            } // fin if (!useVStarOnly)
+            Log.i(TAG, "Page $currentPageIndex sauvegardée: ${strokeRegistry.size} strokes, ${groupLabels.size} labels (V★ only=$useVStarOnly)")
         } catch (e: Exception) {
             Log.w(TAG, "Erreur sauvegarde page: ${e.message}")
         }
