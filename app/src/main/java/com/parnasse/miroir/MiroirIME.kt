@@ -383,6 +383,11 @@ class MiroirIME : InputMethodService() {
                 GroupPersistence(java.io.File(dir, "groups.json")).writeAllGroups(allGroups)
             }
             } // fin if (!useVStarOnly)
+            // ═══ Toujours persister les groupes (nécessaire pour V★ only) ═══
+            val allGroups = groupManager?.allGroups() ?: emptyList()
+            if (allGroups.isNotEmpty()) {
+                GroupPersistence(java.io.File(dir, "groups.json")).writeAllGroups(allGroups)
+            }
             // Toujours encoder en V★ (même si JSON activé)
             val vstarFile = java.io.File(dir, "page.vstar")
             // ═══ Encoder TOUS les strokes à plat (sans structure de groupe) ═══
@@ -542,27 +547,9 @@ class MiroirIME : InputMethodService() {
                         originalLabels.putAll(result.labels) // en V★, original = label
                         groupAnchor.clear()
                         groupAnchor.putAll(result.anchors)
-                        // Reconstruire les groupes dans GroupManager
-                        val gm = groupManager
-                        if (gm != null) {
-                            gm.clearAll()
-                            for (group in result.groups) {
-                                val sids = group.mapNotNull { idx ->
-                                    if (idx < strokeRegistry.size) (idx + 1).toLong() else null
-                                }.toMutableList()
-                                if (sids.isNotEmpty()) {
-                                    val bounds = if (group[0] in strokeRegistry.indices) {
-                                        val sr = strokeRegistry[group[0]]
-                                        val xs = sr.points.map { it.first }; val ys = sr.points.map { it.second }
-                                        android.graphics.RectF(xs.minOrNull()?:0f, ys.minOrNull()?:0f, xs.maxOrNull()?:0f, ys.maxOrNull()?:0f)
-                                    } else android.graphics.RectF(0f, 0f, 100f, 100f)
-                                    gm.registerLoadedGroup(InkGroup(
-                                        id = java.util.UUID.randomUUID().toString(),
-                                        state = GroupState.STORED, strokeIds = sids, bounds = bounds
-                                    ))
-                                }
-                            }
-                        }
+                        // ═══ NE PAS enregistrer les groupes du V★Decoder dans GroupManager ═══
+                        // Le V★ encode tout à plat (1 seul groupe) → les vrais groupes
+                        // sont dans groups.json, chargé plus bas. Évite les doublons.
                         Log.i(TAG, "Page $index chargée via V★: ${result.strokes.size} strokes, ${result.labels.size} labels, ${result.groups.size} groupes")
                     } else {
                         Log.w(TAG, "V★ DIAG loadPage: decode a retourné NULL — fichier corrompu ?")
@@ -608,6 +595,7 @@ class MiroirIME : InputMethodService() {
             //    enregistre en memoire via registerLoadedGroup().
             val pageGroupsFile = java.io.File(dir, "groups.json")
             if (pageGroupsFile.exists()) {
+                groupManager?.clearAll()  // éviter les doublons avec un chargement précédent
                 val tempPersistence = GroupPersistence(pageGroupsFile)
                 val groups = tempPersistence.readAllGroups()
                 for (group in groups) {
