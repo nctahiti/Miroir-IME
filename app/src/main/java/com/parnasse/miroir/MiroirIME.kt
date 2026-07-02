@@ -95,9 +95,9 @@ class MiroirIME : InputMethodService() {
 
     // ── GroupManager — groupement spatial par blob ─────────────────────
     private var groupManager: GroupManager? = null
-    // Map firstIdx → texte reconnu (labels)
+    // Map firstIdx → texte reconnu (labels) — firstIdx = index stable dans strokeRegistry (tombstones)
     private val groupLabels = mutableMapOf<Int, String>()
-    // Map firstIdx → label original (avant correction) — conservé tant que les strokes n'ont pas changé
+    // Map firstIdx → label original (avant correction)
     private val originalLabels = mutableMapOf<Int, String>()
     private val labelPaint = Paint().apply {
         color = Color.BLACK  // noir pur pour mode DU
@@ -153,7 +153,7 @@ class MiroirIME : InputMethodService() {
 
     // ── Ancrage des groupes ───────────────────────────────────────────
     // anchor = premier point du premier stroke du groupe.
-    // Clé = firstIdx (même que groupLabels), pas groupId.
+    // Clé = firstIdx (index stable dans strokeRegistry grâce aux tombstones)
     private val groupAnchor = mutableMapOf<Int, Pair<Float, Float>>()  // firstIdx → (x, y)
 
     private var currentPageIndex = 0
@@ -336,6 +336,7 @@ class MiroirIME : InputMethodService() {
             // strokeRegistry : liste de [points, timestamps, pressures]
             val strokesArr = org.json.JSONArray()
             for ((index, sr) in strokeRegistry.withIndex()) {
+                if (sr.isDeleted) continue  // ═══ tombeau : ne pas sauvegarder ═══
                 val obj = org.json.JSONObject()
                 obj.put("id", sr.id)
                 // Sauvegarder l'inkId pour restaurer inkStrokeIdToRegistryIndex
@@ -349,21 +350,30 @@ class MiroirIME : InputMethodService() {
                 strokesArr.put(obj)
             }
             json.put("strokes", strokesArr)
-            // Labels: firstIdx → text
+            // Labels: inkId → text (inkId = identifiant pérenne du stroke, pas index volatile)
             val labelsObj = org.json.JSONObject()
-            for ((k, v) in groupLabels) labelsObj.put(k.toString(), v)
+            for ((firstIdx, label) in groupLabels) {
+                val inkId = inkStrokeIdToRegistryIndex.entries.find { it.value == firstIdx }?.key
+                if (inkId != null) labelsObj.put(inkId.toString(), label)
+            }
             json.put("labels", labelsObj)
             // Labels originaux (avant correction)
             val origLabelsObj = org.json.JSONObject()
-            for ((k, v) in originalLabels) origLabelsObj.put(k.toString(), v)
+            for ((firstIdx, label) in originalLabels) {
+                val inkId = inkStrokeIdToRegistryIndex.entries.find { it.value == firstIdx }?.key
+                if (inkId != null) origLabelsObj.put(inkId.toString(), label)
+            }
             json.put("originalLabels", origLabelsObj)
-            // Anchors: firstIdx → (x, y)
+            // Anchors: inkId → (x, y)
             val anchorsObj = org.json.JSONObject()
-            for ((k, v) in groupAnchor) {
-                val arr = org.json.JSONArray()
-                arr.put(v.first.toDouble())
-                arr.put(v.second.toDouble())
-                anchorsObj.put(k.toString(), arr)
+            for ((firstIdx, anchor) in groupAnchor) {
+                val inkId = inkStrokeIdToRegistryIndex.entries.find { it.value == firstIdx }?.key
+                if (inkId != null) {
+                    val arr = org.json.JSONArray()
+                    arr.put(anchor.first.toDouble())
+                    arr.put(anchor.second.toDouble())
+                    anchorsObj.put(inkId.toString(), arr)
+                }
             }
             json.put("anchors", anchorsObj)
             java.io.FileWriter(java.io.File(dir, "state.json")).use { it.write(json.toString()) }
@@ -394,15 +404,21 @@ class MiroirIME : InputMethodService() {
             )
             // Sauvegarder labels.json minimal (labels + ancres) — nécessaire pour V★ only
             val labelsJson = org.json.JSONObject()
-            for ((k, v) in groupLabels) labelsJson.put(k.toString(), v)
+            for ((firstIdx, label) in groupLabels) {
+                val inkId = inkStrokeIdToRegistryIndex.entries.find { it.value == firstIdx }?.key
+                if (inkId != null) labelsJson.put(inkId.toString(), label)
+            }
             val labelsFile = java.io.File(dir, "labels.json")
             val wrapper = org.json.JSONObject()
             wrapper.put("labels", labelsJson)
             val anchorsJson = org.json.JSONObject()
-            for ((k, v) in groupAnchor) {
-                val arr = org.json.JSONArray()
-                arr.put(v.first.toDouble()); arr.put(v.second.toDouble())
-                anchorsJson.put(k.toString(), arr)
+            for ((firstIdx, anchor) in groupAnchor) {
+                val inkId = inkStrokeIdToRegistryIndex.entries.find { it.value == firstIdx }?.key
+                if (inkId != null) {
+                    val arr = org.json.JSONArray()
+                    arr.put(anchor.first.toDouble()); arr.put(anchor.second.toDouble())
+                    anchorsJson.put(inkId.toString(), arr)
+                }
             }
             wrapper.put("anchors", anchorsJson)
             java.io.FileWriter(labelsFile).use { it.write(wrapper.toString()) }
@@ -468,12 +484,14 @@ class MiroirIME : InputMethodService() {
                         inkStrokeIdToRegistryIndex[inkId] = i
                     }
                 }
-                // Labels
+                // Labels (clés = inkId, convertir en firstIdx via inkStrokeIdToRegistryIndex)
                 val labelsObj = json.optJSONObject("labels")
                 groupLabels.clear()
                 if (labelsObj != null) {
                     for (key in labelsObj.keys()) {
-                        groupLabels[key.toInt()] = labelsObj.optString(key, "")
+                        val inkId = key.toLongOrNull() ?: key.toIntOrNull()?.toLong() ?: continue
+                        val idx = inkStrokeIdToRegistryIndex[inkId]
+                        if (idx != null) groupLabels[idx] = labelsObj.optString(key, "")
                     }
                 }
                 // Labels originaux (avant correction)
@@ -481,20 +499,26 @@ class MiroirIME : InputMethodService() {
                 originalLabels.clear()
                 if (origLabelsObj != null) {
                     for (key in origLabelsObj.keys()) {
-                        originalLabels[key.toInt()] = origLabelsObj.optString(key, "")
+                        val inkId = key.toLongOrNull() ?: key.toIntOrNull()?.toLong() ?: continue
+                        val idx = inkStrokeIdToRegistryIndex[inkId]
+                        if (idx != null) originalLabels[idx] = origLabelsObj.optString(key, "")
                     }
                 }
-                // Anchors: firstIdx → (x, y)
+                // Anchors: inkId → (x, y), convertir en firstIdx
                 val anchorsObj = json.optJSONObject("anchors")
                 groupAnchor.clear()
                 if (anchorsObj != null) {
                     for (key in anchorsObj.keys()) {
-                        val arr = anchorsObj.optJSONArray(key) ?: continue
-                        if (arr.length() >= 2) {
-                            groupAnchor[key.toInt()] = Pair(
-                                arr.optDouble(0).toFloat(),
-                                arr.optDouble(1).toFloat()
-                            )
+                        val inkId = key.toLongOrNull() ?: key.toIntOrNull()?.toLong() ?: continue
+                        val idx = inkStrokeIdToRegistryIndex[inkId]
+                        if (idx != null) {
+                            val arr = anchorsObj.optJSONArray(key) ?: continue
+                            if (arr.length() >= 2) {
+                                groupAnchor[idx] = Pair(
+                                    arr.optDouble(0).toFloat(),
+                                    arr.optDouble(1).toFloat()
+                                )
+                            }
                         }
                     }
                 }
@@ -549,7 +573,9 @@ class MiroirIME : InputMethodService() {
                 if (labelsObj != null) {
                     groupLabels.clear()
                     for (key in labelsObj.keys()) {
-                        groupLabels[key.toInt()] = labelsObj.optString(key, "")
+                        val inkId = key.toLongOrNull() ?: key.toIntOrNull()?.toLong() ?: continue
+                        val idx = inkStrokeIdToRegistryIndex[inkId]
+                        if (idx != null) groupLabels[idx] = labelsObj.optString(key, "")
                     }
                     originalLabels.clear()
                     originalLabels.putAll(groupLabels)
@@ -558,9 +584,13 @@ class MiroirIME : InputMethodService() {
                 if (anchorsObj != null) {
                     groupAnchor.clear()
                     for (key in anchorsObj.keys()) {
-                        val arr = anchorsObj.optJSONArray(key) ?: continue
-                        if (arr.length() >= 2) {
-                            groupAnchor[key.toInt()] = Pair(arr.optDouble(0).toFloat(), arr.optDouble(1).toFloat())
+                        val inkId = key.toLongOrNull() ?: key.toIntOrNull()?.toLong() ?: continue
+                        val idx = inkStrokeIdToRegistryIndex[inkId]
+                        if (idx != null) {
+                            val arr = anchorsObj.optJSONArray(key) ?: continue
+                            if (arr.length() >= 2) {
+                                groupAnchor[idx] = Pair(arr.optDouble(0).toFloat(), arr.optDouble(1).toFloat())
+                            }
                         }
                     }
                 }
@@ -1130,6 +1160,7 @@ class MiroirIME : InputMethodService() {
         val canvas = bitmapCanvas ?: return
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         for ((idx, sr) in strokeRegistry.withIndex()) {
+            if (sr.isDeleted) continue          // ═══ tombeau : stroke effacé, ne pas dessiner ═══
             if (idx in erasedStrokes) continue  // ═══ stroke neutralisé visuellement ═══
             if (sr.points.size < 2) continue    // point isolé (tap dans le vide)
             if (sr.points.size < 2) {
@@ -2450,17 +2481,14 @@ class MiroirIME : InputMethodService() {
                                 g.strokeIds.firstOrNull()?.let { sid -> inkStrokeIdToRegistryIndex[sid] == firstIdx } == true
                             }
                             if (tempGroup != null) {
-                                // Retirer les strokes du strokeRegistry
-                                val removedIndices = tempGroup.strokeIds.mapNotNull { sid ->
-                                    inkStrokeIdToRegistryIndex.remove(sid)
-                                }.sortedDescending()
-                                for (idx in removedIndices) {
-                                    if (idx < strokeRegistry.size) strokeRegistry.removeAt(idx)
-                                }
-                                // Ré-indexer
-                                for (entry in inkStrokeIdToRegistryIndex.entries) {
-                                    val shift = removedIndices.count { it < entry.value }
-                                    if (shift > 0) entry.setValue(entry.value - shift)
+                                // Marquer les strokes comme effacés (tombstones) — PAS de removeAt()
+                                // Les indices restent stables, groupAnchor/groupLabels/inferredGroupFirstIdxs
+                                // continuent de pointer vers les bons strokes.
+                                for (sid in tempGroup.strokeIds) {
+                                    val idx = inkStrokeIdToRegistryIndex[sid]
+                                    if (idx != null && idx < strokeRegistry.size) {
+                                        strokeRegistry[idx].isDeleted = true
+                                    }
                                 }
                                 groupBlobs.remove(tempGroup.id)
                                 gm.removeGroup(tempGroup.id)
@@ -2496,15 +2524,11 @@ class MiroirIME : InputMethodService() {
                             g.strokeIds.firstOrNull()?.let { sid -> inkStrokeIdToRegistryIndex[sid] == firstIdx } == true
                         }
                         if (tempGroup != null) {
-                            val removedIndices = tempGroup.strokeIds.mapNotNull { sid ->
-                                inkStrokeIdToRegistryIndex.remove(sid)
-                            }.sortedDescending()
-                            for (idx in removedIndices) {
-                                if (idx < strokeRegistry.size) strokeRegistry.removeAt(idx)
-                            }
-                            for (entry in inkStrokeIdToRegistryIndex.entries) {
-                                val shift = removedIndices.count { it < entry.value }
-                                if (shift > 0) entry.setValue(entry.value - shift)
+                            for (sid in tempGroup.strokeIds) {
+                                val idx = inkStrokeIdToRegistryIndex[sid]
+                                if (idx != null && idx < strokeRegistry.size) {
+                                    strokeRegistry[idx].isDeleted = true
+                                }
                             }
                             groupBlobs.remove(tempGroup.id)
                             gm.removeGroup(tempGroup.id)
