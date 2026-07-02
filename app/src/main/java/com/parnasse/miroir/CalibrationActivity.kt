@@ -61,6 +61,10 @@ class CalibrationActivity : Activity() {
         fun getBlobColor(ctx: Context): Int = 0xFFC0C0C0.toInt()
         const val KEY_SELECTION_DELAY = "selection_delay"
         const val KEY_EDIT_DELAY = "edit_delay"
+        const val KEY_USE_VSTAR_ONLY = "use_vstar_only"
+
+        fun useVStarOnly(ctx: Context): Boolean =
+            prefs(ctx).getBoolean(KEY_USE_VSTAR_ONLY, false)
     }
 
     private lateinit var spatialXSeek: SeekBar
@@ -239,6 +243,23 @@ class CalibrationActivity : Activity() {
         }
         playgroundBar.addView(modeIndicatorBtn)
         root.addView(playgroundBar)
+
+        // ═══ 💾 Stockage ═══
+        root.addView(sectionHeader("💾 Stockage"))
+        val vstarCb = android.widget.CheckBox(this).apply {
+            text = "Conduit V★ uniquement (pas de JSON)"
+            textSize = 14f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, dp(8), 0, dp(8))
+            isChecked = useVStarOnly(this@CalibrationActivity)
+            setOnCheckedChangeListener { _, checked ->
+                prefs(this@CalibrationActivity).edit().putBoolean(KEY_USE_VSTAR_ONLY, checked).apply()
+                Toast.makeText(this@CalibrationActivity,
+                    if (checked) "V★ only — JSON désactivé (plus rapide)" else "JSON + V★ — compatible",
+                    Toast.LENGTH_SHORT).show()
+            }
+        }
+        root.addView(vstarCb)
 
         val cv = CaptureView(this).apply { isBlocnoteMode = true; onWordGroupCompleted = null }
         testView = cv

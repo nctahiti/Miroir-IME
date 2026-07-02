@@ -90,6 +90,7 @@ class VStarWriter(private val context: Context) {
             // Header JSON + marqueur binaire
             val headerBytes = (headerJson + HEADER_MARKER).toByteArray(Charsets.UTF_8)
             outputStream!!.write(headerBytes)
+            outputStream!!.flush()  // forcer l'écriture du header immédiatement
 
             currentFile = file
             sessionFile = file
