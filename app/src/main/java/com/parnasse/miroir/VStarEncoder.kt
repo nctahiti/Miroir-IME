@@ -10,8 +10,8 @@ import kotlin.math.roundToInt
  * VStarEncoder — Encodeur V★ v1.0 (batch).
  *
  * Encode un strokeRegistry complet en flux de tokens V★.
- * Travaille en PIXELS NATIFS — aucune conversion d'unités.
- * L'aller-retour encodeur → décodeur est parfait.
+ * Travaille en PIXELS × 8 — les coordonnées sont multipliées par 8
+ * avant arrondi pour préserver la précision sub-pixel (1/8 px).
  *
  * Format (13 octets/token) :
  *   PEN_DOWN : dx=x_abs, dy=y_abs, dt=0, p, ps=PENDOWN
@@ -57,7 +57,11 @@ class VStarEncoder {
             for ((groupIdx, group) in groups.withIndex()) {
                 // Ancre du groupe (pour les strokes après le premier)
                 val firstIdx = group.firstOrNull() ?: continue
-                val anchor = anchors[firstIdx] ?: continue
+                val anchor = anchors[firstIdx] ?: run {
+                    // Fallback : utiliser le premier point du premier stroke comme ancre
+                    val s = strokes.getOrNull(firstIdx)
+                    if (s != null && s.points.isNotEmpty()) s.points[0] else Pair(0f, 0f)
+                }
                 val label = labels[firstIdx] ?: ""
 
                 for (i in group.indices) {
@@ -74,20 +78,16 @@ class VStarEncoder {
                         val ps: Int
 
                         if (j == 0) {
-                            // Premier point : absolu (ou delta depuis l'ancre si pas le premier stroke)
-                            if (i == 0) {
-                                dx = px.roundToInt().coerceIn(-32768, 32767).toShort()
-                                dy = py.roundToInt().coerceIn(-32768, 32767).toShort()
-                            } else {
-                                dx = ((px - anchor.first).roundToInt()).coerceIn(-32768, 32767).toShort()
-                                dy = ((py - anchor.second).roundToInt()).coerceIn(-32768, 32767).toShort()
-                            }
+                            // Premier point : TOUJOURS absolu (×8)
+                            // L'ancre est utilisée uniquement par le Decoder pour le placement du groupe
+                            dx = (px * 8).roundToInt().coerceIn(-32768, 32767).toShort()
+                            dy = (py * 8).roundToInt().coerceIn(-32768, 32767).toShort()
                             dt = 0
                             ps = VStarToken.PS_PENDOWN
                         } else {
                             val (ppx, ppy) = s.points[j - 1]
-                            dx = ((px - ppx).roundToInt()).coerceIn(-32768, 32767).toShort()
-                            dy = ((py - ppy).roundToInt()).coerceIn(-32768, 32767).toShort()
+                            dx = ((px - ppx) * 8).roundToInt().coerceIn(-32768, 32767).toShort()
+                            dy = ((py - ppy) * 8).roundToInt().coerceIn(-32768, 32767).toShort()
                             dt = ((s.timestamps[j] - s.timestamps[j - 1]).toInt()).coerceIn(-32768, 32767).toShort()
                             ps = if (j == s.points.size - 1) VStarToken.PS_PENUP else VStarToken.PS_PENDOWN
                         }
@@ -107,19 +107,19 @@ class VStarEncoder {
                     strokeIdx++
                 }
 
-                // Token GROUP : label + ancre, paddé à 13 octets
-                val labelBytes = label.toByteArray(Charsets.UTF_8)
-                val labelLen = labelBytes.size.coerceIn(0, 8) // max 8 chars
-                // Token GROUP_SEP (13 octets)
+                // Token GROUP_SEP (marqueur seul, 13 octets, PS=4)
                 VStarToken.groupSepToken().toBytes(out)
-                // Données étendues paddées à 13 octets : label_len(1) + label(0..8) + anchorX(2) + anchorY(2) + padding
-                out.writeByte(labelLen)
-                if (labelLen > 0) out.write(labelBytes, 0, labelLen)
-                out.writeShort(anchor.first.roundToInt().coerceIn(-32768, 32767))
-                out.writeShort(anchor.second.roundToInt().coerceIn(-32768, 32767))
-                // Padding à 13 octets
-                val pad = 13 - 5 - labelLen
-                for (p in 0 until pad) out.writeByte(0)
+                // Token ANCRE (13 octets, PS=5) : dx=anchorX, dy=anchorY (×8)
+                out.writeShort((anchor.first * 8).roundToInt().coerceIn(-32768, 32767))  // dx
+                out.writeShort((anchor.second * 8).roundToInt().coerceIn(-32768, 32767)) // dy
+                out.writeShort(0)     // dt = 0
+                out.writeByte(0)      // p = 0
+                out.writeByte(0xFF)   // az
+                out.writeByte(0xFF)   // i
+                out.writeByte(VStarToken.PS_GROUP_ANCRE) // ps = 5
+                out.writeByte(0)      // h
+                out.writeByte(strokeIdx.coerceIn(0, 255)) // sr
+                out.writeByte(0)      // pr
             }
 
             // END

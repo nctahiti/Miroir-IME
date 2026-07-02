@@ -383,11 +383,29 @@ class MiroirIME : InputMethodService() {
                     if (indices.isNotEmpty()) groupsForSave.add(indices)
                 }
             }
+            // Fallback : si aucun groupe formé, encoder tous les strokes comme un seul groupe
+            if (groupsForSave.isEmpty() && strokeRegistry.isNotEmpty()) {
+                groupsForSave.add(strokeRegistry.indices.toList())
+            }
             VStarEncoder().encode(
                 vstarFile, strokeRegistry, groupsForSave,
                 groupLabels, groupAnchor,
                 resources.displayMetrics.xdpi
             )
+            // Sauvegarder labels.json minimal (labels + ancres) — nécessaire pour V★ only
+            val labelsJson = org.json.JSONObject()
+            for ((k, v) in groupLabels) labelsJson.put(k.toString(), v)
+            val labelsFile = java.io.File(dir, "labels.json")
+            val wrapper = org.json.JSONObject()
+            wrapper.put("labels", labelsJson)
+            val anchorsJson = org.json.JSONObject()
+            for ((k, v) in groupAnchor) {
+                val arr = org.json.JSONArray()
+                arr.put(v.first.toDouble()); arr.put(v.second.toDouble())
+                anchorsJson.put(k.toString(), arr)
+            }
+            wrapper.put("anchors", anchorsJson)
+            java.io.FileWriter(labelsFile).use { it.write(wrapper.toString()) }
             Log.i(TAG, "Page $currentPageIndex sauvegardée: ${strokeRegistry.size} strokes, ${groupLabels.size} labels (V★ only=$useVStarOnly)")
         } catch (e: Exception) {
             Log.w(TAG, "Erreur sauvegarde page: ${e.message}")
@@ -520,6 +538,30 @@ class MiroirIME : InputMethodService() {
                             }
                         }
                         Log.i(TAG, "Page $index chargée via V★: ${result.strokes.size} strokes, ${result.labels.size} labels, ${result.groups.size} groupes")
+                    }
+                }
+            }
+            // Charger labels.json (labels + ancres) — utilisé par V★ only
+            val labelsFile = java.io.File(dir, "labels.json")
+            if (labelsFile.exists()) {
+                val lj = org.json.JSONObject(labelsFile.readText())
+                val labelsObj = lj.optJSONObject("labels")
+                if (labelsObj != null) {
+                    groupLabels.clear()
+                    for (key in labelsObj.keys()) {
+                        groupLabels[key.toInt()] = labelsObj.optString(key, "")
+                    }
+                    originalLabels.clear()
+                    originalLabels.putAll(groupLabels)
+                }
+                val anchorsObj = lj.optJSONObject("anchors")
+                if (anchorsObj != null) {
+                    groupAnchor.clear()
+                    for (key in anchorsObj.keys()) {
+                        val arr = anchorsObj.optJSONArray(key) ?: continue
+                        if (arr.length() >= 2) {
+                            groupAnchor[key.toInt()] = Pair(arr.optDouble(0).toFloat(), arr.optDouble(1).toFloat())
+                        }
                     }
                 }
             }

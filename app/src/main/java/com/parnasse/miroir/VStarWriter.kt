@@ -25,8 +25,9 @@ import kotlin.math.roundToInt
  *   ...
  *   [END token]
  *
- * Les deltas sont en 0.01 mm. La conversion px → mm utilise la densité
- * d'écran (xdpi/ydpi) fournie par le Context.
+ * Les deltas sont en pixels natifs (version 1.0). Plus aucune conversion
+ * px ↔ mm — les coordonnées Android View sont stockées directement.
+ * Le scaleFactor (1.0) est conservé pour compatibilité future.
  */
 class VStarWriter(private val context: Context) {
 
@@ -47,8 +48,8 @@ class VStarWriter(private val context: Context) {
     private var pointIndex = 0
     private var isFirstPoint = true
 
-    // Facteur de conversion px → 0.01mm
-    private var pxTo001mm = 1.0
+    // Facteur d'échelle (8.0 = sub-pixel 1/8 px, précis et portable)
+    private var scaleFactor = 8.0
 
     /**
      * Ouvre une nouvelle session V★. Crée le fichier dans filesDir/vstar/.
@@ -67,21 +68,20 @@ class VStarWriter(private val context: Context) {
             else ""
             val file = File(dir, "session_${ts}${safeLabel}.vstar")
 
-            // Calculer le facteur de conversion px → 0.01mm
-            val metrics = context.resources.displayMetrics
-            val xdpi = metrics.xdpi.coerceAtLeast(1f)
-            val mmPerPx = 25.4f / xdpi  // 1 px = combien de mm
-            pxTo001mm = mmPerPx * 100.0  // conversion en unités 0.01mm
+            // Facteur d'échelle 8.0 = précision 1/8 px (sub-pixel)
+            // Les coordonnées sont multipliées par 8 avant arrondi,
+            // puis divisées par 8 au décodage. Indépendant du device.
+            scaleFactor = 8.0
 
             // Écrire le header JSON
             val headerJson = buildString {
                 append("{")
                 append("\"format\":\"miroir-vstar\",")
-                append("\"version\":\"0.5\",")
+                append("\"version\":\"1.0\",")
                 append("\"created_at\":\"${SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())}\",")
-                append("\"xdpi\":$xdpi,")
-                append("\"unit_factor\":${1.0 / pxTo001mm},")
-                append("\"conversion\":\"px*${String.format("%.2f", pxTo001mm)}->0.01mm\"")
+                append("\"scale\":\"pixels×8\",")
+                append("\"unit_factor\":0.125,")
+                append("\"conversion\":\"px×8→short, ÷8→px\"")
                 append("}")
             }
 
@@ -100,7 +100,7 @@ class VStarWriter(private val context: Context) {
             strokeIndex = 0
             pointIndex = 0
 
-            Log.i(TAG, "Session ouverte: ${file.absolutePath} (${String.format("%.2f", pxTo001mm)} u01mm/px)")
+            Log.i(TAG, "Session ouverte: ${file.absolutePath} (pixels natifs, scaleFactor=${String.format("%.2f", scaleFactor)})")
             file
         } catch (e: Exception) {
             Log.e(TAG, "Erreur ouverture session: ${e.message}")
@@ -265,11 +265,11 @@ class VStarWriter(private val context: Context) {
             val headerJson = buildString {
                 append("{")
                 append("\"format\":\"miroir-vstar\",")
-                append("\"version\":\"0.5\",")
+                append("\"version\":\"1.0\",")
                 append("\"created_at\":\"${SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())}\",")
-                append("\"xdpi\":${context.resources.displayMetrics.xdpi},")
-                append("\"unit_factor\":${1.0 / pxTo001mm},")
-                append("\"conversion\":\"px*${String.format("%.2f", pxTo001mm)}->0.01mm\"")
+                append("\"scale\":\"pixels×8\",")
+                append("\"unit_factor\":0.125,")
+                append("\"conversion\":\"px×8→short, ÷8→px\"")
                 append("}")
             }
             destFile.parentFile?.mkdirs()
@@ -361,17 +361,17 @@ class VStarWriter(private val context: Context) {
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    /** Convertit un delta px en unités 0.01mm (Short). */
+    /** Convertit un delta px en unités d'échelle (Short). */
     private fun toDelta(prev: Float, curr: Float): Short {
         val dpx = curr - prev
-        val d001mm = (dpx * pxTo001mm).roundToInt()
-        return d001mm.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        val scaled = (dpx * scaleFactor).roundToInt()
+        return scaled.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
     }
 
-    /** Convertit une coordonnée absolue px en unités 0.01mm (Short). */
+    /** Convertit une coordonnée absolue px en unités d'échelle (Short). */
     private fun toAbs(coord: Float): Short {
-        val abs001mm = (coord * pxTo001mm).roundToInt()
-        return abs001mm.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        val scaled = (coord * scaleFactor).roundToInt()
+        return scaled.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
     }
 
     /** Convertit un delta temps (ms) en Short. */

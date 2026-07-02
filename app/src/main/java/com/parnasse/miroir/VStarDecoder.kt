@@ -9,7 +9,8 @@ import java.io.FileInputStream
  * VStarDecoder — Décodeur V★ v1.0.
  *
  * Lit un flux de tokens V★ et émet des événements de stroke/group/label.
- * Travaille en PIXELS NATIFS — l'aller-retour encodeur → décodeur est parfait.
+ * Travaille en PIXELS (÷8) — les valeurs Short sont divisées par 8
+ * pour retrouver les pixels natifs (précision 1/8 px).
  *
  * Format supporté : v1.0 (pixels natifs, GROUP avec label).
  */
@@ -66,8 +67,14 @@ class VStarDecoder(private val file: File) {
 
                 when (ps) {
                     VStarToken.PS_PENDOWN -> {
-                        currentX += dx.toFloat()
-                        currentY += dy.toFloat()
+                        // Premier point d'un stroke = absolu, suivants = delta
+                        if (currentStroke == null) {
+                            currentX = dx.toFloat() / 8f
+                            currentY = dy.toFloat() / 8f
+                        } else {
+                            currentX += dx.toFloat() / 8f
+                            currentY += dy.toFloat() / 8f
+                        }
                         currentTime += dt.toLong()
                         if (currentStroke == null) {
                             // Nouveau stroke
@@ -83,8 +90,8 @@ class VStarDecoder(private val file: File) {
                         }
                     }
                     VStarToken.PS_PENUP -> {
-                        currentX += dx.toFloat()
-                        currentY += dy.toFloat()
+                        currentX += dx.toFloat() / 8f
+                        currentY += dy.toFloat() / 8f
                         currentTime += dt.toLong()
                         if (currentStroke != null) {
                             currentStroke!!.points.add(Pair(currentX, currentY))
@@ -98,28 +105,24 @@ class VStarDecoder(private val file: File) {
                         currentX = 0f; currentY = 0f; currentTime = 0L
                     }
                     VStarToken.PS_GROUP_SEP -> {
-                        // Lire les données étendues paddées à 13 octets
-                        if (dis.available() >= 13) {
-                            val ext = ByteArray(13); dis.readFully(ext)
-                            val labelLen = ext[0].toInt() and 0xFF
-                            val label = if (labelLen > 0) String(ext, 1, labelLen.coerceAtMost(8), Charsets.UTF_8) else ""
-                            val ebits = java.nio.ByteBuffer.wrap(ext).order(java.nio.ByteOrder.BIG_ENDIAN)
-                            val anchorX = ebits.getShort(9).toFloat()   // après label_len(1) + label(0..8)
-                            val anchorY = ebits.getShort(11).toFloat()
-                            // Enregistrer le groupe
-                            // Enregistrer le groupe
-                            if (currentGroup.isNotEmpty()) {
-                                val firstIdx = currentGroup.first()
-                                labels[firstIdx] = label
-                                anchors[firstIdx] = Pair(anchorX, anchorY)
-                                groups.add(currentGroup.toList())
-                            }
-                            currentGroup = mutableListOf()
-                            // Réinitialiser la position à l'ancre du groupe pour les strokes suivants
-                            currentX = anchorX
-                            currentY = anchorY
-                            currentTime = 0L
+                        // Fermer le groupe précédent (le label sera lu depuis labels.json)
+                        if (currentGroup.isNotEmpty()) {
+                            groups.add(currentGroup.toList())
                         }
+                        currentGroup = mutableListOf()
+                        // L'ancre suit dans le prochain token (PS_GROUP_ANCRE)
+                    }
+                    VStarToken.PS_GROUP_ANCRE -> {
+                        // Token ANCRE : dx=anchorX, dy=anchorY (absolus ×8)
+                        val anchorX = dx.toFloat() / 8f
+                        val anchorY = dy.toFloat() / 8f
+                        // Enregistrer l'ancre pour le groupe qui commence
+                        val firstIdx = strokes.size  // le prochain stroke sera le premier du groupe
+                        anchors[firstIdx] = Pair(anchorX, anchorY)
+                        // Réinitialiser la position à l'ancre
+                        currentX = anchorX
+                        currentY = anchorY
+                        currentTime = 0L
                     }
                     VStarToken.PS_END -> {
                         // Dernier groupe non fermé
