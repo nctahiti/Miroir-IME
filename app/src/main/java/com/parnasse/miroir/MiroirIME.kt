@@ -185,14 +185,6 @@ class MiroirIME : InputMethodService() {
             }.start()
             Log.i(TAG, "Bloc ouvert: ${blockDir!!.name}")
         }
-        // Conduit V★ — ouvrir une session à chaque début de capture (même si bloc réutilisé)
-        vstarWriter?.close()
-        vstarWriter = VStarWriter(this).also {
-            val label = appName.replace(".", "_").take(16)
-            it.openNewSession(label)
-        }
-        vstarPointCount = 0
-        Log.i(TAG, "Conduit V★ ouvert: ${vstarWriter?.getCurrentFile()?.name}")
         return blockDir!!
     }
 
@@ -294,6 +286,14 @@ class MiroirIME : InputMethodService() {
         activeBlobGroupId = null
         cachedSpatialBounds = null
         resetSyncedNote()
+        // Conduit V★ — nouveau fichier par page (indépendant, pas de contamination)
+        vstarWriter?.writeEnd()
+        vstarWriter?.close()
+        vstarWriter = VStarWriter(this).also {
+            it.openNewSession("page_$currentPageIndex")
+        }
+        vstarPointCount = 0
+        Log.i(TAG, "Conduit V★ page $currentPageIndex: ${vstarWriter?.getCurrentFile()?.name}")
         // Supprimer le dossier de page fantôme s'il existe
         val bd = blockDir ?: return
         val dir = java.io.File(bd, "page_$currentPageIndex")
@@ -373,6 +373,21 @@ class MiroirIME : InputMethodService() {
                 GroupPersistence(java.io.File(dir, "groups.json")).writeAllGroups(allGroups)
             }
             } // fin if (!useVStarOnly)
+            // Toujours encoder en V★ (même si JSON activé) pour comparaison/debug
+            val vstarFile = java.io.File(dir, "page.vstar")
+            val groupsForSave = mutableListOf<List<Int>>()
+            val gm = groupManager
+            if (gm != null) {
+                for (g in gm.allGroups()) {
+                    val indices = g.strokeIds.mapNotNull { sid -> inkStrokeIdToRegistryIndex[sid] }
+                    if (indices.isNotEmpty()) groupsForSave.add(indices)
+                }
+            }
+            VStarEncoder().encode(
+                vstarFile, strokeRegistry, groupsForSave,
+                groupLabels, groupAnchor,
+                resources.displayMetrics.xdpi
+            )
             Log.i(TAG, "Page $currentPageIndex sauvegardée: ${strokeRegistry.size} strokes, ${groupLabels.size} labels (V★ only=$useVStarOnly)")
         } catch (e: Exception) {
             Log.w(TAG, "Erreur sauvegarde page: ${e.message}")
@@ -465,6 +480,48 @@ class MiroirIME : InputMethodService() {
                         }
                     }
                 }
+            } else {
+                // V★ mode — décoder depuis page.vstar (pixels natifs, groupes + labels inclus)
+                val vstarFile = java.io.File(dir, "page.vstar")
+                if (vstarFile.exists()) {
+                    val result = VStarDecoder(vstarFile).decode()
+                    if (result != null) {
+                        strokeRegistry.clear()
+                        inkStrokeIdToRegistryIndex.clear()
+                        strokeRegistry.addAll(result.strokes)
+                        for (i in result.strokes.indices) {
+                            inkStrokeIdToRegistryIndex[(i + 1).toLong()] = i
+                        }
+                        groupLabels.clear()
+                        groupLabels.putAll(result.labels)
+                        originalLabels.clear()
+                        originalLabels.putAll(result.labels) // en V★, original = label
+                        groupAnchor.clear()
+                        groupAnchor.putAll(result.anchors)
+                        // Reconstruire les groupes dans GroupManager
+                        val gm = groupManager
+                        if (gm != null) {
+                            gm.clearAll()
+                            for (group in result.groups) {
+                                val sids = group.mapNotNull { idx ->
+                                    if (idx < strokeRegistry.size) (idx + 1).toLong() else null
+                                }.toMutableList()
+                                if (sids.isNotEmpty()) {
+                                    val bounds = if (group[0] in strokeRegistry.indices) {
+                                        val sr = strokeRegistry[group[0]]
+                                        val xs = sr.points.map { it.first }; val ys = sr.points.map { it.second }
+                                        android.graphics.RectF(xs.minOrNull()?:0f, ys.minOrNull()?:0f, xs.maxOrNull()?:0f, ys.maxOrNull()?:0f)
+                                    } else android.graphics.RectF(0f, 0f, 100f, 100f)
+                                    gm.registerLoadedGroup(InkGroup(
+                                        id = java.util.UUID.randomUUID().toString(),
+                                        state = GroupState.STORED, strokeIds = sids, bounds = bounds
+                                    ))
+                                }
+                            }
+                        }
+                        Log.i(TAG, "Page $index chargée via V★: ${result.strokes.size} strokes, ${result.labels.size} labels, ${result.groups.size} groupes")
+                    }
+                }
             }
             // GroupManager: charger depuis persistance specifique a la page
             // ⚠️ NE PAS changer groupManager.persistence — le GM doit toujours
@@ -495,6 +552,12 @@ class MiroirIME : InputMethodService() {
                 }
             }
             Log.i(TAG, "Page $index chargée: ${strokeRegistry.size} strokes, ${groupLabels.size} labels, ${groupBlobs.size} blobs")
+            // Conduit V★ — nouveau writer pour la page chargée (les strokes sont déjà dans page.vstar)
+            vstarWriter?.close()
+            vstarWriter = VStarWriter(this).also {
+                it.openNewSession("page_$index")
+            }
+            vstarPointCount = 0
             return true
         } catch (e: Exception) {
             Log.w(TAG, "Erreur chargement page $index: ${e.message}")
@@ -727,6 +790,10 @@ class MiroirIME : InputMethodService() {
             val intent = android.content.Intent(this@MiroirIME, CalibrationActivity::class.java)
             intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
+        })
+
+        toolbar.addView(makeButton("📂") {
+            showBlockList()
         })
 
         toolbar.addView(makeButton("◀", {
@@ -993,6 +1060,14 @@ class MiroirIME : InputMethodService() {
         Log.i(TAG, "onStartInputView — app=$app field=${info?.fieldName ?: "?"} inputType=${info?.inputType ?: 0}")
         // ═══ Ouvrir un bloc pour cette app ═══
         ensureBlockDir(app, System.currentTimeMillis())
+        // Conduit V★ — initialiser le writer pour la première page
+        if (vstarWriter == null || vstarWriter?.isActive() != true) {
+            vstarWriter?.close()
+            vstarWriter = VStarWriter(this).also {
+                it.openNewSession("page_0")
+            }
+            vstarPointCount = 0
+        }
         updatePageIndicator()
         // ═══ Forcer la réinitialisation du TouchHelper à chaque ouverture ═══
         touchHelper = null
@@ -2407,9 +2482,10 @@ class MiroirIME : InputMethodService() {
                     originalLabels[firstIdx] = result  // sauvegarder l'original (avant toute correction)
                     Log.i(TAG, "LABEL set: firstIdx=$firstIdx -> '$result' (${groupLabels.size} labels total)")
                     cachedGMCacheSize = -1
-                    // Conduit V★ — marquer la séparation de groupe
-                    vstarWriter?.writeGroupSep()
-                    Log.d(TAG, "Conduit V★ GROUP_SEP: firstIdx=$firstIdx -> '$result'")
+                    // Conduit V★ — marquer la séparation de groupe avec son ancre
+                    val grpAnchor = groupAnchor[firstIdx]
+                    vstarWriter?.writeGroupSep(grpAnchor?.first ?: 0f, grpAnchor?.second ?: 0f)
+                    Log.d(TAG, "Conduit V★ GROUP_SEP: firstIdx=$firstIdx -> '$result' ancre=(${grpAnchor?.first},${grpAnchor?.second})")
                     // Calculer et cacher le blob pour ce groupe
                     val gm = groupManager ?: return@post
                     val group = gm.allGroups().firstOrNull { g ->

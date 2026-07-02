@@ -236,6 +236,14 @@ class VStarDocument(private val file: File) {
         var prs = mutableListOf<Float>()
 
         for (token in tokens) {
+            // Token ANCRE de groupe : initialiser la position absolue
+            if (token.ps == VStarToken.PS_GROUP_ANCRE) {
+                currentX = token.dx * uf
+                currentY = token.dy * uf
+                currentTime = token.dt.toLong()
+                continue
+            }
+
             currentX += token.dx * uf
             currentY += token.dy * uf
             currentTime += token.dt.toLong()
@@ -252,9 +260,13 @@ class VStarDocument(private val file: File) {
                 pts = mutableListOf()
                 tss = mutableListOf()
                 prs = mutableListOf()
+                // Réinitialiser les accumulateurs pour le prochain stroke
+                currentX = 0f
+                currentY = 0f
+                currentTime = 0L
 
                 if (token.ps == VStarToken.PS_END) break
-            } else {
+            } else if (token.ps != VStarToken.PS_GROUP_SEP) {
                 pts.add(Pair(currentX, currentY))
                 tss.add(currentTime)
                 prs.add(token.p.toFloat() / 255f)

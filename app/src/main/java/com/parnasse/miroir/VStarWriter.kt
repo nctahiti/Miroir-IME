@@ -7,6 +7,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.roundToInt
 
 /**
  * VStarWriter — Le conduit V★.
@@ -79,6 +80,7 @@ class VStarWriter(private val context: Context) {
                 append("\"version\":\"0.5\",")
                 append("\"created_at\":\"${SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())}\",")
                 append("\"xdpi\":$xdpi,")
+                append("\"unit_factor\":${1.0 / pxTo001mm},")
                 append("\"conversion\":\"px*${String.format("%.2f", pxTo001mm)}->0.01mm\"")
                 append("}")
             }
@@ -130,9 +132,10 @@ class VStarWriter(private val context: Context) {
             val ps: Int
 
             if (isFirstPoint || isPenDown) {
-                // Premier point d'un stroke : delta = 0
-                dx = 0
-                dy = 0
+                // Premier point d'un stroke : coordonnées ABSOLUES en 0.01mm
+                // (pas de delta — les deltas nuls perdent la position)
+                dx = toAbs(x)
+                dy = toAbs(y)
                 dt = 0
                 ps = VStarToken.PS_PENDOWN
                 if (isPenDown) {
@@ -184,15 +187,34 @@ class VStarWriter(private val context: Context) {
     }
 
     /**
-     * Marque la fin d'un groupe de mots. Écrit un token GROUP_SEP.
-     * Appelé par checkAutoInfer() quand un groupe est confirmé.
+     * Marque la fin d'un groupe de mots. Écrit le token GROUP_SEP
+     * suivi de l'ancre absolue du groupe (x, y en 0.01mm).
+     * L'ancre permet au reader de positionner le groupe sans dérive.
      */
-    fun writeGroupSep() {
+    fun writeGroupSep(anchorX: Float = 0f, anchorY: Float = 0f) {
         val out = outputStream ?: return
         try {
+            // Token GROUP_SEP
             val sep = VStarToken.groupSepToken()
             sep.toBytes(out)
-            Log.d(TAG, "GROUP_SEP écrit (strokeIndex=$strokeIndex)")
+            // Ancre absolue (2 tokens spéciaux)
+            val ax = toAbs(anchorX).toInt()
+            val ay = toAbs(anchorY).toInt()
+            out.writeByte(VStarToken.PS_GROUP_ANCRE)
+            out.writeShort(ax)
+            out.writeShort(ay)
+            // padding pour garder 13 octets d'alignement
+            out.writeShort(0)
+            out.writeByte(0)
+            out.writeByte(0)
+            out.writeByte(0)
+            out.writeByte(strokeIndex.coerceIn(0, 255))
+            out.writeByte(0)
+            Log.d(TAG, "GROUP_SEP écrit (strokeIndex=$strokeIndex, ancre=$ax,$ay)")
+            // Réinitialiser les deltas — le prochain stroke commence depuis l'ancre
+            lastX = anchorX
+            lastY = anchorY
+            lastT = System.currentTimeMillis()
         } catch (e: Exception) {
             Log.e(TAG, "Erreur GROUP_SEP: ${e.message}")
         }
@@ -225,8 +247,114 @@ class VStarWriter(private val context: Context) {
         lastX = 0f; lastY = 0f; lastT = 0L
     }
 
+    /** Flush sans fermer — force l'écriture des données bufferisées. */
+    fun flush() {
+        try { outputStream?.flush() } catch (_: Exception) {}
+    }
+
     /** @return le fichier de la session courante, ou null */
     fun getCurrentFile(): File? = currentFile
+
+    /**
+     * Sauvegarde un .vstar complet à partir du strokeRegistry.
+     * Utilise les MÊMES facteurs de conversion que le flux temps réel,
+     * garantissant un aller-retour parfait.
+     */
+    fun saveFromStrokes(destFile: File, strokes: List<StrokeRecord>, groups: List<List<Int>>) {
+        try {
+            val headerJson = buildString {
+                append("{")
+                append("\"format\":\"miroir-vstar\",")
+                append("\"version\":\"0.5\",")
+                append("\"created_at\":\"${SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())}\",")
+                append("\"xdpi\":${context.resources.displayMetrics.xdpi},")
+                append("\"unit_factor\":${1.0 / pxTo001mm},")
+                append("\"conversion\":\"px*${String.format("%.2f", pxTo001mm)}->0.01mm\"")
+                append("}")
+            }
+            destFile.parentFile?.mkdirs()
+            val fos = FileOutputStream(destFile)
+            val bos = java.io.BufferedOutputStream(fos, 65536)
+            val out = DataOutputStream(bos)
+
+            out.write((headerJson + HEADER_MARKER).toByteArray(Charsets.UTF_8))
+
+            var globalStrokeIdx = 0
+            for (group in groups) {
+                // Ancre du groupe = premier point du premier stroke
+                var groupAnchorX = 0f
+                var groupAnchorY = 0f
+                var isFirstInGroup = true
+                for (idx in group) {
+                    if (idx >= strokes.size) continue
+                    val s = strokes[idx]
+                    for (i in s.points.indices) {
+                        val (px, py) = s.points[i]
+                        val dx: Short
+                        val dy: Short
+                        val dt: Short
+                        if (i == 0) {
+                            if (isFirstInGroup) {
+                                // Premier stroke du groupe : absolu
+                                groupAnchorX = px; groupAnchorY = py
+                                dx = toAbs(px); dy = toAbs(py)
+                            } else {
+                                // Stroke suivant : delta depuis l'ancre du groupe
+                                dx = toDelta(groupAnchorX, px)
+                                dy = toDelta(groupAnchorY, py)
+                            }
+                            dt = 0
+                        } else {
+                            val (ppx, ppy) = s.points[i - 1]
+                            dx = toDelta(ppx, px); dy = toDelta(ppy, py)
+                            dt = ((s.timestamps[i] - s.timestamps[i - 1]).toInt()).coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                        }
+                        val p = (s.pressures.getOrElse(i) { 1.0f } * 255).toInt().coerceIn(0, 255)
+                        out.writeShort(dx.toInt())
+                        out.writeShort(dy.toInt())
+                        out.writeShort(dt.toInt())
+                        out.writeByte(p)
+                        out.writeByte(0xFF)
+                        out.writeByte(0xFF)
+                        val ps = if (i == s.points.size - 1) VStarToken.PS_PENUP else VStarToken.PS_PENDOWN
+                        out.writeByte(ps)
+                        out.writeByte(0)
+                        out.writeByte(globalStrokeIdx.coerceIn(0, 255))
+                        out.writeByte(i.coerceIn(0, 255))
+                    }
+                    globalStrokeIdx++
+                }
+                // GROUP_SEP + ANCRE (format VStarToken correct)
+                if (group.isNotEmpty() && group[0] in strokes.indices) {
+                    val firstStroke = strokes[group[0]]
+                    if (firstStroke.points.isNotEmpty()) {
+                        val (ax, ay) = firstStroke.points[0]
+                        // Token GROUP_SEP (13 octets)
+                        VStarToken.groupSepToken().toBytes(out)
+                        // Token ANCRE (13 octets) : dx=ax, dy=ay, dt=0, p=0, az=0xFF, i=0xFF, ps=PS_GROUP_ANCRE, h=0, sr=idx, pr=0
+                        out.writeShort(toAbs(ax).toInt())   // dx = ancre X
+                        out.writeShort(toAbs(ay).toInt())   // dy = ancre Y
+                        out.writeShort(0)                    // dt = 0
+                        out.writeByte(0)                     // p = 0
+                        out.writeByte(0xFF)                  // az
+                        out.writeByte(0xFF)                  // i
+                        out.writeByte(VStarToken.PS_GROUP_ANCRE) // ps
+                        out.writeByte(0)                     // h
+                        out.writeByte(globalStrokeIdx.coerceIn(0, 255)) // sr
+                        out.writeByte(0)                     // pr
+                    }
+                }
+            }
+            // END
+            out.writeByte(VStarToken.PS_END)
+            for (i in 0..10) out.writeByte(0)
+            out.flush()
+            out.close()
+            Log.i(TAG, "saveFromStrokes: ${strokes.size} strokes, ${groups.size} groupes → ${destFile.length()} B")
+        } catch (e: Exception) {
+            Log.e(TAG, "Erreur saveFromStrokes: ${e.message}")
+        }
+    }
 
     /** @return true si une session est active */
     fun isActive(): Boolean = outputStream != null
@@ -236,8 +364,14 @@ class VStarWriter(private val context: Context) {
     /** Convertit un delta px en unités 0.01mm (Short). */
     private fun toDelta(prev: Float, curr: Float): Short {
         val dpx = curr - prev
-        val d001mm = (dpx * pxTo001mm).toInt()
+        val d001mm = (dpx * pxTo001mm).roundToInt()
         return d001mm.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+    }
+
+    /** Convertit une coordonnée absolue px en unités 0.01mm (Short). */
+    private fun toAbs(coord: Float): Short {
+        val abs001mm = (coord * pxTo001mm).roundToInt()
+        return abs001mm.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
     }
 
     /** Convertit un delta temps (ms) en Short. */
