@@ -8,3 +8,6 @@ local.properties
 # Parnasse
 parnasse-data/
 mirror_test_*/
+mirror_test_*/
+tools/test_blocks/
+tools/test_export.jsonl

@@ -1742,13 +1742,18 @@ class MiroirIME : InputMethodService() {
                 }
             }
             // ═══ Déplacer l'ancre du label (groupAnchor) ═══
-            group.strokeIds.firstOrNull()
-                ?.let { sid -> inkStrokeIdToRegistryIndex[sid] }
-                ?.let { firstIdx ->
-                    groupAnchor[firstIdx]?.let { anchor ->
-                        groupAnchor[firstIdx] = Pair(anchor.first + dx, anchor.second + dy)
-                    }
+            val firstSid = group.strokeIds.firstOrNull()
+            val firstIdx = firstSid?.let { sid -> inkStrokeIdToRegistryIndex[sid] }
+            if (firstIdx != null) {
+                val anchor = groupAnchor[firstIdx]
+                if (anchor != null) {
+                    groupAnchor[firstIdx] = Pair(anchor.first + dx, anchor.second + dy)
+                } else {
+                    Log.w(TAG, "↕ moveGroup: ancre introuvable pour firstIdx=$firstIdx (sid=$firstSid). Clés groupAnchor: ${groupAnchor.keys}")
                 }
+            } else {
+                Log.w(TAG, "↕ moveGroup: firstIdx introuvable pour sid=$firstSid. inkStrokeIdToRegistryIndex contient ${inkStrokeIdToRegistryIndex.size} entrées")
+            }
             // ═══ Déplacer les bounds du groupe (ordre de lecture) ═══
             group.bounds.offset(dx, dy)
             // ═══ Déplacer le blob visuel (sélection) ═══
