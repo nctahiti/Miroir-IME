@@ -383,20 +383,15 @@ class MiroirIME : InputMethodService() {
                 GroupPersistence(java.io.File(dir, "groups.json")).writeAllGroups(allGroups)
             }
             } // fin if (!useVStarOnly)
-            // Toujours encoder en V★ (même si JSON activé) pour comparaison/debug
+            // Toujours encoder en V★ (même si JSON activé)
             val vstarFile = java.io.File(dir, "page.vstar")
-            val groupsForSave = mutableListOf<List<Int>>()
-            val gm = groupManager
-            if (gm != null) {
-                for (g in gm.allGroups()) {
-                    val indices = g.strokeIds.mapNotNull { sid -> inkStrokeIdToRegistryIndex[sid] }
-                    if (indices.isNotEmpty()) groupsForSave.add(indices)
-                }
-            }
-            // Fallback : si aucun groupe formé, encoder tous les strokes comme un seul groupe
-            if (groupsForSave.isEmpty() && strokeRegistry.isNotEmpty()) {
-                groupsForSave.add(strokeRegistry.indices.toList())
-            }
+            // ═══ Encoder TOUS les strokes à plat (sans structure de groupe) ═══
+            // Les groupes/labels/ancres sont dans labels.json.
+            // L'Encoder ne dépend plus du GroupManager → zéro risque de crash.
+            val allLiveIndices = strokeRegistry.indices
+                .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() }
+                .toList()
+            val groupsForSave = if (allLiveIndices.isNotEmpty()) listOf(allLiveIndices) else emptyList()
             VStarEncoder().encode(
                 vstarFile, strokeRegistry, groupsForSave,
                 groupLabels, groupAnchor,

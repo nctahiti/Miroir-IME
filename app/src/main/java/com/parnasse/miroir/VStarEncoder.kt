@@ -66,9 +66,9 @@ class VStarEncoder {
 
                 for (i in group.indices) {
                     val idx = group[i]
-                    if (idx >= strokes.size) continue
-                    val s = strokes[idx]
-                    if (s.points.isEmpty()) continue
+                    if (idx < 0 || idx >= strokes.size) continue
+                    val s = strokes.getOrNull(idx) ?: continue
+                    if (s.points.isEmpty() || s.isDeleted) continue
 
                     for (j in s.points.indices) {
                         val (px, py) = s.points[j]
