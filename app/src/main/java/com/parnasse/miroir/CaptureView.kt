@@ -2659,7 +2659,8 @@ class CaptureView(context: Context) : View(context) {
             while (stroke.timestamps.size > keep) { stroke.timestamps.removeAt(stroke.timestamps.size - 1) }
             while (stroke.pressures.size > keep) { stroke.pressures.removeAt(stroke.pressures.size - 1) }
         }
-        Log.i(TAG, "Scrub permanent: $removed points retires de ${indices.size} strokes")
+        Log.i(TAG, "AUDIT scrub: $removed points retirés de ${indices.size} strokes")
+        Log.i(TAG, "AUDIT scrub: isDeleted=${indices.map { strokeRegistry.getOrNull(it)?.isDeleted }}")
         scrubGroupIndices = null
         scrubTimelinePos = 0f
         rebuildBitmap()

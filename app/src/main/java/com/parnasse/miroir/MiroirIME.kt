@@ -310,7 +310,8 @@ class MiroirIME : InputMethodService() {
             return
         }
         // ═══ Ne pas sauvegarder une page vide (protège les pages existantes) ═══
-        if (strokeRegistry.isEmpty()) {
+        val hasLiveStrokes = strokeRegistry.any { !it.isDeleted && it.points.isNotEmpty() && it.timestamps.isNotEmpty() }
+        if (!hasLiveStrokes) {
             // Supprimer le dossier s'il existe (page fantôme)
             val dir = java.io.File(bd, "page_$currentPageIndex")
             if (dir.exists()) {
@@ -384,22 +385,47 @@ class MiroirIME : InputMethodService() {
             }
             } // fin if (!useVStarOnly)
             // ═══ Toujours persister les groupes (nécessaire pour V★ only) ═══
+            // Recharger les groupes STORED dans le cache, puis nettoyer la persistance
+            val persisted = groupManager?.persistence?.readAllGroups() ?: emptyList()
+            for (g in persisted) {
+                if (groupManager?.getGroup(g.id) == null) {
+                    groupManager?.registerLoadedGroup(g)
+                }
+            }
+            groupManager?.persistence?.deleteAll()
             val allGroups = groupManager?.allGroups() ?: emptyList()
             if (allGroups.isNotEmpty()) {
+                // ═══ Convertir strokeIds (inkStrokeId) → captureIndex (pérenne) ═══
+                // Pour que les groupes survivent au cycle sauvegarde/rechargement V★
+                for (group in allGroups) {
+                    val captureIndices = group.strokeIds.mapNotNull { sid ->
+                        val idx = inkStrokeIdToRegistryIndex[sid]
+                        if (idx != null && idx < strokeRegistry.size && !strokeRegistry[idx].isDeleted) idx else null
+                    }
+                    group.strokeIds.clear()
+                    group.strokeIds.addAll(captureIndices.map { it.toLong() })
+                }
                 GroupPersistence(java.io.File(dir, "groups.json")).writeAllGroups(allGroups)
+                Log.i(TAG, "AUDIT save groups.json: ${java.io.File(dir, "groups.json").absolutePath} — ${allGroups.size} groupes")
             }
             // Toujours encoder en V★ (même si JSON activé)
             val vstarFile = java.io.File(dir, "page.vstar")
-            // ═══ Encoder TOUS les strokes à plat (sans structure de groupe) ═══
-            // Les groupes/labels/ancres sont dans labels.json.
-            // L'Encoder ne dépend plus du GroupManager → zéro risque de crash.
+            // ═══ Encoder les strokes À PLAT (sans structure de groupe) ═══
+            // Les groupes/labels/ancres sont dans groups.json.
+            // Le captureIndex (index dans strokeRegistry) fait le pont.
             val allLiveIndices = strokeRegistry.indices
                 .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() && strokeRegistry[it].timestamps.isNotEmpty() }
                 .toList()
             val groupsForSave = if (allLiveIndices.isNotEmpty()) listOf(allLiveIndices) else emptyList()
             val deletedCount = strokeRegistry.count { it.isDeleted }
             val emptyCount = strokeRegistry.count { !it.isDeleted && it.points.isEmpty() }
-            Log.i(TAG, "V★ DIAG savePage: registrySize=${strokeRegistry.size} deleted=$deletedCount empty=$emptyCount liveIdx=${allLiveIndices.size} groups=${groupsForSave.size} labels=${groupLabels.size} anchors=${groupAnchor.size}")
+            Log.i(TAG, "V★ DIAG savePage: registrySize=${strokeRegistry.size} deleted=$deletedCount empty=$emptyCount liveIdx=${allLiveIndices.size} labels=${groupLabels.size} anchors=${groupAnchor.size}")
+            // ═══ AUDIT : état des groupes avant sauvegarde ═══
+            val gmSnapshot = groupManager?.allGroupsFull() ?: emptyList()
+            Log.i(TAG, "AUDIT save: ${gmSnapshot.size} groupes dans GM — " + gmSnapshot.joinToString(" | ") { 
+                "g=${it.id.take(6)} sids=[${it.strokeIds.joinToString(",")}] state=${it.state}" 
+            })
+            Log.i(TAG, "AUDIT save: groupLabels keys=[${groupLabels.keys.joinToString(",")}]")
             VStarEncoder().encode(
                 vstarFile, strokeRegistry, groupsForSave,
                 groupLabels, groupAnchor,
@@ -407,22 +433,19 @@ class MiroirIME : InputMethodService() {
             )
             Log.i(TAG, "V★ DIAG savePage: vstarFile=${vstarFile.absolutePath} exists=${vstarFile.exists()} size=${vstarFile.length()}B")
             // Sauvegarder labels.json minimal (labels + ancres) — nécessaire pour V★ only
+            // ═══ Clés = captureIndex (index dans strokeRegistry, pérenne) ═══
             val labelsJson = org.json.JSONObject()
             for ((firstIdx, label) in groupLabels) {
-                val inkId = inkStrokeIdToRegistryIndex.entries.find { it.value == firstIdx }?.key
-                if (inkId != null) labelsJson.put(inkId.toString(), label)
+                labelsJson.put(firstIdx.toString(), label)
             }
             val labelsFile = java.io.File(dir, "labels.json")
             val wrapper = org.json.JSONObject()
             wrapper.put("labels", labelsJson)
             val anchorsJson = org.json.JSONObject()
             for ((firstIdx, anchor) in groupAnchor) {
-                val inkId = inkStrokeIdToRegistryIndex.entries.find { it.value == firstIdx }?.key
-                if (inkId != null) {
-                    val arr = org.json.JSONArray()
-                    arr.put(anchor.first.toDouble()); arr.put(anchor.second.toDouble())
-                    anchorsJson.put(inkId.toString(), arr)
-                }
+                val arr = org.json.JSONArray()
+                arr.put(anchor.first.toDouble()); arr.put(anchor.second.toDouble())
+                anchorsJson.put(firstIdx.toString(), arr)
             }
             wrapper.put("anchors", anchorsJson)
             java.io.FileWriter(labelsFile).use { it.write(wrapper.toString()) }
@@ -538,19 +561,62 @@ class MiroirIME : InputMethodService() {
                         strokeRegistry.clear()
                         inkStrokeIdToRegistryIndex.clear()
                         strokeRegistry.addAll(result.strokes)
-                        for (i in result.strokes.indices) {
-                            inkStrokeIdToRegistryIndex[(i + 1).toLong()] = i
+                        // ═══ Reconstruction du mapping via captureIndex (pérenne) ═══
+                        // captureIndex (0-based) → inkStrokeId (1-based) → registryIndex
+                        for ((ci, ri) in result.captureIndexToRegistry) {
+                            inkStrokeIdToRegistryIndex[(ci + 1).toLong()] = ri
                         }
+                        // Fallback séquentiel pour les strokes sans captureIndex (v1.0)
+                        for (i in result.strokes.indices) {
+                            val inkId = (i + 1).toLong()
+                            if (!inkStrokeIdToRegistryIndex.containsKey(inkId)) {
+                                inkStrokeIdToRegistryIndex[inkId] = i
+                            }
+                        }
+                        val maxInkId = inkStrokeIdToRegistryIndex.keys.maxOrNull() ?: 0L
+                        if (maxInkId >= inkStrokeIdCounter) {
+                            inkStrokeIdCounter = maxInkId + 1
+                        }
+                        // ═══ Nettoyer les labels/ancres (seront rechargés depuis labels.json) ═══
                         groupLabels.clear()
-                        groupLabels.putAll(result.labels)
                         originalLabels.clear()
-                        originalLabels.putAll(result.labels) // en V★, original = label
                         groupAnchor.clear()
-                        groupAnchor.putAll(result.anchors)
-                        // ═══ NE PAS enregistrer les groupes du V★Decoder dans GroupManager ═══
-                        // Le V★ encode tout à plat (1 seul groupe) → les vrais groupes
-                        // sont dans groups.json, chargé plus bas. Évite les doublons.
-                        Log.i(TAG, "Page $index chargée via V★: ${result.strokes.size} strokes, ${result.labels.size} labels, ${result.groups.size} groupes")
+                        // ═══ NE PAS enregistrer les groupes du décodeur (flat encoding) ═══
+                        // Les groupes sont dans groups.json unifié
+                        cachedGMCacheSize = -1
+                        Log.i(TAG, "Page $index chargée via V★: ${result.strokes.size} strokes, ${result.captureIndexToRegistry.size} ci mappés")
+                        // ═══ Charger labels.json AVEC traduction captureIndex→nouvelIndex ═══
+                        val labelsFile = java.io.File(dir, "labels.json")
+                        if (labelsFile.exists()) {
+                            val lj = org.json.JSONObject(labelsFile.readText())
+                            val labelsObj = lj.optJSONObject("labels")
+                            if (labelsObj != null) {
+                                groupLabels.clear()
+                                for (key in labelsObj.keys()) {
+                                    val ci = key.toIntOrNull() ?: continue
+                                    val ri = result.captureIndexToRegistry[ci]  // traduction ci→nouvel index
+                                    if (ri != null && ri < strokeRegistry.size) {
+                                        groupLabels[ri] = labelsObj.optString(key, "")
+                                    }
+                                }
+                                originalLabels.clear()
+                                originalLabels.putAll(groupLabels)
+                            }
+                            val anchorsObj = lj.optJSONObject("anchors")
+                            if (anchorsObj != null) {
+                                groupAnchor.clear()
+                                for (key in anchorsObj.keys()) {
+                                    val ci = key.toIntOrNull() ?: continue
+                                    val ri = result.captureIndexToRegistry[ci]
+                                    if (ri != null && ri < strokeRegistry.size) {
+                                        val arr = anchorsObj.optJSONArray(key) ?: continue
+                                        if (arr.length() >= 2) {
+                                            groupAnchor[ri] = Pair(arr.optDouble(0).toFloat(), arr.optDouble(1).toFloat())
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     } else {
                         Log.w(TAG, "V★ DIAG loadPage: decode a retourné NULL — fichier corrompu ?")
                     }
@@ -558,53 +624,33 @@ class MiroirIME : InputMethodService() {
                     Log.w(TAG, "V★ DIAG loadPage: vstarFile absent, ni state.json ni page.vstar trouvés dans $dir")
                 }
             }
-            // Charger labels.json (labels + ancres) — utilisé par V★ only
-            val labelsFile = java.io.File(dir, "labels.json")
-            if (labelsFile.exists()) {
-                val lj = org.json.JSONObject(labelsFile.readText())
-                val labelsObj = lj.optJSONObject("labels")
-                if (labelsObj != null) {
-                    groupLabels.clear()
-                    for (key in labelsObj.keys()) {
-                        val inkId = key.toLongOrNull() ?: key.toIntOrNull()?.toLong() ?: continue
-                        val idx = inkStrokeIdToRegistryIndex[inkId]
-                        if (idx != null) groupLabels[idx] = labelsObj.optString(key, "")
-                    }
-                    originalLabels.clear()
-                    originalLabels.putAll(groupLabels)
-                }
-                val anchorsObj = lj.optJSONObject("anchors")
-                if (anchorsObj != null) {
-                    groupAnchor.clear()
-                    for (key in anchorsObj.keys()) {
-                        val inkId = key.toLongOrNull() ?: key.toIntOrNull()?.toLong() ?: continue
-                        val idx = inkStrokeIdToRegistryIndex[inkId]
-                        if (idx != null) {
-                            val arr = anchorsObj.optJSONArray(key) ?: continue
-                            if (arr.length() >= 2) {
-                                groupAnchor[idx] = Pair(arr.optDouble(0).toFloat(), arr.optDouble(1).toFloat())
-                            }
-                        }
-                    }
-                }
-            }
             // GroupManager: charger depuis persistance specifique a la page
-            // ⚠️ NE PAS changer groupManager.persistence — le GM doit toujours
-            //    ecrire dans ime-groups/current.groups (fichier canonique).
-            //    On lit les groupes avec une persistence temporaire et on les
-            //    enregistre en memoire via registerLoadedGroup().
             val pageGroupsFile = java.io.File(dir, "groups.json")
             if (pageGroupsFile.exists()) {
-                groupManager?.clearAll()  // éviter les doublons avec un chargement précédent
+                Log.i(TAG, "AUDIT load groups.json: ${pageGroupsFile.absolutePath} — ${pageGroupsFile.length()}B")
+                groupManager?.clearAll()
                 val tempPersistence = GroupPersistence(pageGroupsFile)
                 val groups = tempPersistence.readAllGroups()
                 for (group in groups) {
+                    // ═══ Convertir captureIndex → inkStrokeId (pour V★ v1.1) ═══
+                    // Les strokeIds stockés sont des captureIndex (0,1,2...).
+                    // On les convertit en inkStrokeIds (1,2,3...) = ci + 1.
+                    if (group.strokeIds.isNotEmpty() && group.strokeIds.all { it <= strokeRegistry.size.toLong() }) {
+                        val inkIds = group.strokeIds.map { ci -> ci + 1 }
+                        group.strokeIds.clear()
+                        group.strokeIds.addAll(inkIds)
+                    }
                     groupManager?.registerLoadedGroup(group)
                 }
                 cachedGMCacheSize = -1
-                // Initialiser le compteur de sequence apres chargement
                 val maxSeq = groups.mapNotNull { it.orderIndex }.maxOrNull() ?: -1
                 groupManager?.initSequenceCounter(maxSeq)
+                // ═══ AUDIT : état après chargement ═══
+                val loadedSnapshot = groupManager?.allGroupsFull() ?: emptyList()
+                Log.i(TAG, "AUDIT load: ${loadedSnapshot.size} groupes chargés — " + loadedSnapshot.joinToString(" | ") {
+                    "g=${it.id.take(6)} sids=[${it.strokeIds.joinToString(",")}] state=${it.state}"
+                })
+                Log.i(TAG, "AUDIT load: groupLabels keys=[${groupLabels.keys.joinToString(",")}]")
             }
             currentPageIndex = index
             rebuildBitmap()
@@ -1637,6 +1683,7 @@ class MiroirIME : InputMethodService() {
                 if (strokeLen <= remaining) {
                     // Stroke entièrement effacé
                     sr.points.clear(); sr.timestamps.clear(); sr.pressures.clear()
+                    sr.isDeleted = true  // ═══ Marquer comme supprimé (exclu du V★ et des groupes) ═══
                     erasedStrokes.add(idx)
                     remaining -= strokeLen
                 } else {
@@ -1808,7 +1855,9 @@ class MiroirIME : InputMethodService() {
                 // Parcourir les strokes du registre pour trouver les vidés
                 for ((sid, idx) in inkStrokeIdToRegistryIndex.entries.toList()) {
                     if (idx in erasedStrokes && idx < strokeRegistry.size) {
-                        strokeRegistry[idx] = StrokeRecord(id = "")  // vider
+                        val sr = strokeRegistry[idx]
+                        sr.points.clear(); sr.timestamps.clear(); sr.pressures.clear()
+                        sr.isDeleted = true  // ═══ Marquer supprimé (exclu du V★ et des groupes) ═══
                         erasedSids.add(sid)
                         // ═══ Nettoyer le label du groupe (avant de retirer de la map) ═══
                         groupLabels.remove(idx)

@@ -68,7 +68,7 @@ class GroupManager(
             expanded.inset(-params.spatialDistancePx, -params.spatialDistanceY)
             RectF.intersects(expanded, strokeBounds)
         }
-        Log.i(TAG, "onStrokeSealed: pendingGroupId=${machine.pendingGroupId}, selected=${selected?.id} state=${selected?.state} strokes=${selected?.strokeCount}, bounds=${selected?.bounds?.toShortString()}, fastReject=${if (selected != null) nearSelected else "N/A"}, params(rx=${params.spatialDistancePx}, ry=${params.spatialDistanceY}, lineSnap=${params.lineSnapMarginPx})")
+        Log.i(TAG, "AUDIT onStrokeSealed: pendingGroupId=${machine.pendingGroupId}, selected=${selected?.id} state=${selected?.state} strokes=${selected?.strokeCount}, bounds=${selected?.bounds?.toShortString()}, fastReject=${if (selected != null) nearSelected else "N/A"}, params(rx=${params.spatialDistancePx}, ry=${params.spatialDistanceY}, lineSnap=${params.lineSnapMarginPx})")
         
         val group = if (nearSelected && isStrokeNearGroup(stroke, selected!!)) {
             Log.i(TAG, "Absorption SELECTED " + selected.id + " (stroke proche)")
@@ -96,7 +96,7 @@ class GroupManager(
         strokeToGroup[stroke.id] = group.id
         expandBounds(group, strokeBounds)
         group.modifiedAt = System.currentTimeMillis()
-        Log.d(TAG, "Stroke #" + stroke.id + " -> groupe " + group.id + " (" + group.strokeCount + " strokes)")
+        Log.i(TAG, "AUDIT stroke→groupe: stroke #${stroke.id} → ${group.id} (${group.strokeCount} strokes, state=${group.state}, bounds=${group.bounds.toShortString()})")
         resetTranscriptionTimeout(group)
         return group
     }

@@ -319,7 +319,8 @@ class VStarDocument(private val file: File) {
                         az = 0xFF,
                         i = 0xFF,
                         ps = VStarToken.PS_PENDOWN,
-                        h = 0
+                        h = 0,
+                        captureIndex = idx
                     ))
 
                     groupX = px

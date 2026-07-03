@@ -10,24 +10,23 @@ import java.util.*
 import kotlin.math.roundToInt
 
 /**
- * VStarWriter — Le conduit V★.
+ * VStarWriter — Le conduit V★ (flux temps réel).
  *
- * Écrit les strokes en flux delta binaire (13 octets/point) directement
+ * Écrit les strokes en flux delta binaire (14 octets/point) directement
  * sur le disque. La capture n'est jamais bloquée : écriture append-only
  * atomique par token.
  *
- * Format :
+ * Format v1.1 (14 octets/token) :
  *   [HEADER_JSON + \n---\n]
- *   [token 0 : 13 octets]
- *   [token 1 : 13 octets]
+ *   [token 0 : 14 octets]
+ *   [token 1 : 14 octets]
  *   ...
  *   [GROUP_SEP token]
  *   ...
  *   [END token]
  *
- * Les deltas sont en pixels natifs (version 1.0). Plus aucune conversion
- * px ↔ mm — les coordonnées Android View sont stockées directement.
- * Le scaleFactor (1.0) est conservé pour compatibilité future.
+ * Chaque token contient un captureIndex pérenne (2 bytes, 0-65535),
+ * créé au PEN_DOWN et immuable pour toute la durée de vie du stroke.
  */
 class VStarWriter(private val context: Context) {
 
@@ -44,12 +43,26 @@ class VStarWriter(private val context: Context) {
     private var lastX = 0f
     private var lastY = 0f
     private var lastT = 0L
-    private var strokeIndex = 0
-    private var pointIndex = 0
     private var isFirstPoint = true
+    // ═══ Position reconstruite (miroir du décodeur) — évite l'erreur d'arrondi cumulative ═══
+    private var reconstructedX = 0f
+    private var reconstructedY = 0f
+
+    // ═══ captureIndex pérenne (0-65535) ═══
+    private var nextCaptureIndex: Int = 0
+    private var currentCaptureIndex: Int = 0
 
     // Facteur d'échelle (8.0 = sub-pixel 1/8 px, précis et portable)
     private var scaleFactor = 8.0
+
+    /** @return le prochain captureIndex (pour initialisation externe) */
+    fun peekNextCaptureIndex(): Int = nextCaptureIndex
+
+    /** Initialise le compteur de captureIndex (après chargement d'une page) */
+    fun initCaptureCounter(startFrom: Int) {
+        nextCaptureIndex = startFrom
+        Log.d(TAG, "CaptureCounter initialisé à $nextCaptureIndex")
+    }
 
     /**
      * Ouvre une nouvelle session V★. Crée le fichier dans filesDir/vstar/.
@@ -68,16 +81,13 @@ class VStarWriter(private val context: Context) {
             else ""
             val file = File(dir, "session_${ts}${safeLabel}.vstar")
 
-            // Facteur d'échelle 8.0 = précision 1/8 px (sub-pixel)
-            // Les coordonnées sont multipliées par 8 avant arrondi,
-            // puis divisées par 8 au décodage. Indépendant du device.
             scaleFactor = 8.0
 
-            // Écrire le header JSON
+            // Écrire le header JSON v1.1
             val headerJson = buildString {
                 append("{")
                 append("\"format\":\"miroir-vstar\",")
-                append("\"version\":\"1.0\",")
+                append("\"version\":\"1.1\",")
                 append("\"created_at\":\"${SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())}\",")
                 append("\"scale\":\"pixels×8\",")
                 append("\"unit_factor\":0.125,")
@@ -85,22 +95,22 @@ class VStarWriter(private val context: Context) {
                 append("}")
             }
 
-            val fos = FileOutputStream(file, false) // pas d'append — nouveau fichier
-            val bos = java.io.BufferedOutputStream(fos, 65536)  // buffer 64 Ko
+            val fos = FileOutputStream(file, false)
+            val bos = java.io.BufferedOutputStream(fos, 65536)
             outputStream = DataOutputStream(bos)
 
-            // Header JSON + marqueur binaire
             val headerBytes = (headerJson + HEADER_MARKER).toByteArray(Charsets.UTF_8)
             outputStream!!.write(headerBytes)
-            outputStream!!.flush()  // forcer l'écriture du header immédiatement
+            outputStream!!.flush()
 
             currentFile = file
             sessionFile = file
             isFirstPoint = true
-            strokeIndex = 0
-            pointIndex = 0
+            nextCaptureIndex = 0
+            currentCaptureIndex = 0
+            reconstructedX = 0f; reconstructedY = 0f
 
-            Log.i(TAG, "Session ouverte: ${file.absolutePath} (pixels natifs, scaleFactor=${String.format("%.2f", scaleFactor)})")
+            Log.i(TAG, "Session ouverte v1.1: ${file.absolutePath} (pixels natifs, 14B/token)")
             file
         } catch (e: Exception) {
             Log.e(TAG, "Erreur ouverture session: ${e.message}")
@@ -111,13 +121,6 @@ class VStarWriter(private val context: Context) {
     /**
      * Écrit un point de capture. Appelé depuis le thread UI à chaque événement
      * TouchHelper (ACTION_DOWN, ACTION_MOVE, ACTION_UP).
-     *
-     * @param x coordonnée X absolue en pixels
-     * @param y coordonnée Y absolue en pixels
-     * @param t timestamp de l'événement (ms)
-     * @param pressure pression 0.0..1.0
-     * @param isPenDown true si le stylet vient de se poser (ACTION_DOWN)
-     * @param isPenUp true si le stylet vient de se lever (ACTION_UP)
      */
     fun writePoint(
         x: Float, y: Float, t: Long, pressure: Float,
@@ -132,31 +135,34 @@ class VStarWriter(private val context: Context) {
             val ps: Int
 
             if (isFirstPoint || isPenDown) {
-                // Premier point d'un stroke : coordonnées ABSOLUES en 0.01mm
-                // (pas de delta — les deltas nuls perdent la position)
+                // Premier point d'un stroke : coordonnées ABSOLUES
                 dx = toAbs(x)
                 dy = toAbs(y)
                 dt = 0
                 ps = VStarToken.PS_PENDOWN
+                // ═══ Position reconstruite = valeur décodée (dx/8) ═══
+                reconstructedX = dx.toFloat() / scaleFactor.toFloat()
+                reconstructedY = dy.toFloat() / scaleFactor.toFloat()
                 if (isPenDown) {
-                    strokeIndex++
-                    pointIndex = 0
+                    currentCaptureIndex = nextCaptureIndex++
                 }
                 isFirstPoint = false
             } else if (isPenUp) {
-                // Dernier point : delta depuis le dernier point
-                dx = toDelta(lastX, x)
-                dy = toDelta(lastY, y)
+                // Dernier point : delta depuis la position RECONSTRUITE
+                dx = toDelta(reconstructedX, x)
+                dy = toDelta(reconstructedY, y)
                 dt = toDeltaT(lastT, t)
                 ps = VStarToken.PS_PENUP
-                pointIndex++
+                reconstructedX += dx.toFloat() / scaleFactor.toFloat()
+                reconstructedY += dy.toFloat() / scaleFactor.toFloat()
             } else {
-                // Point intermédiaire
-                dx = toDelta(lastX, x)
-                dy = toDelta(lastY, y)
+                // Point intermédiaire : delta depuis la position RECONSTRUITE
+                dx = toDelta(reconstructedX, x)
+                dy = toDelta(reconstructedY, y)
                 dt = toDeltaT(lastT, t)
                 ps = VStarToken.PS_PENDOWN
-                pointIndex++
+                reconstructedX += dx.toFloat() / scaleFactor.toFloat()
+                reconstructedY += dy.toFloat() / scaleFactor.toFloat()
             }
 
             val p = (pressure * 255).toInt().coerceIn(0, 255)
@@ -164,17 +170,17 @@ class VStarWriter(private val context: Context) {
             val i = VStarToken.TILT_UNSUPPORTED
             val h: Byte = 0
 
-            // Écrire le token (13 octets)
-            out.writeShort(dx.toInt())
-            out.writeShort(dy.toInt())
-            out.writeShort(dt.toInt())
-            out.writeByte(p)
-            out.writeByte(az)
-            out.writeByte(i)
-            out.writeByte(ps)
-            out.writeByte(h.toInt() and 0xFF)
-            out.writeByte(strokeIndex.coerceIn(0, 255))
-            out.writeByte(pointIndex.coerceIn(0, 255))
+            // ═══ Token 14 bytes v1.1 ═══
+            out.writeShort(dx.toInt())                          //  0-1 : dx
+            out.writeShort(dy.toInt())                          //  2-3 : dy
+            out.writeShort(dt.toInt())                          //  4-5 : dt
+            out.writeByte(p)                                    //  6   : p
+            out.writeByte(az)                                   //  7   : az
+            out.writeByte(i)                                    //  8   : i
+            out.writeByte(ps)                                   //  9   : ps
+            out.writeByte(h.toInt() and 0xFF)                   // 10   : h
+            out.writeByte(0)                                    // 11   : padding
+            out.writeShort(currentCaptureIndex.coerceIn(0, 65535)) // 12-13 : captureIndex
 
             // Mise à jour de l'état
             lastX = x
@@ -188,30 +194,30 @@ class VStarWriter(private val context: Context) {
 
     /**
      * Marque la fin d'un groupe de mots. Écrit le token GROUP_SEP
-     * suivi de l'ancre absolue du groupe (x, y en 0.01mm).
-     * L'ancre permet au reader de positionner le groupe sans dérive.
+     * suivi de l'ancre absolue du groupe.
      */
     fun writeGroupSep(anchorX: Float = 0f, anchorY: Float = 0f) {
         val out = outputStream ?: return
         try {
-            // Token GROUP_SEP
-            val sep = VStarToken.groupSepToken()
-            sep.toBytes(out)
-            // Ancre absolue (2 tokens spéciaux)
+            // Token GROUP_SEP (14 octets)
+            VStarToken.groupSepToken().toBytes(out)
+            // Ancre absolue (14 octets, PS_GROUP_ANCRE)
             val ax = toAbs(anchorX).toInt()
             val ay = toAbs(anchorY).toInt()
-            out.writeByte(VStarToken.PS_GROUP_ANCRE)
-            out.writeShort(ax)
-            out.writeShort(ay)
-            // padding pour garder 13 octets d'alignement
-            out.writeShort(0)
-            out.writeByte(0)
-            out.writeByte(0)
-            out.writeByte(0)
-            out.writeByte(strokeIndex.coerceIn(0, 255))
-            out.writeByte(0)
-            Log.d(TAG, "GROUP_SEP écrit (strokeIndex=$strokeIndex, ancre=$ax,$ay)")
-            // Réinitialiser les deltas — le prochain stroke commence depuis l'ancre
+            out.writeShort(ax)                                   // dx = ancre X
+            out.writeShort(ay)                                   // dy = ancre Y
+            out.writeShort(0)                                    // dt = 0
+            out.writeByte(0)                                     // p = 0
+            out.writeByte(0xFF)                                  // az
+            out.writeByte(0xFF)                                  // i
+            out.writeByte(VStarToken.PS_GROUP_ANCRE)             // ps = 5
+            out.writeByte(0)                                     // h
+            out.writeByte(0)                                     // padding
+            out.writeShort(currentCaptureIndex.coerceIn(0, 65535)) // captureIndex
+            Log.d(TAG, "GROUP_SEP écrit (ci=$currentCaptureIndex, ancre=$ax,$ay)")
+            // ═══ Réinitialiser la position reconstruite à l'ancre ═══
+            reconstructedX = anchorX
+            reconstructedY = anchorY
             lastX = anchorX
             lastY = anchorY
             lastT = System.currentTimeMillis()
@@ -220,14 +226,11 @@ class VStarWriter(private val context: Context) {
         }
     }
 
-    /**
-     * Marque la fin de la session. Écrit un token END et ferme le flux.
-     */
+    /** Marque la fin de la session. */
     fun writeEnd() {
         val out = outputStream ?: return
         try {
-            val end = VStarToken.endToken()
-            end.toBytes(out)
+            VStarToken.endToken().toBytes(out)
             out.flush()
             Log.i(TAG, "Session terminée: ${currentFile?.absolutePath}")
         } catch (e: Exception) {
@@ -245,27 +248,26 @@ class VStarWriter(private val context: Context) {
         currentFile = null
         isFirstPoint = true
         lastX = 0f; lastY = 0f; lastT = 0L
+        reconstructedX = 0f; reconstructedY = 0f
     }
 
-    /** Flush sans fermer — force l'écriture des données bufferisées. */
     fun flush() {
         try { outputStream?.flush() } catch (_: Exception) {}
     }
 
-    /** @return le fichier de la session courante, ou null */
     fun getCurrentFile(): File? = currentFile
+    fun isActive(): Boolean = outputStream != null
 
     /**
      * Sauvegarde un .vstar complet à partir du strokeRegistry.
-     * Utilise les MÊMES facteurs de conversion que le flux temps réel,
-     * garantissant un aller-retour parfait.
+     * Utilise les MÊMES facteurs de conversion que le flux temps réel.
      */
     fun saveFromStrokes(destFile: File, strokes: List<StrokeRecord>, groups: List<List<Int>>) {
         try {
             val headerJson = buildString {
                 append("{")
                 append("\"format\":\"miroir-vstar\",")
-                append("\"version\":\"1.0\",")
+                append("\"version\":\"1.1\",")
                 append("\"created_at\":\"${SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date())}\",")
                 append("\"scale\":\"pixels×8\",")
                 append("\"unit_factor\":0.125,")
@@ -279,11 +281,9 @@ class VStarWriter(private val context: Context) {
 
             out.write((headerJson + HEADER_MARKER).toByteArray(Charsets.UTF_8))
 
-            var globalStrokeIdx = 0
             for (group in groups) {
-                // Ancre du groupe = premier point du premier stroke
-                var groupAnchorX = 0f
-                var groupAnchorY = 0f
+                var rx = 0f  // position reconstruite (miroir décodeur)
+                var ry = 0f
                 var isFirstInGroup = true
                 for (idx in group) {
                     if (idx >= strokes.size) continue
@@ -295,86 +295,78 @@ class VStarWriter(private val context: Context) {
                         val dt: Short
                         if (i == 0) {
                             if (isFirstInGroup) {
-                                // Premier stroke du groupe : absolu
-                                groupAnchorX = px; groupAnchorY = py
                                 dx = toAbs(px); dy = toAbs(py)
                             } else {
-                                // Stroke suivant : delta depuis l'ancre du groupe
-                                dx = toDelta(groupAnchorX, px)
-                                dy = toDelta(groupAnchorY, py)
+                                dx = toDelta(rx, px)  // delta depuis position reconstruite
+                                dy = toDelta(ry, py)
                             }
+                            rx = dx.toFloat() / scaleFactor.toFloat()
+                            ry = dy.toFloat() / scaleFactor.toFloat()
                             dt = 0
+                            isFirstInGroup = false
                         } else {
-                            val (ppx, ppy) = s.points[i - 1]
-                            dx = toDelta(ppx, px); dy = toDelta(ppy, py)
+                            dx = toDelta(rx, px); dy = toDelta(ry, py)
+                            rx += dx.toFloat() / scaleFactor.toFloat()
+                            ry += dy.toFloat() / scaleFactor.toFloat()
                             dt = ((s.timestamps[i] - s.timestamps[i - 1]).toInt()).coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
                         }
                         val p = (s.pressures.getOrElse(i) { 1.0f } * 255).toInt().coerceIn(0, 255)
+                        val ps = if (i == s.points.size - 1) VStarToken.PS_PENUP else VStarToken.PS_PENDOWN
+                        // ═══ Token 14 bytes v1.1 ═══
                         out.writeShort(dx.toInt())
                         out.writeShort(dy.toInt())
                         out.writeShort(dt.toInt())
                         out.writeByte(p)
                         out.writeByte(0xFF)
                         out.writeByte(0xFF)
-                        val ps = if (i == s.points.size - 1) VStarToken.PS_PENUP else VStarToken.PS_PENDOWN
                         out.writeByte(ps)
                         out.writeByte(0)
-                        out.writeByte(globalStrokeIdx.coerceIn(0, 255))
-                        out.writeByte(i.coerceIn(0, 255))
+                        out.writeByte(0)  // padding
+                        out.writeShort(idx.coerceIn(0, 65535))  // captureIndex = idx pérenne
                     }
-                    globalStrokeIdx++
                 }
-                // GROUP_SEP + ANCRE (format VStarToken correct)
+                // GROUP_SEP + ANCRE
                 if (group.isNotEmpty() && group[0] in strokes.indices) {
                     val firstStroke = strokes[group[0]]
                     if (firstStroke.points.isNotEmpty()) {
                         val (ax, ay) = firstStroke.points[0]
-                        // Token GROUP_SEP (13 octets)
                         VStarToken.groupSepToken().toBytes(out)
-                        // Token ANCRE (13 octets) : dx=ax, dy=ay, dt=0, p=0, az=0xFF, i=0xFF, ps=PS_GROUP_ANCRE, h=0, sr=idx, pr=0
-                        out.writeShort(toAbs(ax).toInt())   // dx = ancre X
-                        out.writeShort(toAbs(ay).toInt())   // dy = ancre Y
-                        out.writeShort(0)                    // dt = 0
-                        out.writeByte(0)                     // p = 0
-                        out.writeByte(0xFF)                  // az
-                        out.writeByte(0xFF)                  // i
-                        out.writeByte(VStarToken.PS_GROUP_ANCRE) // ps
-                        out.writeByte(0)                     // h
-                        out.writeByte(globalStrokeIdx.coerceIn(0, 255)) // sr
-                        out.writeByte(0)                     // pr
+                        out.writeShort(toAbs(ax).toInt())
+                        out.writeShort(toAbs(ay).toInt())
+                        out.writeShort(0)
+                        out.writeByte(0)
+                        out.writeByte(0xFF)
+                        out.writeByte(0xFF)
+                        out.writeByte(VStarToken.PS_GROUP_ANCRE)
+                        out.writeByte(0)
+                        out.writeByte(0)  // padding
+                        out.writeShort(0)
                     }
                 }
             }
             // END
-            out.writeByte(VStarToken.PS_END)
-            for (i in 0..10) out.writeByte(0)
+            VStarToken.endToken().toBytes(out)
             out.flush()
             out.close()
-            Log.i(TAG, "saveFromStrokes: ${strokes.size} strokes, ${groups.size} groupes → ${destFile.length()} B")
+            Log.i(TAG, "saveFromStrokes v1.1: ${strokes.size} strokes, ${groups.size} groupes → ${destFile.length()} B")
         } catch (e: Exception) {
             Log.e(TAG, "Erreur saveFromStrokes: ${e.message}")
         }
     }
 
-    /** @return true si une session est active */
-    fun isActive(): Boolean = outputStream != null
-
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    /** Convertit un delta px en unités d'échelle (Short). */
     private fun toDelta(prev: Float, curr: Float): Short {
         val dpx = curr - prev
         val scaled = (dpx * scaleFactor).roundToInt()
         return scaled.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
     }
 
-    /** Convertit une coordonnée absolue px en unités d'échelle (Short). */
     private fun toAbs(coord: Float): Short {
         val scaled = (coord * scaleFactor).roundToInt()
         return scaled.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
     }
 
-    /** Convertit un delta temps (ms) en Short. */
     private fun toDeltaT(prev: Long, curr: Long): Short {
         val dt = (curr - prev).toInt()
         return dt.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
