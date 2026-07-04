@@ -314,9 +314,21 @@ class MiroirIME : InputMethodService() {
     // V★ v2.0 — Document Vivant (16B tokens, GroupTable intégrée)
     // ═══════════════════════════════════════════════════════════════
 
-    /** Calcule le centre géométrique d'un groupe (ancre stable). */
+    /** Calcule le centre géométrique d'un groupe (ancre stable).
+     *  Utilise la position MOYENNE du premier stroke (≈ ligne de base),
+     *  pas le sommet du bounding box (qui snap à l'interligne du dessus). */
     private fun computeGroupAnchor(ris: List<Int>): Pair<Float, Float> {
         if (ris.isEmpty()) return Pair(0f, 0f)
+        val firstSR = strokeRegistry.getOrNull(ris.first()) 
+        if (firstSR != null && firstSR.points.isNotEmpty()) {
+            val avgX = firstSR.points.map { it.first }.average().toFloat()
+            val avgY = firstSR.points.map { it.second }.average().toFloat()
+            // Moyenner aussi avec groupAnchor si disponible (précis)
+            val anchor = groupAnchor[ris.first()]
+            return if (anchor != null) Pair((avgX + anchor.first) / 2f, (avgY + anchor.second) / 2f)
+            else Pair(avgX, avgY)
+        }
+        // Fallback: bounding box
         var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
         var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
         var hasPoints = false
@@ -330,7 +342,7 @@ class MiroirIME : InputMethodService() {
                 hasPoints = true
             }
         }
-        return if (hasPoints) Pair((minX + maxX) / 2f, minY)  // centre X, top Y (ligne de base)
+        return if (hasPoints) Pair((minX + maxX) / 2f, (minY + maxY) / 2f)  // centre complet
         else Pair(0f, 0f)
     }
 
