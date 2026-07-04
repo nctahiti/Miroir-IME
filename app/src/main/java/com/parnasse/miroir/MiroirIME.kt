@@ -1314,13 +1314,21 @@ class MiroirIME : InputMethodService() {
         fun makeButton(label: String, onLongClick: (() -> Unit)? = null, onClick: () -> Unit): android.widget.Button {
             return android.widget.Button(this).apply {
                 text = label
-                textSize = 22f  // ×5 par rapport à 12f
+                textSize = 22f
                 setTextColor(Color.WHITE)
                 background = borderedBg(Color.argb(60, 60, 60, 70))
                 setPadding((16 * density).toInt(), (12 * density).toInt(), (16 * density).toInt(), (12 * density).toInt())
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                     gravity = android.view.Gravity.CENTER_VERTICAL
+                }
+                // ⚠️ Ignorer les événements stylet (seul le doigt active les boutons)
+                setOnTouchListener { _, event ->
+                    if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) {
+                        true  // consomme l'événement → pas de clic
+                    } else {
+                        false // laisse passer → onClick normal
+                    }
                 }
                 setOnClickListener { onClick() }
                 if (onLongClick != null) {
@@ -1635,9 +1643,9 @@ class MiroirIME : InputMethodService() {
         val v = imeView
         if (v != null) initTouchHelper(v)
         rebuildBitmap()
-        // ═══ Toujours ouvrir sur le clavier de mise en forme ═══
-        if (!isFormattingMode && formattingPanel != null && imeView != null && rootView != null) {
-            toggleFormattingMode()
+        // ═══ Démarrer en mode CAPTURE (pas formatage) ═══
+        if (isFormattingMode) {
+            toggleFormattingMode()  // revenir en capture si on était en formatage
         }
     }
 
