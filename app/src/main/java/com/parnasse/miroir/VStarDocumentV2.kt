@@ -83,6 +83,19 @@ class VStarDocumentV2(private val file: File) {
         return g.id
     }
 
+    /** Crée un groupe avec offset/count explicites (pour sauvegarde par lots). */
+    fun createGroupWithExtent(anchorX: Float, anchorY: Float, offset: Int, count: Int, label: String? = null): String {
+        val gt = groupTable ?: return ""
+        if (count == 0) return ""
+        val g = gt.createGroup(anchorX, anchorY)
+        gt.addExtent(g.id, VStarGroupTable.Extent(offset, count))
+        if (label != null) gt.updateGroup(g.id, label = label)
+        Log.i(TAG, "Groupe batch: ${g.id} offset=$offset +$count")
+        return g.id
+    }
+
+    fun getGroupTable(): VStarGroupTable? = groupTable
+
     fun absorbStroke(ci: Short, targetGroupId: String): Boolean {
         val gt = groupTable ?: return false
         val offset = activeStrokeOffset(); val count = activeStrokeTokenCount()

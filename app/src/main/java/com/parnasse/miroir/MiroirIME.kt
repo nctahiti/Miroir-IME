@@ -338,16 +338,14 @@ class MiroirIME : InputMethodService() {
         ))
 
         // Points intermédiaires → MOVE (deltas depuis reconstructedPosition)
-        var rx = first.first * scaleFactor  // reconstructed X
-        var ry = first.second * scaleFactor  // reconstructed Y
+        var rx = first.first  // reconstructed X (pixels)
+        var ry = first.second  // reconstructed Y (pixels)
         var lastTs = if (sr.timestamps.isNotEmpty()) sr.timestamps.first() else 0L
 
         for (j in 1 until sr.points.size) {
             val pt = sr.points[j]
-            val px = pt.first * scaleFactor
-            val py = pt.second * scaleFactor
-            val dx = ((px - rx) / scaleFactor * scaleFactor).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
-            val dy = ((py - ry) / scaleFactor * scaleFactor).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            val dx = ((pt.first - rx) * scaleFactor).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            val dy = ((pt.second - ry) * scaleFactor).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
             rx += dx / scaleFactor
             ry += dy / scaleFactor
 
@@ -392,7 +390,9 @@ class MiroirIME : InputMethodService() {
 
             // Ouvrir le document V2 (écrase l'ancien)
             val vstarFile = java.io.File(dir, "page.vstar")
+            val groupsFile = java.io.File(dir, "page.groups.json")
             if (vstarFile.exists()) vstarFile.delete()
+            if (groupsFile.exists()) groupsFile.delete()  // ⚠️ éviter accumulation groupes
             val doc = VStarDocumentV2(vstarFile)
             doc.open()
 
@@ -401,19 +401,24 @@ class MiroirIME : InputMethodService() {
                 .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() && strokeRegistry[it].timestamps.isNotEmpty() }
                 .toList()
 
-            // Map: registryIndex → captureIndex (pour la conversion des groupes)
+            // Map: registryIndex → captureIndex + offset dans le fichier
             val registryToCI = mutableMapOf<Int, Short>()
+            val ciToOffset = mutableMapOf<Short, Int>()     // offset du premier token
+            val ciToCount = mutableMapOf<Short, Int>()      // nombre de tokens
 
             for (ri in allLiveIndices) {
                 val sr = strokeRegistry[ri]
                 val ci = doc.beginStroke()
                 registryToCI[ri] = ci
+                val startOffset = doc.activeStrokeOffset()
                 val tokens = strokeRecordToTokensV2(sr, ci)
                 for (t in tokens) doc.writeToken(t)
                 doc.endStroke(ci)
+                ciToOffset[ci] = startOffset
+                ciToCount[ci] = tokens.size
             }
 
-            // ═══ Reconstruire les groupes depuis GroupManager ═══
+            // ═══ Construire les groupes directement dans la GroupTable ═══
             // Charger les groupes STORED dans le cache
             val persisted = groupManager?.persistence?.readAllGroups() ?: emptyList()
             for (g in persisted) {
@@ -424,54 +429,73 @@ class MiroirIME : InputMethodService() {
             val allGroups = (groupManager?.allGroups() ?: emptyList())
                 .filter { it.strokeIds.isNotEmpty() }
 
-            // Trouver quel groupe contient quel stroke (par registryIndex)
-            val riToGroupId = mutableMapOf<Int, String>()
+            // Grouper les registryIndex par groupe (depuis GroupManager)
+            val groupToRIs = mutableMapOf<String, MutableList<Int>>()
             for (group in allGroups) {
+                val ris = mutableListOf<Int>()
                 for (sid in group.strokeIds) {
                     val ri = inkStrokeIdToRegistryIndex[sid] ?: continue
-                    if (ri in registryToCI) {
-                        riToGroupId[ri] = group.id
-                    }
+                    if (ri in registryToCI) ris.add(ri)
+                }
+                if (ris.isNotEmpty()) groupToRIs[group.id] = ris
+            }
+
+            // Écrire chaque groupe dans la GroupTable avec ses extents
+            var groupCount = 0
+            for ((oldGid, ris) in groupToRIs) {
+                // Utiliser le premier stroke du groupe comme ancre
+                val firstRI = ris.first()
+                val firstCI = registryToCI[firstRI] ?: continue
+                val firstOffset = ciToOffset[firstCI] ?: continue
+                val firstCount = ciToCount[firstCI] ?: continue
+                val label = groupLabels[firstRI]
+                val anchor = groupAnchor[firstRI]
+                val newGid = doc.createGroupWithExtent(
+                    anchorX = anchor?.first ?: 0f,
+                    anchorY = anchor?.second ?: 0f,
+                    offset = firstOffset,
+                    count = firstCount,
+                    label = label
+                )
+                if (newGid.isEmpty()) continue
+                groupCount++
+
+                // Ajouter les extents des autres strokes du groupe
+                for (ri in ris) {
+                    if (ri == firstRI) continue
+                    val ci = registryToCI[ri] ?: continue
+                    val offset = ciToOffset[ci] ?: continue
+                    val count = ciToCount[ci] ?: continue
+                    doc.getGroupTable()?.addExtent(newGid, VStarGroupTable.Extent(offset, count))
+                }
+
+                // Labels corrigés
+                val origLabel = originalLabels[firstRI]
+                if (origLabel != null && origLabel != label) {
+                    doc.updateGroupMeta(newGid, labelCorrected = label)
                 }
             }
 
-            // Créer/absorber dans le document V2
-            val seenGroups = mutableSetOf<String>()
+            // Strokes sans groupe → groupe solo
             for (ri in allLiveIndices) {
+                if (groupToRIs.values.any { ri in it }) continue
                 val ci = registryToCI[ri] ?: continue
-                val gid = riToGroupId[ri]
-                if (gid != null) {
-                    if (gid !in seenGroups) {
-                        // Premier stroke de ce groupe → créer avec métadonnées
-                        val label = groupLabels[ri]
-                        val anchor = groupAnchor[ri]
-                        val newGid = doc.createGroup(ci, anchor?.first ?: 0f, anchor?.second ?: 0f, label)
-                        // Mapper l'ancien gid → nouveau gid pour les strokes suivants
-                        riToGroupId.entries.filter { it.value == gid }.forEach { it.setValue(newGid) }
-                        seenGroups.add(gid)
-                    } else {
-                        doc.absorbStroke(ci, gid)
-                    }
-                } else {
-                    // Stroke sans groupe (ne devrait pas arriver, mais on crée un groupe par défaut)
-                    val label = groupLabels[ri]
-                    doc.createGroup(ci, 0f, 0f, label)
-                }
-            }
-
-            // ═══ Mettre à jour les labels corrigés ═══
-            for ((firstIdx, origLabel) in originalLabels) {
-                val ci = registryToCI[firstIdx] ?: continue
-                val gid = riToGroupId[firstIdx] ?: continue
-                val currentLabel = groupLabels[firstIdx]
-                if (currentLabel != origLabel) {
-                    doc.updateGroupMeta(gid, labelCorrected = currentLabel)
-                }
+                val offset = ciToOffset[ci] ?: continue
+                val count = ciToCount[ci] ?: continue
+                val label = groupLabels[ri]
+                val gid = doc.createGroupWithExtent(0f, 0f, offset, count, label)
+                if (gid.isNotEmpty()) groupCount++
             }
 
             doc.flush()
             doc.close()
-            Log.i(TAG, "V★ v2.0 sauvegardé: ${allLiveIndices.size} strokes, ${seenGroups.size} groupes → ${vstarFile.length()}B")
+            // ═══ DIAG : bounds des strokes sauvegardés ═══
+            val firstSR = strokeRegistry.firstOrNull { !it.isDeleted && it.points.isNotEmpty() }
+            if (firstSR != null) {
+                val p0 = firstSR.points.first()
+                Log.i(TAG, "V★ v2.0 DIAG save: premier point=(${p0.first}, ${p0.second}) registrySize=${strokeRegistry.size} liveIdx=${allLiveIndices.size}")
+            }
+            Log.i(TAG, "V★ v2.0 sauvegardé: ${allLiveIndices.size} strokes, $groupCount groupes → ${vstarFile.length()}B")
         } catch (e: Exception) {
             Log.e(TAG, "savePageV2 erreur: ${e.message}", e)
         }
@@ -508,7 +532,7 @@ class MiroirIME : InputMethodService() {
             val doc = VStarDocumentV2(vstarFile)
             doc.open()
             val result = doc.load()
-            doc.close()
+            // ⚠️ NE PAS fermer doc ici — loadGroupTokens() en a besoin
 
             // ═══ Reconstruire strokeRegistry depuis les tokens ═══
             strokeRegistry.clear()
@@ -517,11 +541,16 @@ class MiroirIME : InputMethodService() {
             originalLabels.clear()
             groupAnchor.clear()
 
-            // Grouper les tokens par captureIndex
+            // Grouper les tokens par captureIndex + mapper offset → ci
             val tokensByCI = mutableMapOf<Short, MutableList<VStarTokenV2>>()
+            val offsetToCI = mutableMapOf<Int, Short>()  // offset → captureIndex
+            var tokenIdx = 0
             for (t in result.tokens) {
-                if (t.isEnd() || t.isErased() || t.isGroupMeta()) continue
+                if (t.isEnd()) break
+                if (t.isErased() || t.isGroupMeta()) { tokenIdx++; continue }
                 tokensByCI.getOrPut(t.captureIndex) { mutableListOf() }.add(t)
+                if (t.isPenDown()) offsetToCI[tokenIdx] = t.captureIndex
+                tokenIdx++
             }
 
             // Reconstruire StrokeRecord pour chaque captureIndex
@@ -554,16 +583,16 @@ class MiroirIME : InputMethodService() {
                 }
             }
 
-            // ═══ Reconstruire les groupes depuis la GroupTable ═══
+            // ═══ Reconstruire les groupes depuis la GroupTable (via offsetToCI, pas de re-lecture fichier) ═══
             for (g in result.groups) {
                 if (g.isEmpty) continue
                 val inkGroup = InkGroup.create()
-                // Lire les tokens du groupe pour trouver les captureIndex
-                val groupTokens = doc.loadGroupTokens(g.id)
+                // Trouver les captureIndex via les offsets dans les extents
                 val seenCIs = mutableSetOf<Short>()
-                for (t in groupTokens) {
-                    if (t.isEnd() || t.isErased() || t.isGroupMeta()) continue
-                    seenCIs.add(t.captureIndex)
+                for (extent in g.extents) {
+                    for (i in 0 until extent.count) {
+                        offsetToCI[extent.offset + i]?.let { seenCIs.add(it) }
+                    }
                 }
                 // Convertir captureIndex → inkStrokeId
                 for (ci in seenCIs) {
@@ -600,8 +629,16 @@ class MiroirIME : InputMethodService() {
                     computeBlobPath(group)?.let { blob -> groupBlobs[group.id] = blob }
                 }
             }
+            // ═══ DIAG : bounds des strokes chargés ═══
+            val firstSR = strokeRegistry.firstOrNull { !it.isDeleted && it.points.isNotEmpty() }
+            if (firstSR != null) {
+                val p0 = firstSR.points.first()
+                val pN = firstSR.points.last()
+                Log.i(TAG, "V★ v2.0 DIAG load: premier=(${p0.first},${p0.second}) dernier=(${pN.first},${pN.second}) pts=${firstSR.points.size}")
+            }
             Log.i(TAG, "V★ v2.0 chargé: page $index — ${strokeRegistry.size} strokes, ${groupLabels.size} labels, ${groupBlobs.size} blobs")
 
+            doc.close()
             // Conduit V★ v1.1 — réactiver le writer (compatibilité)
             vstarWriter?.close()
             vstarWriter = VStarWriter(this).also { it.openNewSession("page_$currentPageIndex") }
