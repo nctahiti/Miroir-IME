@@ -1319,7 +1319,9 @@ class MiroirIME : InputMethodService() {
                 background = borderedBg(Color.argb(60, 60, 60, 70))
                 setPadding((16 * density).toInt(), (12 * density).toInt(), (16 * density).toInt(), (12 * density).toInt())
                 layoutParams = android.widget.LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                }
                 setOnClickListener { onClick() }
                 if (onLongClick != null) {
                     setOnLongClickListener { onLongClick(); true }
@@ -3166,7 +3168,7 @@ class MiroirIME : InputMethodService() {
         if (!dir.exists()) return 0
         return dir.listFiles()?.count { f ->
             f.isDirectory && f.name.startsWith("page_") &&
-            java.io.File(f, "state.json").exists()
+            (java.io.File(f, "state.json").exists() || java.io.File(f, "page.vstar").exists())
         } ?: 0
     }
 
