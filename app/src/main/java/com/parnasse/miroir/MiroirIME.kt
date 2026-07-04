@@ -1369,12 +1369,12 @@ class MiroirIME : InputMethodService() {
         // ═══ Indicateur de page (numéro page courante / totale) ═══
         val pageLabel = android.widget.TextView(this).apply {
             text = "1/1"
-            textSize = 18f
+            textSize = 22f
             gravity = android.view.Gravity.CENTER
-            setTextColor(Color.DKGRAY)
+            setTextColor(Color.WHITE)
             setBackgroundColor(Color.TRANSPARENT)
             layoutParams = android.widget.LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }.also { this.pageLabel = it }
         toolbar.addView(pageLabel)
 
