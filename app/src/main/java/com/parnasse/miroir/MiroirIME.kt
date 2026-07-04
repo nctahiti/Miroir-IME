@@ -314,6 +314,26 @@ class MiroirIME : InputMethodService() {
     // V★ v2.0 — Document Vivant (16B tokens, GroupTable intégrée)
     // ═══════════════════════════════════════════════════════════════
 
+    /** Calcule le centre géométrique d'un groupe (ancre stable). */
+    private fun computeGroupAnchor(ris: List<Int>): Pair<Float, Float> {
+        if (ris.isEmpty()) return Pair(0f, 0f)
+        var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
+        var minY = Float.MAX_VALUE; var maxY = Float.MIN_VALUE
+        var hasPoints = false
+        for (ri in ris) {
+            val sr = strokeRegistry.getOrNull(ri) ?: continue
+            for (pt in sr.points) {
+                if (pt.first < minX) minX = pt.first
+                if (pt.first > maxX) maxX = pt.first
+                if (pt.second < minY) minY = pt.second
+                if (pt.second > maxY) maxY = pt.second
+                hasPoints = true
+            }
+        }
+        return if (hasPoints) Pair((minX + maxX) / 2f, minY)  // centre X, top Y (ligne de base)
+        else Pair(0f, 0f)
+    }
+
     /** Active le mode V★ v2.0 pour cette page. */
     private fun openVStarDoc(dir: java.io.File) {
         val vstarFile = java.io.File(dir, "page.vstar")
@@ -475,21 +495,13 @@ class MiroirIME : InputMethodService() {
             // Écrire chaque groupe dans la GroupTable avec ses extents
             var groupCount = 0
             for ((oldGid, ris) in groupToRIs) {
-                // Utiliser le premier stroke du groupe comme ancre
                 val firstRI = ris.first()
                 val firstCI = registryToCI[firstRI] ?: continue
                 val firstOffset = ciToOffset[firstCI] ?: continue
                 val firstCount = ciToCount[firstCI] ?: continue
                 val label = groupLabels[firstRI]
-                // ⚠️ Ancre: utiliser groupAnchor si disponible, sinon premier point du stroke
-                val anchor = groupAnchor[firstRI]
-                val (ax, ay) = if (anchor != null) {
-                    Pair(anchor.first, anchor.second)
-                } else {
-                    val sr = strokeRegistry.getOrNull(firstRI)
-                    val pt = sr?.points?.firstOrNull()
-                    if (pt != null) Pair(pt.first, pt.second) else Pair(0f, 0f)
-                }
+                // ⚠️ Ancre = centre géométrique du groupe (stable, pas dépendant du 1er stroke)
+                val (ax, ay) = computeGroupAnchor(ris)
                 val newGid = doc.createGroupWithExtent(
                     anchorX = ax, anchorY = ay,
                     offset = firstOffset, count = firstCount, label = label
