@@ -393,7 +393,8 @@ class MiroirIME : InputMethodService() {
                 }
             }
             groupManager?.persistence?.deleteAll()
-            val allGroups = groupManager?.allGroups() ?: emptyList()
+            val allGroups = (groupManager?.allGroups() ?: emptyList())
+                .filter { it.strokeIds.isNotEmpty() }  // ⚠️ ignorer les groupes vidés par scrub
             if (allGroups.isNotEmpty()) {
                 // ═══ Convertir strokeIds (inkStrokeId) → captureIndex (pérenne) ═══
                 // Pour que les groupes survivent au cycle sauvegarde/rechargement V★
@@ -566,11 +567,11 @@ class MiroirIME : InputMethodService() {
                         for ((ci, ri) in result.captureIndexToRegistry) {
                             inkStrokeIdToRegistryIndex[(ci + 1).toLong()] = ri
                         }
-                        // Fallback séquentiel pour les strokes sans captureIndex (v1.0)
-                        for (i in result.strokes.indices) {
-                            val inkId = (i + 1).toLong()
-                            if (!inkStrokeIdToRegistryIndex.containsKey(inkId)) {
-                                inkStrokeIdToRegistryIndex[inkId] = i
+                        // Fallback séquentiel UNIQUEMENT pour v1.0 (pas de captureIndex)
+                        // En v1.1, si un ci est absent c'est que le stroke a été filtré → ne pas inventer de mapping
+                        if (result.captureIndexToRegistry.isEmpty()) {
+                            for (i in result.strokes.indices) {
+                                inkStrokeIdToRegistryIndex[(i + 1).toLong()] = i
                             }
                         }
                         val maxInkId = inkStrokeIdToRegistryIndex.keys.maxOrNull() ?: 0L
@@ -635,10 +636,17 @@ class MiroirIME : InputMethodService() {
                     // ═══ Convertir captureIndex → inkStrokeId (pour V★ v1.1) ═══
                     // Les strokeIds stockés sont des captureIndex (0,1,2...).
                     // On les convertit en inkStrokeIds (1,2,3...) = ci + 1.
-                    if (group.strokeIds.isNotEmpty() && group.strokeIds.all { it <= strokeRegistry.size.toLong() }) {
-                        val inkIds = group.strokeIds.map { ci -> ci + 1 }
+                    // ⚠️ Filtrer les ci absents du mapping (stroke zombie filtré par V★)
+                    if (group.strokeIds.isNotEmpty()) {
+                        val validInkIds = group.strokeIds
+                            .filter { ci -> inkStrokeIdToRegistryIndex.containsKey(ci + 1) }
+                            .map { ci -> ci + 1 }
+                        val filtered = group.strokeIds.size - validInkIds.size
+                        if (filtered > 0) {
+                            Log.w(TAG, "⚠️ Groupe ${group.id.take(6)}: $filtered strokeId(s) orphelin(s) filtré(s)")
+                        }
                         group.strokeIds.clear()
-                        group.strokeIds.addAll(inkIds)
+                        group.strokeIds.addAll(validInkIds)
                     }
                     groupManager?.registerLoadedGroup(group)
                 }
@@ -651,6 +659,18 @@ class MiroirIME : InputMethodService() {
                     "g=${it.id.take(6)} sids=[${it.strokeIds.joinToString(",")}] state=${it.state}"
                 })
                 Log.i(TAG, "AUDIT load: groupLabels keys=[${groupLabels.keys.joinToString(",")}]")
+                // ═══ DIAG : résolution sid → registryIndex pour chaque groupe ═══
+                val mappingSnapshot = StringBuilder("DIAG mapping après load — inkStrokeIdToRegistryIndex=[")
+                inkStrokeIdToRegistryIndex.entries.joinTo(mappingSnapshot, ", ") { "${it.key}→${it.value}" }
+                mappingSnapshot.append("]")
+                Log.i(TAG, mappingSnapshot.toString())
+                for (g in loadedSnapshot) {
+                    val resolutions = g.strokeIds.map { sid ->
+                        val ri = inkStrokeIdToRegistryIndex[sid]
+                        if (ri != null) "$sid→idx$ri" else "⚠️$sid→NULL"
+                    }
+                    Log.i(TAG, "DIAG résolution g=${g.id.take(6)}: [${resolutions.joinToString(", ")}]")
+                }
             }
             currentPageIndex = index
             rebuildBitmap()
@@ -1697,9 +1717,12 @@ class MiroirIME : InputMethodService() {
                     }
                     if (cutIdx > 0) {
                         val kept = pts.take(cutIdx)
+                        // ⚠️ Capturer AVANT de clear (sinon take() sur liste vide)
+                        val keptTs = sr.timestamps.take(cutIdx)
+                        val keptPr = sr.pressures.take(cutIdx)
                         sr.points.clear(); sr.points.addAll(kept)
-                        sr.timestamps.clear(); sr.timestamps.addAll(sr.timestamps.take(cutIdx))
-                        sr.pressures.clear(); sr.pressures.addAll(sr.pressures.take(cutIdx))
+                        sr.timestamps.clear(); sr.timestamps.addAll(keptTs)
+                        sr.pressures.clear(); sr.pressures.addAll(keptPr)
                     }
                     remaining = 0.0
                 }
@@ -1881,6 +1904,7 @@ class MiroirIME : InputMethodService() {
                 // Ne supprimer que si le groupe existe ET est vraiment vide (pas juste évincé)
                 if (g != null && g.strokeIds.isEmpty()) {
                     groupBlobs.remove(erasedGroupId)
+                    groupManager?.removeGroup(erasedGroupId)  // ═══ Supprimer du GroupManager (pas juste vider) ═══
                     // Nettoyer les labels AVANT d'avoir retiré inkStrokeIdToRegistryIndex
                     for (sid in erasedSids) {
                         val firstIdxInMap = inkStrokeIdToRegistryIndex[sid]

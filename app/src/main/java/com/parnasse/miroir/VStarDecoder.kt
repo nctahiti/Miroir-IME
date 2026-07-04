@@ -160,6 +160,21 @@ class VStarDecoder(private val file: File) {
                 }
             }
             Log.i(TAG, "Décodé: ${strokes.size} strokes, ${groups.size} groupes, ${captureIndexToRegistry.size} captureIndex mappés depuis ${file.name}")
+            // ═══ DIAG : dump captureIndexToRegistry trié ═══
+            val sortedCI = captureIndexToRegistry.entries.sortedBy { it.key }
+            val diagCI = StringBuilder("DIAG captureIndexToRegistry BRUT (${sortedCI.size} entrées): [")
+            sortedCI.joinTo(diagCI, ", ") { "${it.key}→${it.value}" }
+            diagCI.append("]")
+            Log.i(TAG, diagCI.toString())
+            // Détecter les anomalies
+            val duplicates = captureIndexToRegistry.values.groupBy { it }.filter { it.value.size > 1 }
+            if (duplicates.isNotEmpty()) {
+                Log.w(TAG, "⚠️ DIAG collision registryIndex: ${duplicates.map { "idx${it.key}←ci[${it.value.map { e -> captureIndexToRegistry.entries.find { kv -> kv.value == it.key }?.key }.joinToString(",")}]" }}")
+            }
+            val expectedSize = strokes.size
+            if (captureIndexToRegistry.size != expectedSize) {
+                Log.w(TAG, "⚠️ DIAG taille anormale: ${captureIndexToRegistry.size} entrées pour $expectedSize strokes")
+            }
             return DecodeResult(strokes, labels, anchors, groups, captureIndexToRegistry)
         } catch (e: Exception) {
             Log.e(TAG, "Erreur décodage: ${e.message}")
