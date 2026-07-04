@@ -428,6 +428,8 @@ class MiroirIME : InputMethodService() {
 
             val allGroups = (groupManager?.allGroups() ?: emptyList())
                 .filter { it.strokeIds.isNotEmpty() }
+            // ═══ DIAG : état GroupManager avant sauvegarde ═══
+            Log.i(TAG, "V★ v2.0 DIAG save GM: ${allGroups.size} groupes, strokeIds=[${allGroups.joinToString(",") { "${it.id.take(4)}:${it.strokeIds.size}s" }}]")
 
             // Grouper les registryIndex par groupe (depuis GroupManager)
             val groupToRIs = mutableMapOf<String, MutableList<Int>>()
