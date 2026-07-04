@@ -3804,13 +3804,9 @@ class MiroirIME : InputMethodService() {
         for ((firstIdx, label) in groupLabels) {
             val anchor = groupAnchor[firstIdx]
             if (anchor == null) { Log.d(TAG, "LABEL skip firstIdx=$firstIdx: anchor null"); continue }
-            // Trouver le groupe correspondant pour aligner à gauche
-            val leftEdge = groupManager?.allGroups()?.firstOrNull { g ->
-                g.strokeIds.firstOrNull()?.let { sid ->
-                    inkStrokeIdToRegistryIndex[sid] == firstIdx
-                } ?: false
-            }?.bounds?.left ?: anchor.first
-            val x = leftEdge                               // aligné à gauche du groupe
+            // ⚠️ Utiliser anchor.first directement (déjà minX du groupe, fiable)
+            // allGroups().bounds peut être vide après reload → left=0 → label à gauche
+            val x = anchor.first
             val y = snapToLine(anchor.second) + labelPaint.textSize - 4f
             // ═══ Noir gras pour le SELECTED, gris normal pour les autres ═══
             val paint = if (firstIdx == selectedFirstIdx) labelPaint else dimLabelPaint
