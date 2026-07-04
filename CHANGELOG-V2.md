@@ -9,7 +9,7 @@
 - **VStarDocumentV2** : API publique unifiée, `savePageV2`/`loadPageV2` dans MiroirIME
 - `useVStarV2 = true` active le nouveau format ; `false` revient au code v1.1
 
-### 🔧 Correctifs
+### 🔧 Correctifs V★
 | Bug | Cause | Fix |
 |-----|-------|-----|
 | Scaling ×8 cumulatif | Unités mélangées (px vs ×8) | `(pt.x - rx) * scaleFactor` cohérent |
@@ -22,14 +22,24 @@
 | Groupes STORED évincés | `registerLoadedGroup` → STORED | `reactivateGroup` → LOADED |
 | Latence chargement | `RandomAccessFile` par token | `offsetToCI` map O(1) |
 
+### 🖥️ Correctifs UI
+| Bug | Cause | Fix |
+|-----|-------|-----|
+| Boutons fantômes (fermeture/calibration/overlay) | `handleToolbarTap` — vieille barre 4 zones tactiles | **Supprimé** (toolbar réelle gère) |
+| Page N/total invisible | `DKGRAY` sur fond noir, 18sp | `WHITE` 22sp |
+| IME démarre en formatage | `onStartInputView` forçait `toggleFormattingMode()` | Démarre en capture |
+| `countPages()` ne voit pas v2.0 | Cherchait `state.json` seulement | Cherche aussi `page.vstar` |
+
 ### 📊 Résultat vérifié
 - 4 groupes → 4 groupes après cycles save/load/scrub ✅
 - Scaling stable ±0.125px ✅
 - Labels + ancres restaurés correctement ✅
 - Groupes sélectionnables après rechargement ✅
+- Plus d'activations intempestives en haut de l'écran ✅
 - Mode debug : backups horodatés dans `debug_saves/`
 
 ### 📁 Fichiers
 - **Nouveaux** : `VStarTokenV2.kt`, `VStarDataRegion.kt`, `VStarGroupTable.kt`, `VStarDocumentV2.kt`
-- **Modifié** : `MiroirIME.kt` (savePageV2/loadPageV2, routage useVStarV2)
+- **Modifié** : `MiroirIME.kt` (savePageV2/loadPageV2, routage useVStarV2, UI fixes)
 - **Préservé** : `VStarDocument.kt` (legacy v0.5 pour CaptureView mode EDIT)
+- **Docs** : `CHANGELOG-V2.md`, `docs/CARTE-DU-CAP.md`, `docs/REPERTOIRE-DES-RECIFS.md`, `docs/VSTAR-DOCUMENT-VIVANT.md`
