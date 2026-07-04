@@ -449,17 +449,17 @@ class MiroirIME : InputMethodService() {
             }
 
             // ═══ Construire les groupes directement dans la GroupTable ═══
-            // Charger les groupes STORED dans le cache
-            val persisted = groupManager?.persistence?.readAllGroups() ?: emptyList()
-            for (g in persisted) {
-                if (groupManager?.getGroup(g.id) == null) groupManager?.registerLoadedGroup(g)
-            }
-            groupManager?.persistence?.deleteAll()
-
-            val allGroups = (groupManager?.allGroups() ?: emptyList())
+            // Utiliser allGroupsFull() pour voir TOUS les groupes (cache + persistance)
+            val allGroups = (groupManager?.allGroupsFull() ?: emptyList())
                 .filter { it.strokeIds.isNotEmpty() }
             // ═══ DIAG : état GroupManager avant sauvegarde ═══
             Log.i(TAG, "V★ v2.0 DIAG save GM: ${allGroups.size} groupes, strokeIds=[${allGroups.joinToString(",") { "${it.id.take(4)}:${it.strokeIds.size}s" }}]")
+            // ═══ DIAG : taille cache vs full ═══
+            val cacheSize = groupManager?.cacheSize() ?: 0
+            Log.i(TAG, "V★ v2.0 DIAG save GM: cache=$cacheSize full=${allGroups.size} persistés=${allGroups.size - cacheSize}")
+
+            // Nettoyer la persistance après lecture (évite accumulation)
+            groupManager?.persistence?.deleteAll()
 
             // Grouper les registryIndex par groupe (depuis GroupManager)
             val groupToRIs = mutableMapOf<String, MutableList<Int>>()
@@ -647,6 +647,9 @@ class MiroirIME : InputMethodService() {
                 }
                 if (inkGroup.strokeIds.isNotEmpty()) {
                     groupManager?.registerLoadedGroup(inkGroup)
+                    // ⚠️ Réactiver en LOADED pour que l'absorption fonctionne (pas STORED → évincé)
+                    val firstSid = inkGroup.strokeIds.firstOrNull()
+                    if (firstSid != null) groupManager?.reactivateGroup(firstSid)
                     groupsLoaded++
                     // Restaurer le label et l'ancre sur le PREMIER extent (ordre d'écriture)
                     val firstExtent = g.extents.firstOrNull()
@@ -2287,9 +2290,17 @@ class MiroirIME : InputMethodService() {
                         inkStrokeIdToRegistryIndex.remove(sid)
                     }
                 }
-                // Retirer les strokeIds effacés du groupe (GroupManager)
-                animatedGroupId?.let { gid ->
-                    gm?.allGroups()?.find { it.id == gid }?.strokeIds?.removeAll(erasedSids)
+                // Retirer les strokeIds effacés de TOUS les groupes (pas seulement l'actif)
+                for (group in gm?.allGroups() ?: emptyList()) {
+                    group.strokeIds.removeAll(erasedSids)
+                }
+                // Nettoyer aussi les groupes en persistance
+                gm?.persistence?.let { p ->
+                    val persistedGroups = p.readAllGroups()
+                    for (g in persistedGroups) {
+                        g.strokeIds.removeAll(erasedSids)
+                        if (g.strokeIds.isNotEmpty()) p.writeGroup(g)
+                    }
                 }
                 erasedStrokes.clear()
                 Log.i(TAG, "🧹 ${erasedSids.size} strokes définitivement effacés")
