@@ -169,6 +169,10 @@ class MiroirIME : InputMethodService() {
     // Conduit V★ — flux binaire parallèle (append-only, 13 octets/point)
     private var vstarWriter: VStarWriter? = null
     private var vstarPointCount = 0
+    // Conduit V★ v2.0 — document vivant (16B tokens, GroupTable intégrée)
+    private var vstarDoc: VStarDocumentV2? = null
+    // Flag temporaire : active V★ v2.0 pour save/load
+    private val useVStarV2 = true
 
     /** Initialise (ou réutilise) le bloc courant pour l'app hôte. */
     private fun ensureBlockDir(appName: String, ts: Long): java.io.File {
@@ -301,10 +305,318 @@ class MiroirIME : InputMethodService() {
             dir.deleteRecursively()
             Log.i(TAG, "clearPage: dossier page $currentPageIndex supprimé")
         }
+        // Fermer le document V2 s'il était ouvert
+        vstarDoc?.close()
+        vstarDoc = null
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // V★ v2.0 — Document Vivant (16B tokens, GroupTable intégrée)
+    // ═══════════════════════════════════════════════════════════════
+
+    /** Active le mode V★ v2.0 pour cette page. */
+    private fun openVStarDoc(dir: java.io.File) {
+        val vstarFile = java.io.File(dir, "page.vstar")
+        vstarDoc = VStarDocumentV2(vstarFile)
+        vstarDoc!!.open()
+        Log.i(TAG, "V★ v2.0 ouvert: ${vstarFile.absolutePath}")
+    }
+
+    /** Convertit un StrokeRecord en liste de VStarTokenV2. */
+    private fun strokeRecordToTokensV2(sr: StrokeRecord, ci: Short, scaleFactor: Float = 8f): List<VStarTokenV2> {
+        if (sr.points.isEmpty()) return emptyList()
+        val tokens = mutableListOf<VStarTokenV2>()
+
+        // Premier point → PEN_DOWN (coordonnées absolues)
+        val first = sr.points.first()
+        tokens.add(VStarTokenV2.penDown(
+            x = first.first, y = first.second,
+            scaleFactor = scaleFactor,
+            p = if (sr.pressures.isNotEmpty()) sr.pressures.first().toInt() else 128,
+            az = 255, i = 255,
+            ci = ci
+        ))
+
+        // Points intermédiaires → MOVE (deltas depuis reconstructedPosition)
+        var rx = first.first * scaleFactor  // reconstructed X
+        var ry = first.second * scaleFactor  // reconstructed Y
+        var lastTs = if (sr.timestamps.isNotEmpty()) sr.timestamps.first() else 0L
+
+        for (j in 1 until sr.points.size) {
+            val pt = sr.points[j]
+            val px = pt.first * scaleFactor
+            val py = pt.second * scaleFactor
+            val dx = ((px - rx) / scaleFactor * scaleFactor).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            val dy = ((py - ry) / scaleFactor * scaleFactor).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            rx += dx / scaleFactor
+            ry += dy / scaleFactor
+
+            val ts = if (j < sr.timestamps.size) sr.timestamps[j] else lastTs
+            val dt = ((ts - lastTs).toInt()).coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            lastTs = ts
+
+            val p = if (j < sr.pressures.size) sr.pressures[j].toInt() else 128
+            val isLast = j == sr.points.size - 1
+
+            tokens.add(if (isLast) {
+                VStarTokenV2.penUp(dx, dy, dt, p, 255, 255, ci)
+            } else {
+                VStarTokenV2.move(dx, dy, dt, p, 255, 255, ci)
+            })
+        }
+
+        // Si un seul point, le PEN_DOWN a déjà FLAG_PEN_UP
+        return tokens
+    }
+
+    /** Sauvegarde la page en V★ v2.0 (document vivant). */
+    private fun savePageV2() {
+        val bd = blockDir ?: run {
+            Log.w(TAG, "savePageV2: pas de bloc actif")
+            return
+        }
+        val hasLiveStrokes = strokeRegistry.any { !it.isDeleted && it.points.isNotEmpty() && it.timestamps.isNotEmpty() }
+        val dir = java.io.File(bd, "page_$currentPageIndex")
+        if (!hasLiveStrokes) {
+            if (dir.exists()) { dir.deleteRecursively(); Log.i(TAG, "savePageV2: page vide — dossier supprimé") }
+            return
+        }
+        try {
+            dir.mkdirs()
+            // Bitmap
+            bitmap?.let {
+                java.io.FileOutputStream(java.io.File(dir, "bitmap.png")).use { out ->
+                    it.compress(Bitmap.CompressFormat.PNG, 90, out)
+                }
+            }
+
+            // Ouvrir le document V2 (écrase l'ancien)
+            val vstarFile = java.io.File(dir, "page.vstar")
+            if (vstarFile.exists()) vstarFile.delete()
+            val doc = VStarDocumentV2(vstarFile)
+            doc.open()
+
+            // ═══ Encoder les strokes vivants en V★ v2.0 ═══
+            val allLiveIndices = strokeRegistry.indices
+                .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() && strokeRegistry[it].timestamps.isNotEmpty() }
+                .toList()
+
+            // Map: registryIndex → captureIndex (pour la conversion des groupes)
+            val registryToCI = mutableMapOf<Int, Short>()
+
+            for (ri in allLiveIndices) {
+                val sr = strokeRegistry[ri]
+                val ci = doc.beginStroke()
+                registryToCI[ri] = ci
+                val tokens = strokeRecordToTokensV2(sr, ci)
+                for (t in tokens) doc.writeToken(t)
+                doc.endStroke(ci)
+            }
+
+            // ═══ Reconstruire les groupes depuis GroupManager ═══
+            // Charger les groupes STORED dans le cache
+            val persisted = groupManager?.persistence?.readAllGroups() ?: emptyList()
+            for (g in persisted) {
+                if (groupManager?.getGroup(g.id) == null) groupManager?.registerLoadedGroup(g)
+            }
+            groupManager?.persistence?.deleteAll()
+
+            val allGroups = (groupManager?.allGroups() ?: emptyList())
+                .filter { it.strokeIds.isNotEmpty() }
+
+            // Trouver quel groupe contient quel stroke (par registryIndex)
+            val riToGroupId = mutableMapOf<Int, String>()
+            for (group in allGroups) {
+                for (sid in group.strokeIds) {
+                    val ri = inkStrokeIdToRegistryIndex[sid] ?: continue
+                    if (ri in registryToCI) {
+                        riToGroupId[ri] = group.id
+                    }
+                }
+            }
+
+            // Créer/absorber dans le document V2
+            val seenGroups = mutableSetOf<String>()
+            for (ri in allLiveIndices) {
+                val ci = registryToCI[ri] ?: continue
+                val gid = riToGroupId[ri]
+                if (gid != null) {
+                    if (gid !in seenGroups) {
+                        // Premier stroke de ce groupe → créer avec métadonnées
+                        val label = groupLabels[ri]
+                        val anchor = groupAnchor[ri]
+                        val newGid = doc.createGroup(ci, anchor?.first ?: 0f, anchor?.second ?: 0f, label)
+                        // Mapper l'ancien gid → nouveau gid pour les strokes suivants
+                        riToGroupId.entries.filter { it.value == gid }.forEach { it.setValue(newGid) }
+                        seenGroups.add(gid)
+                    } else {
+                        doc.absorbStroke(ci, gid)
+                    }
+                } else {
+                    // Stroke sans groupe (ne devrait pas arriver, mais on crée un groupe par défaut)
+                    val label = groupLabels[ri]
+                    doc.createGroup(ci, 0f, 0f, label)
+                }
+            }
+
+            // ═══ Mettre à jour les labels corrigés ═══
+            for ((firstIdx, origLabel) in originalLabels) {
+                val ci = registryToCI[firstIdx] ?: continue
+                val gid = riToGroupId[firstIdx] ?: continue
+                val currentLabel = groupLabels[firstIdx]
+                if (currentLabel != origLabel) {
+                    doc.updateGroupMeta(gid, labelCorrected = currentLabel)
+                }
+            }
+
+            doc.flush()
+            doc.close()
+            Log.i(TAG, "V★ v2.0 sauvegardé: ${allLiveIndices.size} strokes, ${seenGroups.size} groupes → ${vstarFile.length()}B")
+        } catch (e: Exception) {
+            Log.e(TAG, "savePageV2 erreur: ${e.message}", e)
+        }
+    }
+
+    /** Charge la page en V★ v2.0 (document vivant). */
+    private fun loadPageV2(index: Int): Boolean {
+        val bd = blockDir ?: return false
+        try {
+            val dir = java.io.File(bd, "page_$index")
+            if (!dir.exists()) return false
+
+            // Nettoyer
+            groupManager?.clearAll()
+            groupBlobs.clear()
+
+            // Bitmap
+            val bmpFile = java.io.File(dir, "bitmap.png")
+            if (bmpFile.exists()) {
+                val loaded = BitmapFactory.decodeFile(bmpFile.absolutePath)
+                if (loaded != null) {
+                    bitmap?.recycle()
+                    bitmap = loaded.copy(Bitmap.Config.ARGB_8888, true)
+                    bitmapCanvas = Canvas(bitmap!!)
+                }
+            }
+
+            val vstarFile = java.io.File(dir, "page.vstar")
+            if (!vstarFile.exists()) {
+                Log.w(TAG, "loadPageV2: page.vstar absent")
+                return false
+            }
+
+            val doc = VStarDocumentV2(vstarFile)
+            doc.open()
+            val result = doc.load()
+            doc.close()
+
+            // ═══ Reconstruire strokeRegistry depuis les tokens ═══
+            strokeRegistry.clear()
+            inkStrokeIdToRegistryIndex.clear()
+            groupLabels.clear()
+            originalLabels.clear()
+            groupAnchor.clear()
+
+            // Grouper les tokens par captureIndex
+            val tokensByCI = mutableMapOf<Short, MutableList<VStarTokenV2>>()
+            for (t in result.tokens) {
+                if (t.isEnd() || t.isErased() || t.isGroupMeta()) continue
+                tokensByCI.getOrPut(t.captureIndex) { mutableListOf() }.add(t)
+            }
+
+            // Reconstruire StrokeRecord pour chaque captureIndex
+            val ciToRi = mutableMapOf<Short, Int>()  // captureIndex → registryIndex
+            for ((ci, tokenList) in tokensByCI) {
+                val sr = StrokeRecord(id = "v2_$ci")
+                var rx = 0f; var ry = 0f
+                for (t in tokenList) {  // déjà dans l'ordre d'écriture (DataRegion séquentiel)
+                    if (t.isPenDown()) {
+                        // Premier point : coordonnées absolues
+                        rx = t.dx / 8f; ry = t.dy / 8f
+                        sr.points.add(Pair(rx, ry))
+                        sr.timestamps.add(0L)
+                        sr.pressures.add(t.p.toFloat())
+                    } else {
+                        // Delta
+                        rx += t.dx / 8f; ry += t.dy / 8f
+                        sr.points.add(Pair(rx, ry))
+                        sr.timestamps.add(sr.timestamps.lastOrNull()?.plus(t.dt.toInt()) ?: t.dt.toLong())
+                        sr.pressures.add(t.p.toFloat())
+                    }
+                }
+                if (sr.points.isNotEmpty()) {
+                    val ri = strokeRegistry.size
+                    strokeRegistry.add(sr)
+                    ciToRi[ci] = ri
+                    val inkId = (ci + 1).toLong()
+                    inkStrokeIdToRegistryIndex[inkId] = ri
+                    if (inkId >= inkStrokeIdCounter) inkStrokeIdCounter = inkId + 1
+                }
+            }
+
+            // ═══ Reconstruire les groupes depuis la GroupTable ═══
+            for (g in result.groups) {
+                if (g.isEmpty) continue
+                val inkGroup = InkGroup.create()
+                // Lire les tokens du groupe pour trouver les captureIndex
+                val groupTokens = doc.loadGroupTokens(g.id)
+                val seenCIs = mutableSetOf<Short>()
+                for (t in groupTokens) {
+                    if (t.isEnd() || t.isErased() || t.isGroupMeta()) continue
+                    seenCIs.add(t.captureIndex)
+                }
+                // Convertir captureIndex → inkStrokeId
+                for (ci in seenCIs) {
+                    val ri = ciToRi[ci] ?: continue
+                    val inkId = (ci + 1).toLong()
+                    inkGroup.strokeIds.add(inkId)
+                }
+                if (inkGroup.strokeIds.isNotEmpty()) {
+                    groupManager?.registerLoadedGroup(inkGroup)
+                    // Restaurer le label et l'ancre
+                    val firstCI = seenCIs.minOrNull()
+                    if (firstCI != null) {
+                        val firstRi = ciToRi[firstCI] ?: continue
+                        if (g.label != null) {
+                            groupLabels[firstRi] = g.label!!
+                            originalLabels[firstRi] = g.label!!
+                        }
+                        if (g.labelCorrected != null) {
+                            groupLabels[firstRi] = g.labelCorrected!!
+                        }
+                        groupAnchor[firstRi] = Pair(g.anchorX, g.anchorY)
+                    }
+                }
+            }
+
+            cachedGMCacheSize = -1
+            currentPageIndex = index
+            rebuildBitmap()
+
+            // Recalculer les blobs
+            groupBlobs.clear()
+            groupManager?.allGroups()?.forEach { group ->
+                if (group.strokeIds.isNotEmpty()) {
+                    computeBlobPath(group)?.let { blob -> groupBlobs[group.id] = blob }
+                }
+            }
+            Log.i(TAG, "V★ v2.0 chargé: page $index — ${strokeRegistry.size} strokes, ${groupLabels.size} labels, ${groupBlobs.size} blobs")
+
+            // Conduit V★ v1.1 — réactiver le writer (compatibilité)
+            vstarWriter?.close()
+            vstarWriter = VStarWriter(this).also { it.openNewSession("page_$currentPageIndex") }
+            vstarPointCount = 0
+
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "loadPageV2 erreur: ${e.message}", e)
+            return false
+        }
     }
 
     /** Sauvegarde la page active sur disque (bitmap + strokes + labels). */
     private fun savePage() {
+        if (useVStarV2) { savePageV2(); return }
         val bd = blockDir ?: run {
             Log.w(TAG, "savePage: pas de bloc actif — ignoré")
             return
@@ -458,6 +770,7 @@ class MiroirIME : InputMethodService() {
 
     /** Charge une page depuis le disque. */
     private fun loadPage(index: Int): Boolean {
+        if (useVStarV2) return loadPageV2(index)
         val bd = blockDir ?: return false
         try {
             val dir = java.io.File(bd, "page_$index")
