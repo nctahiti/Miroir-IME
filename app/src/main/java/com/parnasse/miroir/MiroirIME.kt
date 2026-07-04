@@ -315,18 +315,18 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════
 
     /** Calcule le centre géométrique d'un groupe (ancre stable).
-     *  Utilise la position MOYENNE du premier stroke (≈ ligne de base),
-     *  pas le sommet du bounding box (qui snap à l'interligne du dessus). */
+     *  X = bord gauche du premier stroke (label aligné à gauche du groupe)
+     *  Y = moyenne du premier stroke (≈ ligne de base). */
     private fun computeGroupAnchor(ris: List<Int>): Pair<Float, Float> {
         if (ris.isEmpty()) return Pair(0f, 0f)
         val firstSR = strokeRegistry.getOrNull(ris.first()) 
         if (firstSR != null && firstSR.points.isNotEmpty()) {
-            val avgX = firstSR.points.map { it.first }.average().toFloat()
+            val minX = firstSR.points.minOf { it.first }
             val avgY = firstSR.points.map { it.second }.average().toFloat()
-            // Moyenner aussi avec groupAnchor si disponible (précis)
             val anchor = groupAnchor[ris.first()]
-            return if (anchor != null) Pair((avgX + anchor.first) / 2f, (avgY + anchor.second) / 2f)
-            else Pair(avgX, avgY)
+            val ax = if (anchor != null) (minX + anchor.first) / 2f else minX
+            val ay = if (anchor != null) (avgY + anchor.second) / 2f else avgY
+            return Pair(ax, ay)
         }
         // Fallback: bounding box
         var minX = Float.MAX_VALUE; var maxX = Float.MIN_VALUE
@@ -342,7 +342,7 @@ class MiroirIME : InputMethodService() {
                 hasPoints = true
             }
         }
-        return if (hasPoints) Pair((minX + maxX) / 2f, (minY + maxY) / 2f)  // centre complet
+        return if (hasPoints) Pair(minX, (minY + maxY) / 2f)
         else Pair(0f, 0f)
     }
 
