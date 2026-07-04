@@ -388,9 +388,39 @@ class MiroirIME : InputMethodService() {
                 }
             }
 
-            // Ouvrir le document V2 (écrase l'ancien)
+            // ═══ DEBUG : sauvegarde horodatée avant écrasement ═══
             val vstarFile = java.io.File(dir, "page.vstar")
             val groupsFile = java.io.File(dir, "page.groups.json")
+            val debugDir = java.io.File(bd, "debug_saves")
+            debugDir.mkdirs()
+            val ts = java.text.SimpleDateFormat("HHmmss-SSS", java.util.Locale.US).format(java.util.Date())
+            val backupDir = java.io.File(debugDir, "page${currentPageIndex}_$ts")
+            backupDir.mkdirs()
+            if (vstarFile.exists()) {
+                vstarFile.copyTo(java.io.File(backupDir, "page.vstar"), true)
+            }
+            if (groupsFile.exists()) {
+                groupsFile.copyTo(java.io.File(backupDir, "page.groups.json"), true)
+            }
+            // Sauvegarder aussi l'état GroupManager (JSON lisible)
+            val gmState = org.json.JSONObject()
+            val gm = groupManager
+            if (gm != null) {
+                val groupsArr = org.json.JSONArray()
+                for (g in gm.allGroups()) {
+                    val gObj = org.json.JSONObject()
+                    gObj.put("id", g.id.take(8))
+                    gObj.put("strokeIds", org.json.JSONArray(g.strokeIds))
+                    gObj.put("state", g.state.toString())
+                    groupsArr.put(gObj)
+                }
+                gmState.put("groups", groupsArr)
+                gmState.put("cacheSize", gm.cacheSize())
+            }
+            java.io.FileWriter(java.io.File(backupDir, "gm_state.json")).use { it.write(gmState.toString(2)) }
+            Log.i(TAG, "V★ v2.0 DEBUG: backup → ${backupDir.name}")
+
+            // Ouvrir le document V2 (écrase l'ancien)
             if (vstarFile.exists()) vstarFile.delete()
             if (groupsFile.exists()) groupsFile.delete()  // ⚠️ éviter accumulation groupes
             val doc = VStarDocumentV2(vstarFile)
