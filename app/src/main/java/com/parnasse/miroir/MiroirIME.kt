@@ -2063,12 +2063,7 @@ class MiroirIME : InputMethodService() {
                         }
                         return true
                     }
-                    // ═══ Détection de tap (clic court sans mouvement) → boutons ═══
-                    if (!tapMoved && System.currentTimeMillis() - tapStartTime < 300) {
-                        if (handleToolbarTap(event.x, event.y)) {
-                            return true  // tap consommé par un bouton — pas de stroke
-                        }
-                    }
+                    // ═══ Détection de tap (clic court sans mouvement) → ignorée (toolbar réelle gère) ═══
                     // Si le stroke n'a jamais commencé (UP sans MOVE), ne rien faire
                     if (!tapStrokeStarted) return true
                     onStylusUp()
