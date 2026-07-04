@@ -449,13 +449,18 @@ class MiroirIME : InputMethodService() {
                 val firstOffset = ciToOffset[firstCI] ?: continue
                 val firstCount = ciToCount[firstCI] ?: continue
                 val label = groupLabels[firstRI]
+                // ⚠️ Ancre: utiliser groupAnchor si disponible, sinon premier point du stroke
                 val anchor = groupAnchor[firstRI]
+                val (ax, ay) = if (anchor != null) {
+                    Pair(anchor.first, anchor.second)
+                } else {
+                    val sr = strokeRegistry.getOrNull(firstRI)
+                    val pt = sr?.points?.firstOrNull()
+                    if (pt != null) Pair(pt.first, pt.second) else Pair(0f, 0f)
+                }
                 val newGid = doc.createGroupWithExtent(
-                    anchorX = anchor?.first ?: 0f,
-                    anchorY = anchor?.second ?: 0f,
-                    offset = firstOffset,
-                    count = firstCount,
-                    label = label
+                    anchorX = ax, anchorY = ay,
+                    offset = firstOffset, count = firstCount, label = label
                 )
                 if (newGid.isEmpty()) continue
                 groupCount++
@@ -541,7 +546,7 @@ class MiroirIME : InputMethodService() {
             originalLabels.clear()
             groupAnchor.clear()
 
-            // Grouper les tokens par captureIndex + mapper offset → ci
+            // Grouper les tokens par captureIndex + mapper offset → ci (TOUS les tokens)
             val tokensByCI = mutableMapOf<Short, MutableList<VStarTokenV2>>()
             val offsetToCI = mutableMapOf<Int, Short>()  // offset → captureIndex
             var tokenIdx = 0
@@ -549,7 +554,7 @@ class MiroirIME : InputMethodService() {
                 if (t.isEnd()) break
                 if (t.isErased() || t.isGroupMeta()) { tokenIdx++; continue }
                 tokensByCI.getOrPut(t.captureIndex) { mutableListOf() }.add(t)
-                if (t.isPenDown()) offsetToCI[tokenIdx] = t.captureIndex
+                offsetToCI[tokenIdx] = t.captureIndex  // ⚠️ chaque token, pas seulement PEN_DOWN
                 tokenIdx++
             }
 
@@ -584,15 +589,23 @@ class MiroirIME : InputMethodService() {
             }
 
             // ═══ Reconstruire les groupes depuis la GroupTable (via offsetToCI, pas de re-lecture fichier) ═══
+            var groupsLoaded = 0
             for (g in result.groups) {
                 if (g.isEmpty) continue
                 val inkGroup = InkGroup.create()
                 // Trouver les captureIndex via les offsets dans les extents
                 val seenCIs = mutableSetOf<Short>()
+                val unresolvedOffsets = mutableListOf<Int>()
                 for (extent in g.extents) {
                     for (i in 0 until extent.count) {
-                        offsetToCI[extent.offset + i]?.let { seenCIs.add(it) }
+                        val off = extent.offset + i
+                        val ci = offsetToCI[off]
+                        if (ci != null) seenCIs.add(ci)
+                        else unresolvedOffsets.add(off)
                     }
+                }
+                if (unresolvedOffsets.isNotEmpty()) {
+                    Log.w(TAG, "V★ v2.0 DIAG load: g=${g.id.take(6)} extents=${g.extents} unresolved=${unresolvedOffsets.take(5)}/${unresolvedOffsets.size} offsetToCI_size=${offsetToCI.size}")
                 }
                 // Convertir captureIndex → inkStrokeId
                 for (ci in seenCIs) {
@@ -602,8 +615,10 @@ class MiroirIME : InputMethodService() {
                 }
                 if (inkGroup.strokeIds.isNotEmpty()) {
                     groupManager?.registerLoadedGroup(inkGroup)
-                    // Restaurer le label et l'ancre
-                    val firstCI = seenCIs.minOrNull()
+                    groupsLoaded++
+                    // Restaurer le label et l'ancre sur le PREMIER extent (ordre d'écriture)
+                    val firstExtent = g.extents.firstOrNull()
+                    val firstCI = firstExtent?.let { offsetToCI[it.offset] }
                     if (firstCI != null) {
                         val firstRi = ciToRi[firstCI] ?: continue
                         if (g.label != null) {
@@ -636,7 +651,7 @@ class MiroirIME : InputMethodService() {
                 val pN = firstSR.points.last()
                 Log.i(TAG, "V★ v2.0 DIAG load: premier=(${p0.first},${p0.second}) dernier=(${pN.first},${pN.second}) pts=${firstSR.points.size}")
             }
-            Log.i(TAG, "V★ v2.0 chargé: page $index — ${strokeRegistry.size} strokes, ${groupLabels.size} labels, ${groupBlobs.size} blobs")
+            Log.i(TAG, "V★ v2.0 chargé: page $index — ${strokeRegistry.size} strokes, $groupsLoaded groupes, ${groupLabels.size} labels, ${groupBlobs.size} blobs")
 
             doc.close()
             // Conduit V★ v1.1 — réactiver le writer (compatibilité)
