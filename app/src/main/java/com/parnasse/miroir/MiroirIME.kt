@@ -121,6 +121,7 @@ class MiroirIME : InputMethodService() {
 
      /** Témoin de mode dans la barre d'outils (✍ plume · ⌛ montre · ↕ déplacement). */
      private var modeIndicator: android.widget.TextView? = null
+    private var annotateToolbarBtn: android.widget.Button? = null  // 📌 visible en mode correction
 
      // ── Vue clavier mise en forme ─────────────────────────────────────
      private var formattingPanel: android.widget.LinearLayout? = null
@@ -1452,6 +1453,30 @@ class MiroirIME : InputMethodService() {
             refreshAll()
             // Pas de requestHideSelf — on reste en mode capture
         })
+        // ═══ Bouton annotation 📌 (visible uniquement en mode correction) ═══
+        val annotateBtn = android.widget.Button(this).apply {
+            text = "📌"
+            textSize = 18f
+            setTextColor(Color.argb(255, 80, 160, 80))
+            setBackgroundColor(Color.argb(60, 200, 200, 100))
+            setPadding(12, 6, 12, 6)
+            visibility = View.GONE
+            setOnClickListener {
+                val firstIdx = correctionGroupFirstIdx
+                val label = groupLabels[firstIdx] ?: ""
+                controlledLabels.add(firstIdx)
+                // Restaurer le label original (annuler toute correction en cours)
+                groupLabels[correctionGroupFirstIdx] = correctionOriginalLabel
+                Log.i(TAG, "Label annoté (contrôlé): '$label'")
+                correctionOriginalLabel = ""
+                correctLetterIndex = -1
+                insertAtIndex = -1
+                imeView?.exitEditMode()
+                visibility = View.GONE
+            }
+        }
+        this.annotateToolbarBtn = annotateBtn
+        toolbar.addView(annotateBtn)
 
         mainContent.addView(toolbar)  // barre EN HAUT
 
@@ -2031,7 +2056,7 @@ class MiroirIME : InputMethodService() {
                                         Log.i(TAG, "SWIPE HAUT: label='$label'")
                                         if (label.isNotEmpty()) {
                                             imeView?.postInvalidate()
-                                            showCorrectionOverlay(label)
+                                            annotateToolbarBtn?.visibility = View.VISIBLE
                                         }
                                     }
                                 }
@@ -2319,6 +2344,7 @@ class MiroirIME : InputMethodService() {
         fun exitEditMode() {
             editMode = EditMode.NONE
             longPressTriggered = false
+            annotateToolbarBtn?.visibility = View.GONE  // cacher le 📌
             // ═══ Effacement définitif des strokes neutralisés ═══
             val erasedSids = mutableListOf<Long>()
             if (erasedStrokes.isNotEmpty()) {
