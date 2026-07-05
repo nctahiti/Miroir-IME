@@ -97,6 +97,7 @@ class MiroirIME : InputMethodService() {
     private var groupManager: GroupManager? = null
     // Map firstIdx → texte reconnu (labels) — firstIdx = index stable dans strokeRegistry (tombstones)
     private val groupLabels = mutableMapOf<Int, String>()
+    private val controlledLabels = mutableSetOf<Int>()  // labels marqués comme contrôlés (📌)
     // Map firstIdx → label original (avant correction)
     private val originalLabels = mutableMapOf<Int, String>()
     private val labelPaint = Paint().apply {
@@ -271,6 +272,7 @@ class MiroirIME : InputMethodService() {
     private fun clearPage() {
         strokeRegistry.clear()
         groupLabels.clear()
+        controlledLabels.clear()
         originalLabels.clear()
         inkStrokeIdToRegistryIndex.clear()
         inkStrokeIdCounter = 0L
@@ -599,6 +601,7 @@ class MiroirIME : InputMethodService() {
             strokeRegistry.clear()
             inkStrokeIdToRegistryIndex.clear()
             groupLabels.clear()
+            controlledLabels.clear()
             originalLabels.clear()
             groupAnchor.clear()
 
@@ -948,6 +951,7 @@ class MiroirIME : InputMethodService() {
                 // Labels (clés = inkId, convertir en firstIdx via inkStrokeIdToRegistryIndex)
                 val labelsObj = json.optJSONObject("labels")
                 groupLabels.clear()
+                controlledLabels.clear()
                 if (labelsObj != null) {
                     for (key in labelsObj.keys()) {
                         val inkId = key.toLongOrNull() ?: key.toIntOrNull()?.toLong() ?: continue
@@ -1012,6 +1016,7 @@ class MiroirIME : InputMethodService() {
                         }
                         // ═══ Nettoyer les labels/ancres (seront rechargés depuis labels.json) ═══
                         groupLabels.clear()
+                        controlledLabels.clear()
                         originalLabels.clear()
                         groupAnchor.clear()
                         // ═══ NE PAS enregistrer les groupes du décodeur (flat encoding) ═══
@@ -1025,6 +1030,7 @@ class MiroirIME : InputMethodService() {
                             val labelsObj = lj.optJSONObject("labels")
                             if (labelsObj != null) {
                                 groupLabels.clear()
+                                controlledLabels.clear()
                                 for (key in labelsObj.keys()) {
                                     val ci = key.toIntOrNull() ?: continue
                                     val ri = result.captureIndexToRegistry[ci]  // traduction ci→nouvel index
@@ -3556,8 +3562,12 @@ class MiroirIME : InputMethodService() {
             return
         }
 
+        // État de sélection
+        val checked = mutableSetOf<String>()
+
         val listView = android.widget.ListView(this).apply {
             setBackgroundColor(Color.WHITE)
+            choiceMode = android.widget.ListView.CHOICE_MODE_MULTIPLE
             val previewCache = mutableMapOf<String, String>()
             adapter = object : android.widget.BaseAdapter() {
                 override fun getCount() = blocks.size
@@ -3572,39 +3582,108 @@ class MiroirIME : InputMethodService() {
                     val date = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ts))
                     val pageCount = dir.listFiles()?.count { it.isDirectory && it.name.startsWith("page_") } ?: 0
                     val current = dir == blockDir
-                    val prefix = if (current) "▸ " else "  "
+                    val isExported = java.io.File(dir, ".exported").exists()
                     val preview = previewCache.getOrPut(dir.name) { getBlockPreview(dir) }
                     val previewStr = if (preview.isNotEmpty()) " — $preview" else ""
-                    val tv = android.widget.TextView(this@MiroirIME).apply {
-                        text = "$prefix$date — $appName$previewStr ($pageCount p.)"
-                        textSize = 18f
-                        setTextColor(if (current) Color.BLACK else Color.DKGRAY)
-                        setPadding(30, 20, 30, 20)
+                    val exportedStr = if (isExported) " 📦" else ""
+
+                    val row = android.widget.LinearLayout(this@MiroirIME).apply {
+                        orientation = android.widget.LinearLayout.HORIZONTAL
+                        gravity = android.view.Gravity.CENTER_VERTICAL
+                        setPadding(10, 8, 30, 8)
                     }
-                    return tv
+
+                    val cb = android.widget.CheckBox(this@MiroirIME).apply {
+                        isChecked = name in checked
+                        setOnCheckedChangeListener { _, isChecked ->
+                            if (isChecked) checked.add(name) else checked.remove(name)
+                        }
+                    }
+                    row.addView(cb)
+
+                    val tv = android.widget.TextView(this@MiroirIME).apply {
+                        text = "${if (current) "▸ " else "  "}$date — $appName$previewStr ($pageCount p.)$exportedStr"
+                        textSize = 16f
+                        setTextColor(if (current) Color.BLACK else Color.DKGRAY)
+                        setPadding(10, 12, 0, 12)
+                    }
+                    row.addView(tv)
+
+                    row.setOnClickListener {
+                        val selected = blocks[pos]
+                        closeBlock()
+                        clearPage()
+                        val sName = selected.name
+                        val sLastUnderscore = sName.lastIndexOf('_')
+                        val sAppName = if (sLastUnderscore > 0) sName.substring(0, sLastUnderscore).replace("_", ".") else "unknown"
+                        val sTs = if (sLastUnderscore > 0) sName.substring(sLastUnderscore + 1).toLongOrNull() ?: System.currentTimeMillis() else System.currentTimeMillis()
+                        hostAppName = sAppName
+                        blockTimestamp = sTs
+                        blockDir = selected
+                        currentPageIndex = 0
+                        loadPage(0)
+                        hideOverlay()
+                        refreshAll()
+                        updatePageIndicator()
+                    }
+                    return row
                 }
-            }
-            setOnItemClickListener { _, _, pos, _ ->
-                val selected = blocks[pos]
-                closeBlock()       // sauvegarde le bloc courant, met blockDir=null
-                clearPage()        // nettoie la RAM (blockDir est null → pas de suppression disque)
-                val name = selected.name
-                val lastUnderscore = name.lastIndexOf('_')
-                val appName = if (lastUnderscore > 0) name.substring(0, lastUnderscore).replace("_", ".") else "unknown"
-                val ts = if (lastUnderscore > 0) name.substring(lastUnderscore + 1).toLongOrNull() ?: System.currentTimeMillis() else System.currentTimeMillis()
-                hostAppName = appName
-                blockTimestamp = ts
-                blockDir = selected
-                currentPageIndex = 0
-                loadPage(0)
-                hideOverlay()
-                refreshAll()
-                updatePageIndicator()
-                Log.i(TAG, "Bloc chargé via menu: ${selected.name}")
             }
         }
 
-        showOverlay(listView, "Blocs (${blocks.size})")
+        // ═══ Barre d'action : Récolter / Recycler ═══
+        val actionBar = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER
+            setPadding(10, 10, 10, 15)
+
+            addView(android.widget.Button(this@MiroirIME).apply {
+                text = "🌾 Récolter"
+                textSize = 16f
+                setPadding(20, 12, 20, 12)
+                setOnClickListener {
+                    if (checked.isEmpty()) {
+                        android.widget.Toast.makeText(this@MiroirIME, "Sélectionne des blocs", android.widget.Toast.LENGTH_SHORT).show()
+                        return@setOnClickListener
+                    }
+                    val selected = blocks.filter { it.name in checked }
+                    val exporter = DatasetExporter(cacheDir)
+                    val datasetFile = exporter.exportBlocks(selected, destroy = false)
+                    android.widget.Toast.makeText(this@MiroirIME, "${checked.size} blocs récoltés → ${datasetFile.name}", android.widget.Toast.LENGTH_LONG).show()
+                    checked.clear()
+                    hideOverlay()
+                }
+            })
+
+            addView(android.widget.Button(this@MiroirIME).apply {
+                text = "♻️ Recycler"
+                textSize = 16f
+                setPadding(20, 12, 20, 12)
+                setOnClickListener {
+                    if (checked.isEmpty()) {
+                        android.widget.Toast.makeText(this@MiroirIME, "Sélectionne des blocs", android.widget.Toast.LENGTH_SHORT).show()
+                        return@setOnClickListener
+                    }
+                    val selected = blocks.filter { it.name in checked }
+                    val exporter = DatasetExporter(cacheDir)
+                    val datasetFile = exporter.exportBlocks(selected, destroy = true)
+                    android.widget.Toast.makeText(this@MiroirIME, "${checked.size} blocs recyclés → ${datasetFile.name}", android.widget.Toast.LENGTH_LONG).show()
+                    checked.clear()
+                    hideOverlay()
+                    refreshAll()
+                }
+            })
+        }
+
+        val panel = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            addView(listView, android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(actionBar, android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+
+        showOverlay(panel, "Blocs (${blocks.size})")
     }
 
     /** Clic long ▶ — Toutes les transcriptions formatées (tel qu'injecté à la validation). */
@@ -3648,7 +3727,7 @@ class MiroirIME : InputMethodService() {
             layoutParams = android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         header.addView(titleView)
-        // Bouton valider
+        // Bouton valider (correction)
         val validateBtn = android.widget.Button(this).apply {
             text = "✓"; textSize = 22f; setTextColor(Color.BLACK); setBackgroundColor(Color.TRANSPARENT)
             setOnClickListener {
@@ -3660,6 +3739,7 @@ class MiroirIME : InputMethodService() {
                     ic.commitText("$correctedLabel ", 1)
                     Log.i(TAG, "Correction validée: '$correctionOriginalLabel' → '$correctedLabel'")
                 }
+                controlledLabels.add(firstIdx)  // marqué comme contrôlé
                 correctionOriginalLabel = ""
                 correctLetterIndex = -1
                 insertAtIndex = -1
@@ -3668,6 +3748,25 @@ class MiroirIME : InputMethodService() {
             }
         }
         header.addView(validateBtn)
+        // Bouton annoter (valider sans corriger)
+        val annotateBtn = android.widget.Button(this).apply {
+            text = "📌"; textSize = 20f; setTextColor(Color.argb(255, 80, 160, 80)); setBackgroundColor(Color.TRANSPARENT)
+            setOnClickListener {
+                val firstIdx = correctionGroupFirstIdx
+                val label = groupLabels[firstIdx] ?: ""
+                // Marquer comme contrôlé sans modifier le label
+                controlledLabels.add(firstIdx)
+                // Restaurer le label original (annuler toute correction en cours)
+                groupLabels[correctionGroupFirstIdx] = correctionOriginalLabel
+                Log.i(TAG, "Label annoté (contrôlé): '$label'")
+                correctionOriginalLabel = ""
+                correctLetterIndex = -1
+                insertAtIndex = -1
+                imeView?.exitEditMode()
+                hideOverlay()
+            }
+        }
+        header.addView(annotateBtn)
         // Bouton annuler
         val cancelBtn = android.widget.Button(this).apply {
             text = "✕"; textSize = 20f; setTextColor(Color.DKGRAY); setBackgroundColor(Color.TRANSPARENT)
