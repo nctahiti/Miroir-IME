@@ -839,6 +839,14 @@ class MiroirIME : InputMethodService() {
             // Le captureIndex (index dans strokeRegistry) fait le pont.
             val allLiveIndices = strokeRegistry.indices
                 .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() && strokeRegistry[it].timestamps.isNotEmpty() }
+                .sortedWith(compareBy<Int> {
+                    // Tri spatial : Y (ligne) puis X (horizontal) → ordre de lecture naturel
+                    val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+                    val firstPoint = strokeRegistry[it].points[0]
+                    (firstPoint.second / spacing).toInt()
+                }.thenBy {
+                    strokeRegistry[it].points[0].first
+                })
                 .toList()
             val groupsForSave = if (allLiveIndices.isNotEmpty()) listOf(allLiveIndices) else emptyList()
             val deletedCount = strokeRegistry.count { it.isDeleted }
