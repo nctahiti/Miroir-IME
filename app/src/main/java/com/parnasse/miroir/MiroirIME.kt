@@ -1260,7 +1260,7 @@ class MiroirIME : InputMethodService() {
         Log.i(TAG, "onCreateInputView — plein écran")
 
         val density = resources.displayMetrics.density
-        val toolbarHeight = (80 * density).toInt()  // hauteur adaptée aux grands boutons
+        val toolbarHeight = (100 * density).toInt()  // hauteur adaptée (2 lignes : boutons + switch overlay)
 
         // ═══ Conteneur principal (FrameLayout pour superposer l'overlay) ═══
         val root = android.widget.FrameLayout(this).apply {
@@ -1366,7 +1366,14 @@ class MiroirIME : InputMethodService() {
             }
         })
 
-        // ═══ Indicateur de page (numéro page courante / totale) ═══
+        // ═══ Cellule page + switch overlay (2 lignes) ═══
+        val pageCell = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
         val pageLabel = android.widget.TextView(this).apply {
             text = "1/1"
             textSize = 22f
@@ -1374,9 +1381,29 @@ class MiroirIME : InputMethodService() {
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.TRANSPARENT)
             layoutParams = android.widget.LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }.also { this.pageLabel = it }
-        toolbar.addView(pageLabel)
+        pageCell.addView(pageLabel)
+
+        // ═══ Switch d'overlay (labels ON/OFF) ═══
+        val overlaySwitch = android.widget.TextView(this).apply {
+            text = if (showOverlays) "👁 ON" else "👁 OFF"
+            textSize = 14f
+            gravity = android.view.Gravity.CENTER
+            setTextColor(if (showOverlays) Color.argb(255, 100, 220, 100) else Color.argb(255, 150, 150, 150))
+            setBackgroundColor(Color.TRANSPARENT)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setOnClickListener {
+                showOverlays = !showOverlays
+                text = if (showOverlays) "👁 ON" else "👁 OFF"
+                setTextColor(if (showOverlays) Color.argb(255, 100, 220, 100) else Color.argb(255, 150, 150, 150))
+                refreshAll()
+            }
+        }
+        pageCell.addView(overlaySwitch)
+
+        toolbar.addView(pageCell)
 
         toolbar.addView(makeButton("▶", {
             showAllTranscriptions()
@@ -1410,17 +1437,6 @@ class MiroirIME : InputMethodService() {
             ensureBlockDir(appName, System.currentTimeMillis())  // nouveau bloc pour la même app
             refreshAll()
             // Pas de requestHideSelf — on reste en mode capture
-        })
-        // ═══ Témoin de mode (plume/montre/déplacement) ═══
-        toolbar.addView(android.widget.TextView(this).apply {
-            text = "✍"
-            textSize = 22f
-            gravity = android.view.Gravity.CENTER
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.TRANSPARENT)
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            modeIndicator = this
         })
 
         mainContent.addView(toolbar)  // barre EN HAUT
@@ -1730,12 +1746,10 @@ class MiroirIME : InputMethodService() {
             super.onDraw(canvas)
             drawCount++
             if (drawCount % 30 == 1) Log.v(TAG, "onDraw #$drawCount showOverlays=$showOverlays labels=${groupLabels.size} template=${cachedTemplateLines.size}")
-            if (showOverlays) {
-                // ═══ Blob témoin de sélection (toujours visible sur le groupe SELECTED) ═══
-                val selectedGroup = groupManager?.groupsInState(GroupState.SELECTED)?.firstOrNull()
-                if (selectedGroup != null) {
-                    groupBlobs[selectedGroup.id]?.let { canvas.drawPath(it.path, blobPaint) }
-                }
+            // ═══ Blob témoin de sélection (toujours visible sur le groupe SELECTED) ═══
+            val selectedGroup = groupManager?.groupsInState(GroupState.SELECTED)?.firstOrNull()
+            if (selectedGroup != null) {
+                groupBlobs[selectedGroup.id]?.let { canvas.drawPath(it.path, blobPaint) }
             }
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             // ═══ Mode correction : cadre-tampon + filtre ═══
@@ -1813,12 +1827,12 @@ class MiroirIME : InputMethodService() {
                 canvas.drawPath(currentPath, strokePaint)
                 return  // ← filtre : on ne continue PAS le dessin normal
             }
+            // Lignes de partition depuis le cache (toujours visibles)
+            for (y in cachedTemplateLines) {
+                canvas.drawLine(0f, y, width.toFloat(), y, Template.GUIDE_PAINT)
+            }
+            // Labels de groupe (contrôlés par le switch d'overlay)
             if (showOverlays) {
-                // Lignes de partition depuis le cache
-                for (y in cachedTemplateLines) {
-                    canvas.drawLine(0f, y, width.toFloat(), y, Template.GUIDE_PAINT)
-                }
-                // Labels de groupe
                 drawGroupLabels(canvas)
             }
             canvas.drawPath(currentPath, strokePaint)
