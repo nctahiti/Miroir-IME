@@ -2031,6 +2031,7 @@ class MiroirIME : InputMethodService() {
                                         Log.i(TAG, "SWIPE HAUT: label='$label'")
                                         if (label.isNotEmpty()) {
                                             imeView?.postInvalidate()
+                                            showCorrectionOverlay(label)
                                         }
                                     }
                                 }
