@@ -3609,7 +3609,8 @@ class MiroirIME : InputMethodService() {
                     }
                     row.addView(tv)
 
-                    row.setOnClickListener {
+                    // Clic sur le texte → ouvrir le bloc
+                    tv.setOnClickListener {
                         val selected = blocks[pos]
                         closeBlock()
                         clearPage()
@@ -3729,7 +3730,9 @@ class MiroirIME : InputMethodService() {
         header.addView(titleView)
         // Bouton valider (correction)
         val validateBtn = android.widget.Button(this).apply {
-            text = "✓"; textSize = 22f; setTextColor(Color.BLACK); setBackgroundColor(Color.TRANSPARENT)
+            text = "✓"; textSize = 22f; setTextColor(Color.BLACK)
+            setBackgroundColor(Color.argb(60, 100, 200, 100))
+            setPadding(16, 8, 16, 8)
             setOnClickListener {
                 // Propager le label corrigé
                 val firstIdx = correctionGroupFirstIdx
@@ -3750,7 +3753,9 @@ class MiroirIME : InputMethodService() {
         header.addView(validateBtn)
         // Bouton annoter (valider sans corriger)
         val annotateBtn = android.widget.Button(this).apply {
-            text = "📌"; textSize = 20f; setTextColor(Color.argb(255, 80, 160, 80)); setBackgroundColor(Color.TRANSPARENT)
+            text = "📌"; textSize = 20f; setTextColor(Color.argb(255, 80, 160, 80))
+            setBackgroundColor(Color.argb(60, 200, 200, 100))
+            setPadding(16, 8, 16, 8)
             setOnClickListener {
                 val firstIdx = correctionGroupFirstIdx
                 val label = groupLabels[firstIdx] ?: ""
