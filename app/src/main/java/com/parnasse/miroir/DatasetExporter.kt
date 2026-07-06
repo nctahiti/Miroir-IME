@@ -397,9 +397,9 @@ Pour contribuer : https://huggingface.co/datasets/nctahiti/Miroir-IME
             doc.open()
             val result = doc.load()
             val allTokens = result.tokens
+            Log.i(TAG, "V★ v2.0: ${allTokens.size} tokens chargés, extents=${group.extents}")
             if (allTokens.isEmpty()) return emptyList()
 
-            // Construire le mapping tokenOffset → token
             // Les extents dans page.groups.json utilisent les mêmes offsets que dataRegion
             val groupTokens = mutableListOf<VStarTokenV2>()
             for ((extOffset, extCount) in group.extents) {
@@ -409,8 +409,8 @@ Pour contribuer : https://huggingface.co/datasets/nctahiti/Miroir-IME
                     }
                 }
             }
+            Log.i(TAG, "Groupe \"${group.label}\": ${groupTokens.size} tokens extraits")
 
-            // Convertir les tokens en StrokeRecord (grouper par PEN_DOWN/PEN_UP)
             return tokensToStrokeRecords(groupTokens)
         } catch (e: Exception) {
             Log.w(TAG, "Erreur décodage V★ v2.0: ${e.message}")
@@ -423,10 +423,11 @@ Pour contribuer : https://huggingface.co/datasets/nctahiti/Miroir-IME
         val strokes = mutableListOf<StrokeRecord>()
         var current: StrokeRecord? = null
         var rx = 0f; var ry = 0f
+        var penDownCount = 0; var moveCount = 0; var penUpCount = 0
 
         for (token in tokens) {
             if (token.isPenDown()) {
-                // Nouveau stroke : position absolue (dx,dy ×8 → pixels)
+                penDownCount++
                 current = StrokeRecord()
                 rx = token.dx.toFloat() / 8f
                 ry = token.dy.toFloat() / 8f
@@ -435,7 +436,7 @@ Pour contribuer : https://huggingface.co/datasets/nctahiti/Miroir-IME
                 current.pressures.add(token.p.toFloat() / 255f)
                 strokes.add(current)
             } else if (current != null) {
-                // Delta depuis la position reconstruite
+                moveCount++
                 rx += token.dx.toFloat() / 8f
                 ry += token.dy.toFloat() / 8f
                 current.points.add(Pair(rx, ry))
@@ -443,9 +444,11 @@ Pour contribuer : https://huggingface.co/datasets/nctahiti/Miroir-IME
                 current.pressures.add(token.p.toFloat() / 255f)
             }
             if (token.isPenUp()) {
+                penUpCount++
                 current = null
             }
         }
+        Log.i(TAG, "tokensToStrokeRecords: ${tokens.size} tokens → ${strokes.size} strokes (DOWN=$penDownCount MOVE=$moveCount UP=$penUpCount), ${strokes.sumOf { it.points.size }} pts")
         return strokes
     }
 }
