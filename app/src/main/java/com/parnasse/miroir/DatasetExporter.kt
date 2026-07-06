@@ -77,7 +77,7 @@ data class AnonPoint(
 
 // ── Exporteur ──
 
-class DatasetExporter(private val cacheDir: File) {
+class DatasetExporter(private val exportDir: File) {
 
     companion object {
         private const val TAG = "Miroir/DatasetExporter"
@@ -194,7 +194,6 @@ class DatasetExporter(private val cacheDir: File) {
         }
 
         // ── Écrire le dataset JSONL ──
-        val exportDir = File(cacheDir, "exports")
         exportDir.mkdirs()
         val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         val variant = if (anon) "anon" else "full"

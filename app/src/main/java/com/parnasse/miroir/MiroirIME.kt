@@ -3512,6 +3512,14 @@ class MiroirIME : InputMethodService() {
      *  Parcourt page_0, page_1, ... dans l'ordre et concatène les labels
      *  triés par ordre de lecture (Y puis X, avec regroupement par interlignes).
      *  Tronque à ~60 caractères. */
+    /** Dossier public pour les datasets exportés (accessible utilisateur). */
+    private fun getDatasetExportDir(): java.io.File {
+        val dir = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(
+            android.os.Environment.DIRECTORY_DOWNLOADS), "Parnasse")
+        dir.mkdirs()
+        return dir
+    }
+
     private fun getBlockPreview(dir: java.io.File): String {
         val pageDirs = dir.listFiles()
             ?.filter { it.isDirectory && it.name.startsWith("page_") && java.io.File(it, "state.json").exists() }
@@ -3675,7 +3683,7 @@ class MiroirIME : InputMethodService() {
                         return@setOnClickListener
                     }
                     val selected = blocks.filter { it.name in checked }
-                    val exporter = DatasetExporter(cacheDir)
+                    val exporter = DatasetExporter(getDatasetExportDir())
                     val datasetFile = exporter.exportBlocks(selected, destroy = false)
                     android.widget.Toast.makeText(this@MiroirIME, "${checked.size} blocs récoltés → ${datasetFile.name}", android.widget.Toast.LENGTH_LONG).show()
                     checked.clear()
@@ -3693,7 +3701,7 @@ class MiroirIME : InputMethodService() {
                         return@setOnClickListener
                     }
                     val selected = blocks.filter { it.name in checked }
-                    val exporter = DatasetExporter(cacheDir)
+                    val exporter = DatasetExporter(getDatasetExportDir())
                     val datasetFile = exporter.exportBlocks(selected, destroy = true)
                     android.widget.Toast.makeText(this@MiroirIME, "${checked.size} blocs recyclés → ${datasetFile.name}", android.widget.Toast.LENGTH_LONG).show()
                     checked.clear()
