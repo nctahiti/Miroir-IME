@@ -418,37 +418,42 @@ Pour contribuer : https://huggingface.co/datasets/nctahiti/Miroir-IME
         }
     }
 
-    /** Convertit une séquence de tokens V★ v2.0 en StrokeRecord. */
+    /** Convertit une séquence de tokens V★ v2.0 en StrokeRecord (groupé par captureIndex). */
     private fun tokensToStrokeRecords(tokens: List<VStarTokenV2>): List<StrokeRecord> {
         val strokes = mutableListOf<StrokeRecord>()
-        var current: StrokeRecord? = null
+        if (tokens.isEmpty()) return strokes
+
+        // Grouper par captureIndex (tous les tokens d'un même stroke ont le même ci)
+        var currentCI = tokens[0].captureIndex
+        var current: StrokeRecord = StrokeRecord()
         var rx = 0f; var ry = 0f
-        var penDownCount = 0; var moveCount = 0; var penUpCount = 0
+        var isFirst = true
 
         for (token in tokens) {
-            if (token.isPenDown()) {
-                penDownCount++
+            if (token.captureIndex != currentCI) {
+                // Nouveau stroke
+                strokes.add(current)
                 current = StrokeRecord()
+                currentCI = token.captureIndex
+                rx = 0f; ry = 0f; isFirst = true
+            }
+
+            if (isFirst) {
+                // Premier point : position absolue (dx,dy ×8 → pixels)
                 rx = token.dx.toFloat() / 8f
                 ry = token.dy.toFloat() / 8f
-                current.points.add(Pair(rx, ry))
-                current.timestamps.add(0L)
-                current.pressures.add(token.p.toFloat() / 255f)
-                strokes.add(current)
-            } else if (current != null) {
-                moveCount++
+                isFirst = false
+            } else {
+                // Delta depuis la position reconstruite
                 rx += token.dx.toFloat() / 8f
                 ry += token.dy.toFloat() / 8f
-                current.points.add(Pair(rx, ry))
-                current.timestamps.add(token.dt.toLong())
-                current.pressures.add(token.p.toFloat() / 255f)
             }
-            if (token.isPenUp()) {
-                penUpCount++
-                current = null
-            }
+            current.points.add(Pair(rx, ry))
+            current.timestamps.add(token.dt.toLong())
+            current.pressures.add(token.p.toFloat() / 255f)
         }
-        Log.i(TAG, "tokensToStrokeRecords: ${tokens.size} tokens → ${strokes.size} strokes (DOWN=$penDownCount MOVE=$moveCount UP=$penUpCount), ${strokes.sumOf { it.points.size }} pts")
+        strokes.add(current)  // dernier stroke
+        Log.i(TAG, "tokensToStrokeRecords: ${tokens.size} tokens → ${strokes.size} strokes, ${strokes.sumOf { it.points.size }} pts")
         return strokes
     }
 }
