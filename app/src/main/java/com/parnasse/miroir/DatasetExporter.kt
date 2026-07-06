@@ -9,15 +9,22 @@ import java.util.*
 /**
  * DatasetExporter — Récolte et recyclage des paires (geste, label).
  *
+ * Format permissif : capture toutes les dimensions disponibles (x, y, t, p).
+ * Format anonymisé : deltas reset, pas d'absolus — prêt pour publication ODbL.
+ *
  * Deux modes :
- *   Récolter : exporte sans détruire, marque .exported (anti-doublon)
- *   Recycler  : exporte puis supprime le bloc, booste la confiance locale
+ *   Récolter (🌾) : exporte sans détruire, marque .exported (anti-doublon)
+ *   Recycler (♻️) : exporte puis supprime le bloc, booste la confiance locale
  *
- * Format permissif : capture TOUTES les dimensions disponibles —
- * positions, pressions, timestamps, azimuth, tilt. L'anonymisation
- * (reset des deltas) se fait à l'export, pas au stockage.
+ * Lecture V★ v2.0 via VStarDocumentV2.
+ * Groupement par captureIndex — chaque stroke = tous ses tokens.
+ * Hash SHA-256 par échantillon pour intégrité.
  *
- * Licence du dataset exporté : ODbL (Open Database License)
+ * Sortie : JSONL + README ODbL dans Downloads/Parnasse/
+ *
+ * @author Capitaine & Hermes
+ * @since 2026-07-05
+ * @license ODbL (dataset exporté), Apache 2.0 (code)
  */
 
 // ── Format permissif — toutes les dimensions de la capture ──
