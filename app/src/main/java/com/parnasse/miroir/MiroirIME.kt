@@ -1440,19 +1440,25 @@ class MiroirIME : InputMethodService() {
         }
         toolbar.addView(formattingToggleBtn)
 
-        // ═══ Validation : envoie le texte sans fermer l'IME ═══
-        toolbar.addView(makeButton("✓") {
-            if (isInsertionMode) {
-                finishInsertionMode()
-            } else {
-                savePage()
-                val ic = currentInputConnection
-                if (ic != null) {
-                    val fullText = buildAllPagesText()
-                    ic.commitText(fullText.ifEmpty { "\n" }, 1)
-                }
-                // Ne PAS fermer l'IME — seul l'envoi/exécution par l'app cible le fait
+        // ═══ Validation : clic court = mise en forme, appui long = exécuter/fermer ═══
+        toolbar.addView(makeButton("✓", {
+            // Appui long → commit + fermer l'IME (exécution)
+            savePage()
+            val ic = currentInputConnection
+            if (ic != null) {
+                val fullText = buildAllPagesText()
+                ic.commitText(fullText.ifEmpty { "\n" }, 1)
             }
+            requestHideSelf(0)
+        }) {
+            // Clic court → commit + basculer vers la vue mise en forme
+            savePage()
+            val ic = currentInputConnection
+            if (ic != null) {
+                val fullText = buildAllPagesText()
+                ic.commitText(fullText.ifEmpty { "\n" }, 1)
+            }
+            toggleFormattingMode()
         })
 
         // ═══ Bouton annotation 📌 (visible uniquement en mode correction) ═══
