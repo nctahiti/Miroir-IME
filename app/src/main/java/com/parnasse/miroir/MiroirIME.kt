@@ -1869,25 +1869,27 @@ class MiroirIME : InputMethodService() {
                         val tp = if (i == this@MiroirIME.correctLetterIndex) minusActiveTextPaint else minusTextPaint
                         canvas.drawText("−", chipCenterX, chipCenterY + chipRadius * 0.4f, tp)
                     }
-                    // ── Pastille 🔒 (gauche du cadre) ──
+                    // ── Pastille 🔒 (gauche du cadre) — couleur selon état ──
                     val lockCX = startX - 20f - chipRadius - 6f
                     val lockCY = startY + letterW / 2f
                     val lockRadius = chipRadius
-                    val lockBg = android.graphics.Paint().apply { color = Color.argb(180, 40, 44, 52); style = Paint.Style.FILL; isAntiAlias = true }
-                    val lockBorder = android.graphics.Paint().apply { color = Color.argb(100, 200, 160, 100); style = Paint.Style.STROKE; strokeWidth = 1.5f; isAntiAlias = true }
-                    val lockText = android.graphics.Paint().apply { color = Color.argb(220, 200, 160, 100); textSize = lockRadius * 1.0f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+                    val isLocked = firstIdx in this@MiroirIME.personalLabels
+                    val lockBg = android.graphics.Paint().apply { color = if (isLocked) Color.argb(200, 180, 80, 60) else Color.argb(180, 40, 44, 52); style = Paint.Style.FILL; isAntiAlias = true }
+                    val lockBorder = android.graphics.Paint().apply { color = if (isLocked) Color.argb(255, 220, 100, 80) else Color.argb(100, 200, 160, 100); style = Paint.Style.STROKE; strokeWidth = if (isLocked) 2.5f else 1.5f; isAntiAlias = true }
+                    val lockText = android.graphics.Paint().apply { color = if (isLocked) Color.WHITE else Color.argb(220, 200, 160, 100); textSize = lockRadius * 1.0f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
                     canvas.drawCircle(lockCX, lockCY, lockRadius, lockBg)
                     canvas.drawCircle(lockCX, lockCY, lockRadius, lockBorder)
                     canvas.drawText("🔒", lockCX, lockCY + lockRadius * 0.35f, lockText)
                     correctionLockHitRect = android.graphics.RectF(lockCX - lockRadius - 8f, lockCY - lockRadius - 8f, lockCX + lockRadius + 8f, lockCY + lockRadius + 8f)
 
-                    // ── Pastille 📌 (droite du cadre) ──
+                    // ── Pastille 📌 (droite du cadre) — couleur selon état ──
                     val annotateCX = startX + totalW + 20f + chipRadius + 6f
                     val annotateCY = startY + letterW / 2f
                     val annotateRadius = chipRadius
-                    val annotateBg = android.graphics.Paint().apply { color = Color.argb(180, 40, 44, 52); style = Paint.Style.FILL; isAntiAlias = true }
-                    val annotateBorder = android.graphics.Paint().apply { color = Color.argb(100, 100, 200, 140); style = Paint.Style.STROKE; strokeWidth = 1.5f; isAntiAlias = true }
-                    val annotateText = android.graphics.Paint().apply { color = Color.argb(220, 100, 200, 140); textSize = annotateRadius * 1.0f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+                    val isControlled = firstIdx in this@MiroirIME.controlledLabels
+                    val annotateBg = android.graphics.Paint().apply { color = if (isControlled) Color.argb(200, 60, 140, 80) else Color.argb(180, 40, 44, 52); style = Paint.Style.FILL; isAntiAlias = true }
+                    val annotateBorder = android.graphics.Paint().apply { color = if (isControlled) Color.argb(255, 80, 200, 100) else Color.argb(100, 100, 200, 140); style = Paint.Style.STROKE; strokeWidth = if (isControlled) 2.5f else 1.5f; isAntiAlias = true }
+                    val annotateText = android.graphics.Paint().apply { color = if (isControlled) Color.WHITE else Color.argb(220, 100, 200, 140); textSize = annotateRadius * 1.0f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
                     canvas.drawCircle(annotateCX, annotateCY, annotateRadius, annotateBg)
                     canvas.drawCircle(annotateCX, annotateCY, annotateRadius, annotateBorder)
                     canvas.drawText("📌", annotateCX, annotateCY + annotateRadius * 0.35f, annotateText)
@@ -1990,29 +1992,35 @@ class MiroirIME : InputMethodService() {
                                 tapStrokeStarted = true
                                 return true
                             }
-                            // ═══ Pastille 🔒 (gauche) — flag d'exclusion dataset ═══
+                            // ═══ Pastille 🔒 (gauche) — toggle exclusion dataset ═══
                             correctionLockHitRect?.let { r ->
                                 if (r.contains(event.x, event.y)) {
                                     val firstIdx = correctionGroupFirstIdx
-                                    personalLabels.add(firstIdx)
-                                    Log.i(TAG, "🔒 Label exclu du dataset: '${groupLabels[firstIdx]}'")
-                                    groupLabels[correctionGroupFirstIdx] = correctionOriginalLabel
-                                    correctionOriginalLabel = ""
-                                    correctLetterIndex = -1; insertAtIndex = -1
-                                    exitEditMode()
+                                    if (firstIdx in personalLabels) {
+                                        personalLabels.remove(firstIdx)
+                                        Log.i(TAG, "🔓 Label ré-inclus: '${groupLabels[firstIdx]}'")
+                                    } else {
+                                        personalLabels.add(firstIdx)
+                                        Log.i(TAG, "🔒 Label exclu du dataset: '${groupLabels[firstIdx]}'")
+                                    }
+                                    isStylusDown = false  // pas de stroke après clic pastille
+                                    imeView?.postInvalidate()  // feedback visuel
                                     return true
                                 }
                             }
-                            // ═══ Pastille 📌 (droite) — valider la paire sans corriger ═══
+                            // ═══ Pastille 📌 (droite) — toggle validation sans corriger ═══
                             correctionAnnotateHitRect?.let { r ->
                                 if (r.contains(event.x, event.y)) {
                                     val firstIdx = correctionGroupFirstIdx
-                                    controlledLabels.add(firstIdx)
-                                    Log.i(TAG, "📌 Label contrôlé: '${groupLabels[firstIdx]}'")
-                                    groupLabels[correctionGroupFirstIdx] = correctionOriginalLabel
-                                    correctionOriginalLabel = ""
-                                    correctLetterIndex = -1; insertAtIndex = -1
-                                    exitEditMode()
+                                    if (firstIdx in controlledLabels) {
+                                        controlledLabels.remove(firstIdx)
+                                        Log.i(TAG, "📌 Label dé-annoté: '${groupLabels[firstIdx]}'")
+                                    } else {
+                                        controlledLabels.add(firstIdx)
+                                        Log.i(TAG, "📌 Label contrôlé: '${groupLabels[firstIdx]}'")
+                                    }
+                                    isStylusDown = false  // pas de stroke après clic pastille
+                                    imeView?.postInvalidate()  // feedback visuel
                                     return true
                                 }
                             }
