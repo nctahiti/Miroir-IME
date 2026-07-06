@@ -2364,6 +2364,7 @@ class MiroirIME : InputMethodService() {
             canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
             for ((idx, sr) in strokeRegistry.withIndex()) {
                 if (idx in erasedStrokes) continue
+                if (sr.isDeleted) continue  // strokes de correction nettoyés
                 if (sr.points.size < 2) continue
                 val path = Path()
                 path.moveTo(sr.points[0].first, sr.points[0].second)
