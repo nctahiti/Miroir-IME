@@ -2419,6 +2419,7 @@ class MiroirIME : InputMethodService() {
             editMode = EditMode.NONE
             longPressTriggered = false
             annotateToolbarBtn?.visibility = View.GONE  // cacher le 📌
+            correctionPaths.clear()  // effacer les strokes de correction du bitmap
             // ═══ Effacement définitif des strokes neutralisés ═══
             val erasedSids = mutableListOf<Long>()
             if (erasedStrokes.isNotEmpty()) {
