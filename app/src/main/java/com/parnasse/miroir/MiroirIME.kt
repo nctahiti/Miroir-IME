@@ -3749,7 +3749,8 @@ class MiroirIME : InputMethodService() {
                     }
                     val selected = blocks.filter { it.name in checked }
                     val exporter = DatasetExporter(getDatasetExportDir())
-                    val datasetFile = exporter.exportBlocks(selected, destroy = false)
+                    val excludedLabels = personalLabels.mapNotNull { groupLabels[it] }.toSet()
+                    val datasetFile = exporter.exportBlocks(selected, destroy = false, excludedLabels = excludedLabels)
                     android.widget.Toast.makeText(this@MiroirIME, "${checked.size} blocs récoltés → ${datasetFile.name}", android.widget.Toast.LENGTH_LONG).show()
                     checked.clear()
                     hideOverlay()
@@ -3767,7 +3768,8 @@ class MiroirIME : InputMethodService() {
                     }
                     val selected = blocks.filter { it.name in checked }
                     val exporter = DatasetExporter(getDatasetExportDir())
-                    val datasetFile = exporter.exportBlocks(selected, destroy = true)
+                    val excludedLabels = personalLabels.mapNotNull { groupLabels[it] }.toSet()
+                    val datasetFile = exporter.exportBlocks(selected, destroy = true, excludedLabels = excludedLabels)
                     android.widget.Toast.makeText(this@MiroirIME, "${checked.size} blocs recyclés → ${datasetFile.name}", android.widget.Toast.LENGTH_LONG).show()
                     checked.clear()
                     hideOverlay()

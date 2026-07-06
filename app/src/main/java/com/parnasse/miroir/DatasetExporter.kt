@@ -98,15 +98,18 @@ class DatasetExporter(private val exportDir: File) {
      *                 false = Récolter (marque .exported, ne supprime pas)
      * @param anon     true = version anonymisée (deltas reset)
      *                 false = version permissive (toutes les dimensions)
+     * @param excludedLabels labels à exclure du dataset (🔒 données personnelles)
      * @return le fichier dataset JSONL généré
      */
     fun exportBlocks(
         blocks: List<File>,
         destroy: Boolean,
-        anon: Boolean = false
+        anon: Boolean = false,
+        excludedLabels: Set<String> = emptySet()
     ): File {
         val samples = mutableListOf<Any>()  // PermissiveSample ou AnonSample
         var totalChars = 0
+        var excludedCount = 0
 
         for (blockDir in blocks) {
             // Anti-doublon : sauter les blocs déjà exportés
@@ -144,6 +147,13 @@ class DatasetExporter(private val exportDir: File) {
                 for (group in groups) {
                     val label = group.label
                     if (label.isEmpty()) continue
+
+                    // 🔒 Filtrer les labels exclus (données personnelles)
+                    if (label in excludedLabels) {
+                        excludedCount++
+                        Log.i(TAG, "🔒 Exclu du dataset: '$label'")
+                        continue
+                    }
 
                     // Extraire les strokes du groupe depuis le fichier V★
                     val groupStrokes = loadStrokesForGroupExtent(pageDir, group)
@@ -273,7 +283,8 @@ Format : JSONL (un échantillon par ligne)
 Pour contribuer : https://huggingface.co/datasets/nctahiti/Miroir-IME
         """.trimIndent())
 
-        Log.i(TAG, "📦 Dataset exporté: ${datasetFile.absolutePath} — ${samples.size} échantillons")
+        val exclStr = if (excludedCount > 0) " (${excludedCount} exclus 🔒)" else ""
+        Log.i(TAG, "📦 Dataset exporté: ${datasetFile.absolutePath} — ${samples.size} échantillons$exclStr")
         return datasetFile
     }
 
