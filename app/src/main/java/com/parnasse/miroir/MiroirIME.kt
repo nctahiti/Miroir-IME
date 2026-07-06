@@ -1950,6 +1950,7 @@ class MiroirIME : InputMethodService() {
                                     groupLabels[origFirstIdx] = newLabel
                                     correctLetterIndex = -1
                                     insertAtIndex = -1
+                                    correctionPaths.clear()  // nettoyer les strokes de correction
                                     isStylusDown = false  // verrou cinétique : pas de stroke après clic puce
                                     Log.i(TAG, "Correction: suppression #$minusIdx → '$origLabel' → '$newLabel'")
                                     imeView?.postInvalidate()
