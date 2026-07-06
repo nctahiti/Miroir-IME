@@ -1397,7 +1397,7 @@ class MiroirIME : InputMethodService() {
 
         // ═══ Switch d'overlay (labels ON/OFF) ═══
         val overlaySwitch = android.widget.TextView(this).apply {
-            text = if (showOverlays) "—" else "👁"
+            text = if (showOverlays) "⌣" else "👁"
             textSize = 22f
             gravity = android.view.Gravity.CENTER
             setTextColor(if (showOverlays) Color.WHITE else Color.argb(255, 150, 150, 150))
@@ -1407,7 +1407,7 @@ class MiroirIME : InputMethodService() {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             setOnClickListener {
                 showOverlays = !showOverlays
-                text = if (showOverlays) "—" else "👁"
+                text = if (showOverlays) "⌣" else "👁"
                 setTextColor(if (showOverlays) Color.WHITE else Color.argb(255, 150, 150, 150))
                 refreshAll()
             }
