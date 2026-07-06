@@ -2528,6 +2528,7 @@ class MiroirIME : InputMethodService() {
                 uiHandler.post { scheduleGroupInference() }
             }
             scrubbedGroupFirstIdx = null
+            imeView?.postInvalidate()  // redessiner sans les strokes de correction
             // ═══ Mettre à jour le bitmap AVANT le refresh unique ═══
             // poserLabelPuisDU(GU) fait déjà un refreshScreen(GU) — inutile de le dupliquer
             redrawBitmapOnly()
