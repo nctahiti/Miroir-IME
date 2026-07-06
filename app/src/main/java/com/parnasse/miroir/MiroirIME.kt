@@ -86,6 +86,8 @@ class MiroirIME : InputMethodService() {
     private var insertAtIndex: Int = -1  // position d'insertion (-1 = pas d'insertion, 0..label.length)
     private var correctionSavedGroup: InkGroup? = null  // groupe original sauvegardé (ré-enregistré après correction)
     private val correctionPaths = mutableListOf<android.graphics.Path>()  // paths des strokes de correction (dessin uniquement)
+    private var correctionLockHitRect: android.graphics.RectF? = null   // zone cliquable 🔒 (gauche du cadre)
+    private var correctionAnnotateHitRect: android.graphics.RectF? = null // zone cliquable 📌 (droite du cadre)
     private val uiHandler = Handler(Looper.getMainLooper())
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "miroir-ime-infer").apply {
@@ -98,6 +100,7 @@ class MiroirIME : InputMethodService() {
     // Map firstIdx → texte reconnu (labels) — firstIdx = index stable dans strokeRegistry (tombstones)
     private val groupLabels = mutableMapOf<Int, String>()
     private val controlledLabels = mutableSetOf<Int>()  // labels marqués comme contrôlés (📌)
+    private val personalLabels = mutableSetOf<Int>()   // labels exclus du dataset (🔒)
     // Map firstIdx → label original (avant correction)
     private val originalLabels = mutableMapOf<Int, String>()
     private val labelPaint = Paint().apply {
@@ -274,6 +277,7 @@ class MiroirIME : InputMethodService() {
         strokeRegistry.clear()
         groupLabels.clear()
         controlledLabels.clear()
+        personalLabels.clear()
         originalLabels.clear()
         inkStrokeIdToRegistryIndex.clear()
         inkStrokeIdCounter = 0L
@@ -603,6 +607,7 @@ class MiroirIME : InputMethodService() {
             inkStrokeIdToRegistryIndex.clear()
             groupLabels.clear()
             controlledLabels.clear()
+        personalLabels.clear()
             originalLabels.clear()
             groupAnchor.clear()
 
@@ -953,6 +958,7 @@ class MiroirIME : InputMethodService() {
                 val labelsObj = json.optJSONObject("labels")
                 groupLabels.clear()
                 controlledLabels.clear()
+        personalLabels.clear()
                 if (labelsObj != null) {
                     for (key in labelsObj.keys()) {
                         val inkId = key.toLongOrNull() ?: key.toIntOrNull()?.toLong() ?: continue
@@ -1018,6 +1024,7 @@ class MiroirIME : InputMethodService() {
                         // ═══ Nettoyer les labels/ancres (seront rechargés depuis labels.json) ═══
                         groupLabels.clear()
                         controlledLabels.clear()
+        personalLabels.clear()
                         originalLabels.clear()
                         groupAnchor.clear()
                         // ═══ NE PAS enregistrer les groupes du décodeur (flat encoding) ═══
@@ -1032,6 +1039,7 @@ class MiroirIME : InputMethodService() {
                             if (labelsObj != null) {
                                 groupLabels.clear()
                                 controlledLabels.clear()
+        personalLabels.clear()
                                 for (key in labelsObj.keys()) {
                                     val ci = key.toIntOrNull() ?: continue
                                     val ri = result.captureIndexToRegistry[ci]  // traduction ci→nouvel index
@@ -1861,6 +1869,29 @@ class MiroirIME : InputMethodService() {
                         val tp = if (i == this@MiroirIME.correctLetterIndex) minusActiveTextPaint else minusTextPaint
                         canvas.drawText("−", chipCenterX, chipCenterY + chipRadius * 0.4f, tp)
                     }
+                    // ── Pastille 🔒 (gauche du cadre) ──
+                    val lockCX = startX - 20f - chipRadius - 6f
+                    val lockCY = startY + letterW / 2f
+                    val lockRadius = chipRadius
+                    val lockBg = android.graphics.Paint().apply { color = Color.argb(180, 40, 44, 52); style = Paint.Style.FILL; isAntiAlias = true }
+                    val lockBorder = android.graphics.Paint().apply { color = Color.argb(100, 200, 160, 100); style = Paint.Style.STROKE; strokeWidth = 1.5f; isAntiAlias = true }
+                    val lockText = android.graphics.Paint().apply { color = Color.argb(220, 200, 160, 100); textSize = lockRadius * 1.0f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+                    canvas.drawCircle(lockCX, lockCY, lockRadius, lockBg)
+                    canvas.drawCircle(lockCX, lockCY, lockRadius, lockBorder)
+                    canvas.drawText("🔒", lockCX, lockCY + lockRadius * 0.35f, lockText)
+                    correctionLockHitRect = android.graphics.RectF(lockCX - lockRadius - 8f, lockCY - lockRadius - 8f, lockCX + lockRadius + 8f, lockCY + lockRadius + 8f)
+
+                    // ── Pastille 📌 (droite du cadre) ──
+                    val annotateCX = startX + totalW + 20f + chipRadius + 6f
+                    val annotateCY = startY + letterW / 2f
+                    val annotateRadius = chipRadius
+                    val annotateBg = android.graphics.Paint().apply { color = Color.argb(180, 40, 44, 52); style = Paint.Style.FILL; isAntiAlias = true }
+                    val annotateBorder = android.graphics.Paint().apply { color = Color.argb(100, 100, 200, 140); style = Paint.Style.STROKE; strokeWidth = 1.5f; isAntiAlias = true }
+                    val annotateText = android.graphics.Paint().apply { color = Color.argb(220, 100, 200, 140); textSize = annotateRadius * 1.0f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+                    canvas.drawCircle(annotateCX, annotateCY, annotateRadius, annotateBg)
+                    canvas.drawCircle(annotateCX, annotateCY, annotateRadius, annotateBorder)
+                    canvas.drawText("📌", annotateCX, annotateCY + annotateRadius * 0.35f, annotateText)
+                    correctionAnnotateHitRect = android.graphics.RectF(annotateCX - annotateRadius - 8f, annotateCY - annotateRadius - 8f, annotateCX + annotateRadius + 8f, annotateCY + annotateRadius + 8f)
                 }
                 // Filtre : pas de labels normaux en mode correction, mais le template oui
                 // Lignes de template (au-dessus du cadre, pour rester visibles)
@@ -1958,6 +1989,32 @@ class MiroirIME : InputMethodService() {
                                 onStylusDown(event.x, event.y)
                                 tapStrokeStarted = true
                                 return true
+                            }
+                            // ═══ Pastille 🔒 (gauche) — flag d'exclusion dataset ═══
+                            correctionLockHitRect?.let { r ->
+                                if (r.contains(event.x, event.y)) {
+                                    val firstIdx = correctionGroupFirstIdx
+                                    personalLabels.add(firstIdx)
+                                    Log.i(TAG, "🔒 Label exclu du dataset: '${groupLabels[firstIdx]}'")
+                                    groupLabels[correctionGroupFirstIdx] = correctionOriginalLabel
+                                    correctionOriginalLabel = ""
+                                    correctLetterIndex = -1; insertAtIndex = -1
+                                    exitEditMode()
+                                    return true
+                                }
+                            }
+                            // ═══ Pastille 📌 (droite) — valider la paire sans corriger ═══
+                            correctionAnnotateHitRect?.let { r ->
+                                if (r.contains(event.x, event.y)) {
+                                    val firstIdx = correctionGroupFirstIdx
+                                    controlledLabels.add(firstIdx)
+                                    Log.i(TAG, "📌 Label contrôlé: '${groupLabels[firstIdx]}'")
+                                    groupLabels[correctionGroupFirstIdx] = correctionOriginalLabel
+                                    correctionOriginalLabel = ""
+                                    correctLetterIndex = -1; insertAtIndex = -1
+                                    exitEditMode()
+                                    return true
+                                }
                             }
                             // Clic hors des lettres sans cible → sortir du mode
                             exitEditMode()
