@@ -123,23 +123,23 @@ class DatasetExporter(private val cacheDir: File) {
                 ?: continue
 
             for (pageDir in pages) {
-                val groupsFile = File(pageDir, "groups.json")
+                val groupsFile = File(pageDir, "page.groups.json")
                 val labelsFile = File(pageDir, "labels.json")
                 val stateFile = File(pageDir, "state.json")
 
                 if (!groupsFile.exists() && !labelsFile.exists()) continue
 
-                // Charger les groupes et labels
+                // Charger les groupes (format extents, labels inclus)
                 val groups = loadGroupsFromJson(groupsFile)
                 val labels = loadLabelsFromJson(labelsFile)
 
                 // Pour chaque groupe annoté → un sample
                 for (group in groups) {
-                    val label = labels[group.firstIdx] ?: continue
+                    val label = group.label
                     if (label.isEmpty()) continue
 
-                    // Extraire les strokes du groupe depuis le fichier V★ ou state.json
-                    val groupStrokes = loadStrokesForGroup(pageDir, group)
+                    // Extraire les strokes du groupe depuis le fichier V★
+                    val groupStrokes = loadStrokesForGroupExtent(pageDir, group)
 
                     if (anon) {
                         val anonStrokes = anonymizeStrokes(groupStrokes)
@@ -336,21 +336,27 @@ Pour contribuer : https://huggingface.co/datasets/nctahiti/Miroir-IME
 
     // ── Chargement depuis le disque ──
 
-    /** Structure minimale pour représenter un groupe chargé depuis groups.json. */
-    data class LoadedGroup(val firstIdx: Int, val strokeIndices: List<Int>)
+    /** Structure pour un groupe chargé depuis page.groups.json (format extents). */
+    data class LoadedGroupExtent(val label: String, val extents: List<Pair<Int, Int>>)  // (offset, count) en tokens
 
-    private fun loadGroupsFromJson(file: File): List<LoadedGroup> {
+    private fun loadGroupsFromJson(file: File): List<LoadedGroupExtent> {
         if (!file.exists()) return emptyList()
         try {
             val json = org.json.JSONObject(file.readText())
             val arr = json.optJSONArray("groups") ?: return emptyList()
-            val groups = mutableListOf<LoadedGroup>()
+            val groups = mutableListOf<LoadedGroupExtent>()
             for (i in 0 until arr.length()) {
                 val g = arr.getJSONObject(i)
-                val sids = g.optJSONArray("strokeIds") ?: continue
-                val indices = (0 until sids.length()).map { sids.getInt(it) }
-                if (indices.isNotEmpty()) {
-                    groups.add(LoadedGroup(indices.first(), indices))
+                val label = g.optString("label", "")
+                if (label.isEmpty()) continue
+                val extArr = g.optJSONArray("extents") ?: continue
+                val extents = mutableListOf<Pair<Int, Int>>()
+                for (j in 0 until extArr.length()) {
+                    val pair = extArr.getJSONArray(j)
+                    extents.add(Pair(pair.getInt(0), pair.getInt(1)))
+                }
+                if (extents.isNotEmpty()) {
+                    groups.add(LoadedGroupExtent(label, extents))
                 }
             }
             return groups
@@ -378,19 +384,40 @@ Pour contribuer : https://huggingface.co/datasets/nctahiti/Miroir-IME
     }
 
     /**
-     * Charge les strokes d'un groupe depuis le fichier V★ de la page.
-     * Utilise VStarDecoder pour reconstruire les StrokeRecord.
+     * Extrait les strokes d'un groupe à partir des extents (offsets tokens).
+     * Chaque point de stroke = 1 token dans le flux V★.
      */
-    private fun loadStrokesForGroup(pageDir: File, group: LoadedGroup): List<StrokeRecord> {
+    private fun loadStrokesForGroupExtent(pageDir: File, group: LoadedGroupExtent): List<StrokeRecord> {
         val vstarFile = File(pageDir, "page.vstar")
         if (!vstarFile.exists()) return emptyList()
 
         try {
             val decoder = VStarDecoder(vstarFile)
             val result = decoder.decode() ?: return emptyList()
-            return group.strokeIndices.mapNotNull { ci ->
-                result.strokes.getOrNull(ci)
+
+            // Construire le mapping tokenOffset → strokeIndex
+            // Chaque StrokeRecord a N points = N tokens
+            val tokenOffsets = mutableListOf<Int>()  // tokenOffsets[i] = offset du stroke i
+            var offset = 0
+            for (s in result.strokes) {
+                tokenOffsets.add(offset)
+                offset += s.points.size  // 1 token par point
             }
+
+            // Pour chaque extent, trouver les strokes dans la plage
+            val groupStrokes = mutableListOf<StrokeRecord>()
+            for ((extOffset, extCount) in group.extents) {
+                val endOffset = extOffset + extCount
+                for (i in result.strokes.indices) {
+                    val sOffset = tokenOffsets[i]
+                    val sEnd = sOffset + result.strokes[i].points.size
+                    // Le stroke est dans la plage si ses tokens chevauchent l'extent
+                    if (sEnd > extOffset && sOffset < endOffset) {
+                        groupStrokes.add(result.strokes[i])
+                    }
+                }
+            }
+            return groupStrokes
         } catch (e: Exception) {
             Log.w(TAG, "Erreur décodage V★ pour groupe: ${e.message}")
             return emptyList()
