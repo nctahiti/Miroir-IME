@@ -1344,18 +1344,13 @@ class MiroirIME : InputMethodService() {
             }
         }
 
-        toolbar.addView(makeButton("✓") {
-            if (isInsertionMode) {
-                finishInsertionMode()
-            } else {
-                savePage()
-                val ic = currentInputConnection
-                if (ic != null) {
-                    val fullText = buildAllPagesText()
-                    ic.commitText(fullText.ifEmpty { "\n" }, 1)
-                }
-                requestHideSelf(0)
-            }
+        // ═══ Reset : ferme le bloc, nouveau bloc, reste en capture ═══
+        toolbar.addView(makeButton("✕") {
+            val appName = hostAppName
+            closeBlock()
+            clearPage()
+            ensureBlockDir(appName, System.currentTimeMillis())
+            refreshAll()
         })
 
         toolbar.addView(makeButton("⚙") {
@@ -1403,10 +1398,11 @@ class MiroirIME : InputMethodService() {
         // ═══ Switch d'overlay (labels ON/OFF) ═══
         val overlaySwitch = android.widget.TextView(this).apply {
             text = if (showOverlays) "👁 ON" else "👁 OFF"
-            textSize = 14f
+            textSize = 18f
             gravity = android.view.Gravity.CENTER
             setTextColor(if (showOverlays) Color.argb(255, 100, 220, 100) else Color.argb(255, 150, 150, 150))
-            setBackgroundColor(Color.TRANSPARENT)
+            setBackgroundColor(Color.argb(30, 255, 255, 255))
+            setPadding(12, 6, 12, 6)
             layoutParams = android.widget.LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             setOnClickListener {
@@ -1444,15 +1440,21 @@ class MiroirIME : InputMethodService() {
         }
         toolbar.addView(formattingToggleBtn)
 
-        toolbar.addView(makeButton("✕") {
-            // ═══ Vider la page : fermer le bloc courant, en créer un nouveau (reste en capture) ═══
-            val appName = hostAppName  // capturer avant que closeBlock() ne le réinitialise
-            closeBlock()
-            clearPage()
-            ensureBlockDir(appName, System.currentTimeMillis())  // nouveau bloc pour la même app
-            refreshAll()
-            // Pas de requestHideSelf — on reste en mode capture
+        // ═══ Validation : envoie le texte sans fermer l'IME ═══
+        toolbar.addView(makeButton("✓") {
+            if (isInsertionMode) {
+                finishInsertionMode()
+            } else {
+                savePage()
+                val ic = currentInputConnection
+                if (ic != null) {
+                    val fullText = buildAllPagesText()
+                    ic.commitText(fullText.ifEmpty { "\n" }, 1)
+                }
+                // Ne PAS fermer l'IME — seul l'envoi/exécution par l'app cible le fait
+            }
         })
+
         // ═══ Bouton annotation 📌 (visible uniquement en mode correction) ═══
         val annotateBtn = android.widget.Button(this).apply {
             text = "📌"
