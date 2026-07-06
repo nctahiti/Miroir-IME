@@ -2809,11 +2809,19 @@ class MiroirIME : InputMethodService() {
             }
         }
 
-        // Ajouter au registre
-        strokeRegistry.add(stroke)
-        val registryIdx = strokeRegistry.size - 1
-        val inkId = ++inkStrokeIdCounter
-        inkStrokeIdToRegistryIndex[inkId] = registryIdx
+        // Ajouter au registre (sauf en mode correction — strokes temporaires)
+        val registryIdx: Int
+        val inkId: Long
+        if (!correcting) {
+            strokeRegistry.add(stroke)
+            registryIdx = strokeRegistry.size - 1
+            inkId = ++inkStrokeIdCounter
+            inkStrokeIdToRegistryIndex[inkId] = registryIdx
+        } else {
+            // Mode correction : ne pas persister, utiliser un inkId temporaire
+            registryIdx = -1
+            inkId = -(++inkStrokeIdCounter)  // négatif = temporaire, n'entre pas dans le registre
+        }
 
         // ═══ GroupManager : groupement spatial ═══
         val inkStroke = strokeRecordToInkStroke(stroke, inkId)
