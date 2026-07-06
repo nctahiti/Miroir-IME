@@ -88,6 +88,7 @@ class MiroirIME : InputMethodService() {
     private val correctionPaths = mutableListOf<android.graphics.Path>()  // paths des strokes de correction (dessin uniquement)
     private var correctionLockHitRect: android.graphics.RectF? = null   // zone cliquable 🔒 (gauche du cadre)
     private var correctionAnnotateHitRect: android.graphics.RectF? = null // zone cliquable 📌 (droite du cadre)
+    private var correctionStartRegistrySize: Int = -1  // taille du registre à l'entrée en mode correction
     private val uiHandler = Handler(Looper.getMainLooper())
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "miroir-ime-infer").apply {
@@ -2124,6 +2125,7 @@ class MiroirIME : InputMethodService() {
                                     Log.i(TAG, "SWIPE HAUT: firstIdx=$firstIdx labels=${groupLabels.size}")
                                     if (firstIdx != null) {
                                         correctionGroupFirstIdx = firstIdx
+                                        correctionStartRegistrySize = strokeRegistry.size  // snapshot pour nettoyage
                                         correctionOriginalLabel = groupLabels[firstIdx] ?: ""
                                         correctionSavedGroup = group  // sauvegarder pour ré-enregistrement
                                         val label = groupLabels[firstIdx] ?: ""
@@ -2420,6 +2422,19 @@ class MiroirIME : InputMethodService() {
             longPressTriggered = false
             annotateToolbarBtn?.visibility = View.GONE  // cacher le 📌
             correctionPaths.clear()  // effacer les strokes de correction du bitmap
+            // ═══ Nettoyer les strokes de correction du registre ═══
+            if (correctionStartRegistrySize >= 0 && correctionStartRegistrySize < strokeRegistry.size) {
+                for (i in correctionStartRegistrySize until strokeRegistry.size) {
+                    strokeRegistry[i].isDeleted = true
+                }
+                // Nettoyer inkStrokeIdToRegistryIndex pour ces strokes
+                val toRemove = inkStrokeIdToRegistryIndex.entries
+                    .filter { it.value >= correctionStartRegistrySize }
+                    .map { it.key }
+                toRemove.forEach { inkStrokeIdToRegistryIndex.remove(it) }
+                Log.i(TAG, "🧹 ${strokeRegistry.size - correctionStartRegistrySize} strokes de correction nettoyés")
+            }
+            correctionStartRegistrySize = -1
             // ═══ Effacement définitif des strokes neutralisés ═══
             val erasedSids = mutableListOf<Long>()
             if (erasedStrokes.isNotEmpty()) {
@@ -2809,19 +2824,11 @@ class MiroirIME : InputMethodService() {
             }
         }
 
-        // Ajouter au registre (sauf en mode correction — strokes temporaires)
-        val registryIdx: Int
-        val inkId: Long
-        if (!correcting) {
-            strokeRegistry.add(stroke)
-            registryIdx = strokeRegistry.size - 1
-            inkId = ++inkStrokeIdCounter
-            inkStrokeIdToRegistryIndex[inkId] = registryIdx
-        } else {
-            // Mode correction : ne pas persister, utiliser un inkId temporaire
-            registryIdx = -1
-            inkId = -(++inkStrokeIdCounter)  // négatif = temporaire, n'entre pas dans le registre
-        }
+        // Ajouter au registre
+        strokeRegistry.add(stroke)
+        val registryIdx = strokeRegistry.size - 1
+        val inkId = ++inkStrokeIdCounter
+        inkStrokeIdToRegistryIndex[inkId] = registryIdx
 
         // ═══ GroupManager : groupement spatial ═══
         val inkStroke = strokeRecordToInkStroke(stroke, inkId)
