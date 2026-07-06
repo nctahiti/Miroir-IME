@@ -385,42 +385,67 @@ Pour contribuer : https://huggingface.co/datasets/nctahiti/Miroir-IME
 
     /**
      * Extrait les strokes d'un groupe à partir des extents (offsets tokens).
-     * Chaque point de stroke = 1 token dans le flux V★.
+     * Supporte V★ v2.0 (VStarDocumentV2) — le format utilisé par savePage.
      */
     private fun loadStrokesForGroupExtent(pageDir: File, group: LoadedGroupExtent): List<StrokeRecord> {
         val vstarFile = File(pageDir, "page.vstar")
         if (!vstarFile.exists()) return emptyList()
 
         try {
-            val decoder = VStarDecoder(vstarFile)
-            val result = decoder.decode() ?: return emptyList()
+            // V★ v2.0 — ouvrir le document et charger les tokens
+            val doc = VStarDocumentV2(vstarFile)
+            doc.open()
+            val result = doc.load()
+            val allTokens = result.tokens
+            if (allTokens.isEmpty()) return emptyList()
 
-            // Construire le mapping tokenOffset → strokeIndex
-            // Chaque StrokeRecord a N points = N tokens
-            val tokenOffsets = mutableListOf<Int>()  // tokenOffsets[i] = offset du stroke i
-            var offset = 0
-            for (s in result.strokes) {
-                tokenOffsets.add(offset)
-                offset += s.points.size  // 1 token par point
-            }
-
-            // Pour chaque extent, trouver les strokes dans la plage
-            val groupStrokes = mutableListOf<StrokeRecord>()
+            // Construire le mapping tokenOffset → token
+            // Les extents dans page.groups.json utilisent les mêmes offsets que dataRegion
+            val groupTokens = mutableListOf<VStarTokenV2>()
             for ((extOffset, extCount) in group.extents) {
-                val endOffset = extOffset + extCount
-                for (i in result.strokes.indices) {
-                    val sOffset = tokenOffsets[i]
-                    val sEnd = sOffset + result.strokes[i].points.size
-                    // Le stroke est dans la plage si ses tokens chevauchent l'extent
-                    if (sEnd > extOffset && sOffset < endOffset) {
-                        groupStrokes.add(result.strokes[i])
+                for (i in extOffset until extOffset + extCount) {
+                    if (i < allTokens.size) {
+                        groupTokens.add(allTokens[i])
                     }
                 }
             }
-            return groupStrokes
+
+            // Convertir les tokens en StrokeRecord (grouper par PEN_DOWN/PEN_UP)
+            return tokensToStrokeRecords(groupTokens)
         } catch (e: Exception) {
-            Log.w(TAG, "Erreur décodage V★ pour groupe: ${e.message}")
+            Log.w(TAG, "Erreur décodage V★ v2.0: ${e.message}")
             return emptyList()
         }
+    }
+
+    /** Convertit une séquence de tokens V★ v2.0 en StrokeRecord. */
+    private fun tokensToStrokeRecords(tokens: List<VStarTokenV2>): List<StrokeRecord> {
+        val strokes = mutableListOf<StrokeRecord>()
+        var current: StrokeRecord? = null
+        var rx = 0f; var ry = 0f
+
+        for (token in tokens) {
+            if (token.isPenDown()) {
+                // Nouveau stroke : position absolue (dx,dy ×8 → pixels)
+                current = StrokeRecord()
+                rx = token.dx.toFloat() / 8f
+                ry = token.dy.toFloat() / 8f
+                current.points.add(Pair(rx, ry))
+                current.timestamps.add(0L)
+                current.pressures.add(token.p.toFloat() / 255f)
+                strokes.add(current)
+            } else if (current != null) {
+                // Delta depuis la position reconstruite
+                rx += token.dx.toFloat() / 8f
+                ry += token.dy.toFloat() / 8f
+                current.points.add(Pair(rx, ry))
+                current.timestamps.add(token.dt.toLong())
+                current.pressures.add(token.p.toFloat() / 255f)
+            }
+            if (token.isPenUp()) {
+                current = null
+            }
+        }
+        return strokes
     }
 }
