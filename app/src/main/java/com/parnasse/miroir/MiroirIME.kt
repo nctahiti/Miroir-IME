@@ -923,6 +923,8 @@ class MiroirIME : InputMethodService() {
         val v = imeView
         if (v != null) initTouchHelper(v)
         rebuildBitmap()
+        // ═══ Rafraîchir le template (prise en compte des changements de calibration) ═══
+        if (surface.height > 0) updateTemplateSpacing(surface.height)
         // ═══ Toujours ouvrir sur le clavier de mise en forme ═══
         if (!isFormattingMode && formattingPanel != null && imeView != null && rootView != null) {
             toggleFormattingMode()
