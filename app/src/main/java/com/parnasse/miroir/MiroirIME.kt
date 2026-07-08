@@ -1245,10 +1245,12 @@ class MiroirIME : InputMethodService() {
             // Sauvegarder les anciennes lignes pour re-snap
             val oldLines = cachedTemplateLines
             cachedTemplateLines = t.linePositions(canvasHeight)
-            // Re-snap les ancres : chaque groupe garde son numéro de ligne
+            // Re-snap les ancres ET les strokes : chaque groupe garde son numéro de ligne
             if (oldLines.isNotEmpty() && cachedTemplateLines.isNotEmpty() && groupAnchor.isNotEmpty()) {
                 val newLines = cachedTemplateLines
                 val resnapped = mutableMapOf<Int, Pair<Float, Float>>()
+                // Map: firstIdx → deltaY (pour shifter les strokes après)
+                val anchorDeltas = mutableMapOf<Int, Float>()
                 for ((firstIdx, anchor) in groupAnchor) {
                     // Trouver l'ancien numéro de ligne
                     var oldLineIdx = 0
@@ -1259,10 +1261,33 @@ class MiroirIME : InputMethodService() {
                     }
                     // Snap à la même ligne dans le nouveau template
                     val newLineIdx = oldLineIdx.coerceIn(0, newLines.size - 1)
-                    resnapped[firstIdx] = Pair(anchor.first, newLines[newLineIdx])
+                    val newY = newLines[newLineIdx]
+                    anchorDeltas[firstIdx] = newY - anchor.second
+                    resnapped[firstIdx] = Pair(anchor.first, newY)
                 }
                 groupAnchor.putAll(resnapped)
-                Log.d(TAG, "Template: ${spacing.toInt()}px — ${groupAnchor.size} ancres re-snappées")
+                // Shifter les strokes de chaque groupe du même deltaY que leur ancre
+                val gm = groupManager
+                if (gm != null) {
+                    var shiftedStrokes = 0
+                    for (group in gm.allGroups()) {
+                        val firstSid = group.strokeIds.firstOrNull() ?: continue
+                        val firstRi = inkStrokeIdToRegistryIndex[firstSid] ?: continue
+                        val deltaY = anchorDeltas[firstRi] ?: continue
+                        if (deltaY == 0f) continue
+                        for (sid in group.strokeIds) {
+                            val ri = inkStrokeIdToRegistryIndex[sid] ?: continue
+                            val sr = strokeRegistry.getOrNull(ri) ?: continue
+                            for (i in sr.points.indices) {
+                                sr.points[i] = Pair(sr.points[i].first, sr.points[i].second + deltaY)
+                            }
+                            shiftedStrokes++
+                        }
+                    }
+                    Log.d(TAG, "Template: ${spacing.toInt()}px — ${groupAnchor.size} ancres re-snappées, $shiftedStrokes strokes shiftés")
+                } else {
+                    Log.d(TAG, "Template: ${spacing.toInt()}px — ${groupAnchor.size} ancres re-snappées")
+                }
             }
         }
         cachedTemplateHeight = canvasHeight
