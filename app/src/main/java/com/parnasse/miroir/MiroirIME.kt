@@ -1707,6 +1707,8 @@ class MiroirIME : InputMethodService() {
         val v = imeView
         if (v != null) initTouchHelper(v)
         rebuildBitmap()
+        // ═══ Rafraîchir le template (prise en compte des changements de calibration) ═══
+        imeView?.let { if (it.height > 0) updateTemplateSpacing(it.height) }
         // ═══ Démarrer en mode CAPTURE (pas formatage) ═══
         if (isFormattingMode) {
             toggleFormattingMode()  // revenir en capture si on était en formatage
