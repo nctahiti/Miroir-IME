@@ -614,8 +614,60 @@ class MiroirIME : InputMethodService() {
             val mdmAnchors = MdmParser.parse(src)
             if (mdmAnchors.isEmpty()) return
             Log.i(TAG, "MDM chargé: ${mdmAnchors.size} ancres — ${mdmFile.length()}B — markup préservé")
+            // Appliquer si modifié depuis la dernière application (LLM a écrit dedans)
+            if (mdmFile.lastModified() > lastMdmApplied) {
+                applyMdmLayout()
+            }
         } catch (e: Exception) {
             Log.w(TAG, "MDM load: ${e.message}")
+        }
+    }
+
+    /** Applique le layout MDM : parse page.mdm et positionne les groupes.
+     *  Appelé automatiquement si le fichier a été modifié depuis le dernier apply.
+     *  Peut aussi être appelé manuellement (commande LLM, bouton). */
+    internal fun applyMdmLayout(): Boolean {
+        val bd = blockDir ?: return false
+        val dir = java.io.File(bd, "page_$currentPageIndex")
+        val mdmFile = java.io.File(dir, "page.mdm")
+        if (!mdmFile.exists()) return false
+
+        // Détection de modification : ne rien faire si déjà appliqué
+        val modTime = mdmFile.lastModified()
+        if (modTime <= lastMdmApplied) return false
+
+        try {
+            val src = mdmFile.readText()
+            val mdmAnchors = MdmParser.parse(src)
+            if (mdmAnchors.isEmpty()) return false
+
+            val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+            val firstLine = cachedTemplateLines.firstOrNull() ?: (spacing * 2f)
+
+            var applied = 0
+            for (mdmA in mdmAnchors) {
+                val targetLabel = mdmA.label
+                val firstIdx = groupLabels.entries.find { it.value.equals(targetLabel, ignoreCase = true) }?.key
+                if (firstIdx != null) {
+                    // Groupe existant → repositionner
+                    val newY = firstLine + mdmA.lineIndex * spacing
+                    val newX = 60f + mdmA.colIndex * 300f
+                    groupAnchor[firstIdx] = Pair(newX, newY)
+                    applied++
+                }
+                // TODO: créer un nouvel emplacement si le @mot n'existe pas encore
+            }
+
+            lastMdmApplied = modTime
+            if (applied > 0) {
+                Log.i(TAG, "MDM layout appliqué: $applied/${mdmAnchors.size} groupes repositionnés")
+                rebuildBitmap()
+                imeView?.invalidate()
+            }
+            return true
+        } catch (e: Exception) {
+            Log.w(TAG, "MDM apply: ${e.message}")
+            return false
         }
     }
 
@@ -1207,6 +1259,7 @@ class MiroirIME : InputMethodService() {
     // ── Cache performance ──────────────────────────────────────────────
     private var cachedTemplateLines: List<Float> = emptyList()
     private var cachedTemplateHeight: Int = -1
+    private var lastMdmApplied: Long = 0  // timestamp du dernier applyMdmLayout()
     private val cachedLabelPositions = mutableMapOf<Int, Pair<Float, Float>>()
 
     // ═══ Rafraîchissement EPD ciblé (remplace throttledInvalidate global) ═══
