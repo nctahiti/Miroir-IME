@@ -659,10 +659,8 @@ class MiroirIME : InputMethodService() {
             val mdmAnchors = MdmParser.parse(src)
             if (mdmAnchors.isEmpty()) return
             Log.i(TAG, "MDM chargé: ${mdmAnchors.size} ancres — ${mdmFile.length()}B — markup préservé")
-            // Appliquer si modifié depuis la dernière application (LLM a écrit dedans)
-            if (mdmFile.lastModified() > lastMdmApplied) {
-                applyMdmLayout()
-            }
+            // Marquer comme lu pour éviter un apply accidentel au prochain chargement
+            lastMdmApplied = System.currentTimeMillis()
         } catch (e: Exception) {
             Log.w(TAG, "MDM load: ${e.message}")
         }
@@ -694,13 +692,12 @@ class MiroirIME : InputMethodService() {
                 val targetLabel = mdmA.label
                 val firstIdx = groupLabels.entries.find { it.value.equals(targetLabel, ignoreCase = true) }?.key
                 if (firstIdx != null) {
-                    // Groupe existant → repositionner
+                    // Groupe existant → préserver X, ne repositionner que Y
+                    val currentAnchor = groupAnchor[firstIdx] ?: continue
                     val newY = firstLine + mdmA.lineIndex * spacing
-                    val newX = 60f + mdmA.colIndex * 300f
-                    groupAnchor[firstIdx] = Pair(newX, newY)
+                    groupAnchor[firstIdx] = Pair(currentAnchor.first, newY)
                     applied++
                 }
-                // TODO: créer un nouvel emplacement si le @mot n'existe pas encore
             }
 
             lastMdmApplied = modTime
@@ -1483,6 +1480,19 @@ class MiroirIME : InputMethodService() {
             val tmpDir = java.io.File(cacheDir, "ime-groups")
             tmpDir.mkdirs()
             it.persistence = GroupPersistence(java.io.File(tmpDir, "current.groups"))
+        }
+        // ═══ MDM BroadcastReceiver — écoute les commandes du Cœur ═══
+        mdmReceiver = MdmBroadcastReceiver()
+        registerReceiver(mdmReceiver, android.content.IntentFilter("com.parnasse.miroir.ACTION_MDM_APPLY"))
+    }
+
+    /** Reçoit les broadcasts MDM du Cœur et applique le layout. */
+    private var mdmReceiver: MdmBroadcastReceiver? = null
+    private inner class MdmBroadcastReceiver : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+            if (intent?.action != "com.parnasse.miroir.ACTION_MDM_APPLY") return
+            Log.i(TAG, "MDM broadcast reçu — applyMdmLayout()")
+            applyMdmLayout()
         }
     }
 
