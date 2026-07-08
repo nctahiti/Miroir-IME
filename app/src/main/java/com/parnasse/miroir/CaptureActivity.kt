@@ -55,6 +55,9 @@ class CaptureActivity : Activity() {
         )
     }
 
+    // ── MiroirEngine (partagé avec IME) ─────────────────────────────────
+    private val engine = MiroirEngine()
+
     // ── Vues ──────────────────────────────────────────────────────────
     private var captureView: CaptureView? = null
     private var modeBtn: TextView? = null
@@ -63,16 +66,12 @@ class CaptureActivity : Activity() {
     // ── Reconnaissance ─────────────────────────────────────────────────
     private var wordRecognizer: DigitalInkWrapper? = null
     private var accumulatedText: String = ""
-    private val wordTranscriptions = mutableListOf<String>()  // pour sauvegarde (transitoire, sera supprimé)
+    private val wordTranscriptions = mutableListOf<String>()
 
     // ── Mode ───────────────────────────────────────────────────────────
     private var isBlocNote = true
     private var currentWord: String = ""
     private var captureMode = CaptureMode.CAPTURE
-
-    // ── Navigation pages ──────────────────────────────────────────────
-    private var blocNoteFiles = mutableListOf<java.io.File>()
-    private var currentPageIndex = -1  // -1 = nouvelle page
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,9 +104,10 @@ class CaptureActivity : Activity() {
             Log.d(TAG, "📸 Raster groupe #$groupIdx reçu: ${bitmap.width}×${bitmap.height}")
         }
 
-        // ── CaptureView ───────────────────────────────────
-        val noteDir = java.io.File(filesDir, "blocnote")
-        val baseName = "note_${java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())}"
+        // ═══ Initialiser le moteur partagé ═══
+        engine.ensureBlockDir(this, "standalone", System.currentTimeMillis())
+        engine.initGroupManager(this)
+        engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
         captureView = CaptureView(this).also { cv ->
             cv.strokeProcessor = processor
             // Reconnaissance automatique via StrokeProcessor (thread background)
@@ -133,10 +133,9 @@ class CaptureActivity : Activity() {
             // ═══ Mettre à jour la transcription quand le groupe actif change ═══
             cv.onActiveGroupChanged = {
             }
-            // Persistance des groupes pour eviction du cache
-            // ⚠️ DOIT être hors du callback — sinon jamais initialisée avant
-            // le premier changement de groupe actif → groupes évincés irrécupérables
-            cv.groupManager.persistence = GroupPersistence(GroupPersistence.groupsFile(noteDir, baseName))
+            // Persistance des groupes — utiliser le moteur
+            cv.groupManager.persistence = GroupPersistence(
+                GroupPersistence.groupsFile(engine.blockDir ?: filesDir, "page_${engine.currentPageIndex}"))
             // Indicateur de mode 🚢🔦⏳
             cv.onModeChanged = { mode ->
                 runOnUiThread {
@@ -360,7 +359,7 @@ class CaptureActivity : Activity() {
         // Démarrer en mode Bloc-notes
         applyMode()
         captureView?.startBlocNoteSession()
-        scanBlocnoteFiles()
+        // engine déjà initialisé dans onCreate
 
         MiroirService.start(this)
     }
@@ -444,51 +443,19 @@ class CaptureActivity : Activity() {
 
     // ── Navigation pages ──────────────────────────────────────────────
 
-    private fun scanBlocnoteFiles() {
-        val dir = java.io.File(filesDir, "blocnote")
-        if (!dir.exists()) { blocNoteFiles.clear(); return }
-        blocNoteFiles = dir.listFiles { f -> f.name.startsWith("note_") && f.name.endsWith(".note") }
-            ?.sortedBy { it.name }?.toMutableList() ?: mutableListOf()
-        Log.i(TAG, "${blocNoteFiles.size} notes trouvées")
-    }
-
     private fun goToPrevPage() {
-        scanBlocnoteFiles()
-        if (blocNoteFiles.isEmpty()) return
-        
-        // Sauver la page courante d'abord
-        if (currentPageIndex < 0 && captureView?.hasStrokes() == true) {
-            Log.i(TAG, "⬅ Sauvegarde page courante avant navigation")
-            captureView?.saveCurrentNote(mode = "blocnote", transcriptions = captureView?.getOrderedTranscriptions() ?: emptyList())
-            scanBlocnoteFiles()
-        }
-        
-        val target = if (currentPageIndex < 0) blocNoteFiles.size - 1 else currentPageIndex - 1
-        if (target < 0) return
-        loadPage(target)
+        val total = engine.countPages()
+        if (total == 0) return
+        engine.savePage()
+        val target = (engine.currentPageIndex - 1).coerceIn(0, total - 1)
+        engine.goToPage(target)
     }
 
     private fun goToNextPage() {
-        if (currentPageIndex < 0) return  // déjà sur nouvelle page
-        scanBlocnoteFiles()
-        if (currentPageIndex >= blocNoteFiles.size - 1) return
-        loadPage(currentPageIndex + 1)
-    }
-
-    private fun loadPage(index: Int) {
-        if (index < 0 || index >= blocNoteFiles.size) return
-        currentPageIndex = index
-        val file = blocNoteFiles[index]
-        
-        // Charger la note — groupLabels est peuplé par loadNoteFile()
-        captureView?.loadNoteFile(file)
-        
-        // Persistance des groupes pour le chargement de page
-        val noteDir = file.parentFile ?: java.io.File(filesDir, "blocnote")
-        val baseName = file.nameWithoutExtension
-        captureView?.groupManager?.persistence = GroupPersistence(GroupPersistence.groupsFile(noteDir, baseName))
-        
-        Log.i(TAG, "Page ${index + 1}/${blocNoteFiles.size}: ${file.name} (labels: ${captureView?.getOrderedTranscriptions()?.size ?: 0})")
+        val total = engine.countPages()
+        if (total == 0) return
+        if (engine.currentPageIndex >= total - 1) return
+        engine.goToPage(engine.currentPageIndex + 1)
     }
 
     // ── Rafraîchir toutes les transcriptions ─────────────────────────

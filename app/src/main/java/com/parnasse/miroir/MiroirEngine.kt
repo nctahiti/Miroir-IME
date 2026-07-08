@@ -57,6 +57,23 @@ class MiroirEngine {
     val generatedStrokes = mutableMapOf<String, List<Triple<Float, Float, Int>>>()
 
     // ═══════════════════════════════════════════════════════════════════
+    // GROUPES
+    // ═══════════════════════════════════════════════════════════════════
+
+    fun initGroupManager(context: Context) {
+        groupManager = GroupManager({}).also {
+            it.params = it.params.copy(transcriptionTimeoutMs = Long.MAX_VALUE)
+            it.pointProvider = { strokeId ->
+                inkStrokeIdToRegistryIndex[strokeId]
+                    ?.let { strokeRegistry.getOrNull(it)?.points ?: emptyList() }
+                    ?: emptyList()
+            }
+            val tmpDir = File(context.cacheDir, "groups"); tmpDir.mkdirs()
+            it.persistence = GroupPersistence(File(tmpDir, "current.groups"))
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // BLOCS
     // ═══════════════════════════════════════════════════════════════════
 
