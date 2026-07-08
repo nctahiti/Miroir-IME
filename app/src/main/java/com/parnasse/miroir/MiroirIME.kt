@@ -691,6 +691,7 @@ class MiroirIME : InputMethodService() {
             val firstLine = cachedTemplateLines.firstOrNull() ?: (spacing * 2f)
 
             var applied = 0
+            var generated = 0
             for (mdmA in mdmAnchors) {
                 val targetLabel = mdmA.label
                 val firstIdx = groupLabels.entries.find { it.value.equals(targetLabel, ignoreCase = true) }?.key
@@ -700,6 +701,11 @@ class MiroirIME : InputMethodService() {
                     val newY = firstLine + mdmA.lineIndex * spacing
                     groupAnchor[firstIdx] = Pair(currentAnchor.first, newY)
                     applied++
+                } else {
+                    // @mot sans groupe → générer les strokes depuis le cache
+                    val strokes = generatedStrokes[targetLabel.lowercase()] ?: continue
+                    generateGroupFromStrokes(targetLabel, strokes, firstLine + mdmA.lineIndex * spacing, mdmA.colIndex)
+                    generated++
                 }
             }
 
@@ -714,6 +720,50 @@ class MiroirIME : InputMethodService() {
             Log.w(TAG, "MDM apply: ${e.message}")
             return false
         }
+    }
+
+    /** Génère un groupe à partir de strokes pré-calculés (modèle calligrapher).
+     *  Ajoute les StrokeRecords au registre, crée le groupe, positionne l'ancre. */
+    private fun generateGroupFromStrokes(label: String, strokes: List<Triple<Float, Float, Int>>, anchorY: Float, colIdx: Int) {
+        val gm = groupManager ?: return
+        if (strokes.isEmpty()) return
+
+        val xs = strokes.map { it.first }; val ys = strokes.map { it.second }
+        val minX = xs.min(); val minY = ys.min(); val maxY = ys.max()
+        val lineH = cachedTemplateLines.getOrNull(1)?.minus(cachedTemplateLines.firstOrNull() ?: 0f) ?: 80f
+        val scale = lineH * 0.7f / (maxY - minY).coerceAtLeast(1f)
+        val anchorX = 60f + colIdx * 300f
+
+        val newIndices = mutableListOf<Int>()
+        var cur = mutableListOf<Pair<Float, Float>>()
+        var times = mutableListOf<Long>()
+        var t = 0L
+        for ((sx, sy, pen) in strokes) {
+            val nx = (sx - minX) * scale + anchorX
+            val ny = (sy - minY) * scale + anchorY
+            if (pen > 0 && cur.isNotEmpty()) {
+                strokeRegistry.add(StrokeRecord(points = cur, timestamps = times, source = "llm"))
+                val ri = strokeRegistry.size - 1; inkStrokeIdToRegistryIndex[ri.toLong()] = ri
+                newIndices.add(ri); cur = mutableListOf(); times = mutableListOf(); t = 0L
+            } else { cur.add(Pair(nx, ny)); times.add(t); t += 10L }
+        }
+        if (cur.isNotEmpty()) {
+            strokeRegistry.add(StrokeRecord(points = cur, timestamps = times, source = "llm"))
+            val ri = strokeRegistry.size - 1; inkStrokeIdToRegistryIndex[ri.toLong()] = ri
+            newIndices.add(ri)
+        }
+        if (newIndices.isEmpty()) return
+
+        val firstIdx = newIndices.first()
+        groupLabels[firstIdx] = label
+        groupAnchor[firstIdx] = Pair(anchorX, anchorY)
+        val group = com.parnasse.miroir.InkGroup(
+            id = java.util.UUID.randomUUID().toString(),
+            strokeIds = newIndices.map { it.toLong() }.toMutableList()
+        )
+        gm.registerLoadedGroup(group)
+        computeBlobPath(group)?.let { groupBlobs[group.id] = it }
+        Log.i(TAG, "MDM généré: '$label' → ${newIndices.size} strokes, ancre=(${anchorX.toInt()},${anchorY.toInt()})")
     }
 
     /** Charge la page en V★ v2.0 (document vivant). */
@@ -1306,6 +1356,11 @@ class MiroirIME : InputMethodService() {
     private var cachedTemplateHeight: Int = -1
     private var lastMdmApplied: Long = 0  // timestamp du dernier applyMdmLayout()
     private val cachedLabelPositions = mutableMapOf<Int, Pair<Float, Float>>()
+    
+    // ── MDM Stroke Generator ────────────────────────────────────────────
+    // Cache des strokes pré-générés (mot → liste de points {x,y,pen})
+    // Format: List<Triple<Float, Float, Int>> où third=0=tracé, 1=levé
+    private val generatedStrokes = mutableMapOf<String, List<Triple<Float, Float, Int>>>()
 
     // ═══ Rafraîchissement EPD ciblé (remplace throttledInvalidate global) ═══
 
@@ -3270,6 +3325,11 @@ class MiroirIME : InputMethodService() {
         } ?: return
         val indices = group.strokeIds.mapNotNull { inkStrokeIdToRegistryIndex[it] }
         if (indices.isEmpty()) return
+        // Si tous les strokes sont LLM → ne pas inférer (label déjà connu)
+        if (indices.all { strokeRegistry.getOrNull(it)?.source == "llm" }) {
+            Log.d(TAG, "Inférence ignorée: groupe LLM (label déjà généré)")
+            return
+        }
 
         // Vérifier que le nombre de strokes n'a pas changé
         val armedCount = timerArmedStrokeCount[firstIdx]

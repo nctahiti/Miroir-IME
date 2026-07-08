@@ -16,7 +16,10 @@ data class StrokeRecord(
     val pressures: MutableList<Float> = mutableListOf(),
     val color: Int = Color.BLACK,
     val width: Float = 3f,
-    var isDeleted: Boolean = false
+    var isDeleted: Boolean = false,
+    /** Source du stroke : "user" (manuscrit), "correction", "llm" (généré).
+     *  Les strokes LLM sont exclus du recyclage et de l'inférence ML Kit. */
+    var source: String = "user"
 ) {
     /** Nombre de points encore actifs */
     val activePoints: Int get() = points.size
