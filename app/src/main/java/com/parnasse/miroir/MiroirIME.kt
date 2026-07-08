@@ -565,8 +565,70 @@ class MiroirIME : InputMethodService() {
                 Log.i(TAG, "V★ v2.0 DIAG save: premier point=(${p0.first}, ${p0.second}) registrySize=${strokeRegistry.size} liveIdx=${allLiveIndices.size}")
             }
             Log.i(TAG, "V★ v2.0 sauvegardé: ${allLiveIndices.size} strokes, $groupCount groupes → ${vstarFile.length()}B")
+            // ═══ MDM — MarkDownMiroir ═══
+            savePageMdm(dir)
         } catch (e: Exception) {
             Log.e(TAG, "savePageV2 erreur: ${e.message}", e)
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // MDM — MarkDownMiroir — Stockage page.mdm
+    // ═══════════════════════════════════════════════════════════════════
+
+    /** Sauvegarde les ancres MDM depuis groupLabels/groupAnchor → page.mdm. */
+    private fun savePageMdm(dir: java.io.File) {
+        try {
+            val anchors = mutableListOf<MdmAnchor>()
+            for ((firstIdx, label) in groupLabels) {
+                val anchor = groupAnchor[firstIdx] ?: continue
+                val lineIdx = if (cachedTemplateLines.isNotEmpty()) {
+                    var best = 0; var bestD = Float.MAX_VALUE
+                    for ((i, ly) in cachedTemplateLines.withIndex()) {
+                        val d = Math.abs(anchor.second - ly)
+                        if (d < bestD) { bestD = d; best = i }
+                    }
+                    best
+                } else 0
+                anchors.add(MdmAnchor(label = label, lineIndex = lineIdx, colIndex = 0))
+            }
+            if (anchors.isEmpty()) return
+            val mdm = MdmParser.generate(anchors)
+            java.io.File(dir, "page.mdm").writeText(mdm)
+            Log.i(TAG, "MDM sauvegardé: ${anchors.size} ancres → ${java.io.File(dir, "page.mdm").length()}B")
+        } catch (e: Exception) {
+            Log.w(TAG, "MDM save: ${e.message}")
+        }
+    }
+
+    /** Charge page.mdm et applique les ancres aux groupes existants (par label). */
+    private fun loadPageMdm(dir: java.io.File) {
+        try {
+            val mdmFile = java.io.File(dir, "page.mdm")
+            if (!mdmFile.exists()) return
+            val src = mdmFile.readText()
+            val mdmAnchors = MdmParser.parse(src)
+            if (mdmAnchors.isEmpty()) return
+
+            val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+            val firstLine = cachedTemplateLines.firstOrNull() ?: (spacing * 2f)
+
+            var applied = 0
+            for (mdmA in mdmAnchors) {
+                val targetLabel = mdmA.label
+                val firstIdx = groupLabels.entries.find { it.value.equals(targetLabel, ignoreCase = true) }?.key ?: continue
+                val newY = firstLine + mdmA.lineIndex * spacing
+                val newX = 60f + mdmA.colIndex * 300f
+                groupAnchor[firstIdx] = Pair(newX, newY)
+                applied++
+            }
+            if (applied > 0) {
+                Log.i(TAG, "MDM chargé: $applied/${mdmAnchors.size} ancres appliquées")
+                rebuildBitmap()
+                imeView?.invalidate()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "MDM load: ${e.message}")
         }
     }
 
@@ -721,6 +783,8 @@ class MiroirIME : InputMethodService() {
                 Log.i(TAG, "V★ v2.0 DIAG load: premier=(${p0.first},${p0.second}) dernier=(${pN.first},${pN.second}) pts=${firstSR.points.size}")
             }
             Log.i(TAG, "V★ v2.0 chargé: page $index — ${strokeRegistry.size} strokes, $groupsLoaded groupes, ${groupLabels.size} labels, ${groupBlobs.size} blobs")
+            // ═══ MDM — MarkDownMiroir ═══
+            loadPageMdm(dir)
 
             doc.close()
             // Conduit V★ v1.1 — réactiver le writer (compatibilité)
