@@ -1292,9 +1292,11 @@ class MiroirIME : InputMethodService() {
                 // Rafraîchir l'affichage pour refléter les nouvelles positions
                 rebuildBitmap()
                 // Recalculer les blobs (leurs bounds étaient basées sur les anciens Y)
-                groupBlobs.clear()
-                for (group in gm.allGroups()) {
-                    computeBlobPath(group)?.let { blob -> groupBlobs[group.id] = blob }
+                gm?.let { mgr ->
+                    groupBlobs.clear()
+                    for (group in mgr.allGroups()) {
+                        computeBlobPath(group)?.let { blob -> groupBlobs[group.id] = blob }
+                    }
                 }
                 imeView?.invalidate()
             }
