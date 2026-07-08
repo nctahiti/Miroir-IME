@@ -601,7 +601,11 @@ class MiroirIME : InputMethodService() {
         }
     }
 
-    /** Charge page.mdm et applique les ancres aux groupes existants (par label). */
+    /** Charge page.mdm — log le markup sans repositionner (non-destructif).
+     *  Le MDM est la source de vérité pour la composition de page.
+     *  Les positions sont déjà chargées depuis V★ (groupAnchor).
+     *  Le repositionnement MDM → ancres sera activé explicitement
+     *  (commande LLM ou bouton « Appliquer mise en page »). */
     private fun loadPageMdm(dir: java.io.File) {
         try {
             val mdmFile = java.io.File(dir, "page.mdm")
@@ -609,24 +613,7 @@ class MiroirIME : InputMethodService() {
             val src = mdmFile.readText()
             val mdmAnchors = MdmParser.parse(src)
             if (mdmAnchors.isEmpty()) return
-
-            val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
-            val firstLine = cachedTemplateLines.firstOrNull() ?: (spacing * 2f)
-
-            var applied = 0
-            for (mdmA in mdmAnchors) {
-                val targetLabel = mdmA.label
-                val firstIdx = groupLabels.entries.find { it.value.equals(targetLabel, ignoreCase = true) }?.key ?: continue
-                val newY = firstLine + mdmA.lineIndex * spacing
-                val newX = 60f + mdmA.colIndex * 300f
-                groupAnchor[firstIdx] = Pair(newX, newY)
-                applied++
-            }
-            if (applied > 0) {
-                Log.i(TAG, "MDM chargé: $applied/${mdmAnchors.size} ancres appliquées")
-                rebuildBitmap()
-                imeView?.invalidate()
-            }
+            Log.i(TAG, "MDM chargé: ${mdmAnchors.size} ancres — ${mdmFile.length()}B — markup préservé")
         } catch (e: Exception) {
             Log.w(TAG, "MDM load: ${e.message}")
         }
