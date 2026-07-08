@@ -84,3 +84,47 @@ ddb90d7 feat: délai clic long réglable
 95a003b fix: absorption restaurée (éviction désactivée)
 890b77d feat: États B/C — effacement, déplacement, témoin
 ```
+
+## MDM — MarkDownMiroir
+
+Le Miroir IME intègre MDM, un langage de composition spatiale pour pages manuscrites.
+Voir https://github.com/nctahiti/mdm pour la spécification complète.
+
+### Fichiers
+
+| Fichier | Rôle |
+|---------|------|
+| `MdmParser.kt` | Parseur/générateur MDM (`@mot`, `;*`, alignement) |
+| `MiroirIME.kt` | `savePageMdm()`, `loadPageMdm()`, `applyMdmLayout()`, `generateGroupFromStrokes()` |
+| `StrokeRecord.kt` | Champ `source` ("user"/"correction"/"llm") |
+
+### Cycle MDM
+
+```
+Sauvegarde : groupLabels + positions → page.mdm (format naturel par interligne)
+Chargement : page.mdm → log (non-destructif)
+Application : applyMdmLayout() → repositionne Y (préserve X) + génère strokes manquants
+LLM        : GET/PUT page.mdm via API Cœur → POST apply → broadcast → Miroir
+```
+
+### Format page.mdm
+
+```mdm
+# 22 lignes × 101px
+@bonjour @le @monde
+
+@hello @world
+```
+
+- En-tête `#` : dimensions du canevas (commentaire)
+- Une ligne = une interligne
+- Lignes vides = interlignes sans contenu
+- `@mot` = ancre spatiale
+
+### StrokeRecord.source
+
+```
+"user"       → inférence ML Kit ✓, recyclage Dataset ✓
+"correction" → réservé
+"llm"        → pas d'inférence, pas de recyclage, label prédéfini
+```
