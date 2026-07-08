@@ -411,6 +411,7 @@ class CaptureView(context: Context) : View(context) {
 
     /** Accès lecture pour les consommateurs (CaptureActivity, MiroirIME). */
     internal fun getGroupLabel(firstIdx: Int): String? = groupLabels[firstIdx]
+    internal fun getGroupTranscription(firstIdx: Int): String? = groupLabels[firstIdx]
 
     /**
      * Retourne les transcriptions dans l'ordre spatial des groupes.

@@ -450,7 +450,7 @@ class CaptureActivity : Activity() {
             val text = cv.getGroupTranscription(firstIdx) ?: return@mapIndexedNotNull null
             if (text.isBlank()) return@mapIndexedNotNull null
             val snapY = StrokeRenderer.computeSnapY(strokes, group)
-            Triple(snapY, idx, text)
+            Triple<Float, Int, String>(snapY, idx, text)
         }
         if (words.isEmpty()) return
         tw.rewriteAll(words)
