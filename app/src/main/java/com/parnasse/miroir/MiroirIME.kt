@@ -576,12 +576,19 @@ class MiroirIME : InputMethodService() {
     // MDM — MarkDownMiroir — Stockage page.mdm
     // ═══════════════════════════════════════════════════════════════════
 
-    /** Sauvegarde les ancres MDM depuis groupLabels/groupAnchor → page.mdm. */
+    /** Sauvegarde les ancres MDM depuis groupLabels/groupAnchor → page.mdm.
+     *  Format naturel : une ligne MDM = une interligne. Mots séparés par des espaces.
+     *  Le clustering est déjà dans le code — le MDM ne fait que l'exposer. */
     private fun savePageMdm(dir: java.io.File) {
         try {
-            val anchors = mutableListOf<MdmAnchor>()
+            // 1. Collecter ancres avec leur ligne ET nettoyer les labels
+            data class LineAnchor(val label: String, val lineIdx: Int, val x: Float)
+            val items = mutableListOf<LineAnchor>()
             for ((firstIdx, label) in groupLabels) {
                 val anchor = groupAnchor[firstIdx] ?: continue
+                // Nettoyer le label : "*G2-4S comprendre" → "comprendre"
+                val cleanLabel = cleanLabelForMdm(label)
+                if (cleanLabel.isEmpty()) continue
                 val lineIdx = if (cachedTemplateLines.isNotEmpty()) {
                     var best = 0; var bestD = Float.MAX_VALUE
                     for ((i, ly) in cachedTemplateLines.withIndex()) {
@@ -590,15 +597,47 @@ class MiroirIME : InputMethodService() {
                     }
                     best
                 } else 0
-                anchors.add(MdmAnchor(label = label, lineIndex = lineIdx, colIndex = 0))
+                items.add(LineAnchor(cleanLabel, lineIdx, anchor.first))
             }
-            if (anchors.isEmpty()) return
-            val mdm = MdmParser.generate(anchors)
-            java.io.File(dir, "page.mdm").writeText(mdm)
-            Log.i(TAG, "MDM sauvegardé: ${anchors.size} ancres → ${java.io.File(dir, "page.mdm").length()}B")
+            if (items.isEmpty()) return
+
+            // 2. Trier par ligne puis par X (ordre de lecture naturel)
+            items.sortWith(compareBy<LineAnchor> { it.lineIdx }.thenBy { it.x })
+
+            // 3. Générer le MDM : une ligne par interligne, mots séparés par espaces
+            val sb = StringBuilder()
+            var currentLine = -1
+            for (item in items) {
+                // Insérer des lignes vides pour les interlignes sautées
+                while (currentLine >= 0 && item.lineIdx > currentLine + 1) {
+                    sb.append("\n")
+                    currentLine++
+                }
+                if (item.lineIdx != currentLine) {
+                    if (currentLine >= 0) sb.append("\n")
+                    currentLine = item.lineIdx
+                } else {
+                    sb.append(" ")
+                }
+                sb.append("@${item.label}")
+            }
+
+            val mdm = sb.toString().trim()
+            if (mdm.isNotEmpty()) {
+                java.io.File(dir, "page.mdm").writeText(mdm)
+                Log.i(TAG, "MDM sauvegardé: ${items.size} ancres, ${items.map { it.lineIdx }.toSet().size} lignes → ${mdm.length}B")
+            }
         } catch (e: Exception) {
             Log.w(TAG, "MDM save: ${e.message}")
         }
+    }
+
+    /** Nettoie un label Miroir (*G2-4S comprendre) → extrait le texte transcrit. */
+    private fun cleanLabelForMdm(raw: String): String {
+        // Format attendu : "*G{idx}-{N}S {texte}" ou juste "{texte}"
+        val cleaned = raw.replace(Regex("\\*G\\d+-\\d+S\\s*"), "").trim()
+        // Garder seulement les caractères alphanumériques et quelques accents
+        return cleaned.replace(Regex("[^\\p{L}\\p{N} _-]"), "").trim()
     }
 
     /** Charge page.mdm — log le markup sans repositionner (non-destructif).
