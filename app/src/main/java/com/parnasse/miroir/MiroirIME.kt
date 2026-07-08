@@ -604,28 +604,31 @@ class MiroirIME : InputMethodService() {
             // 2. Trier par ligne puis par X (ordre de lecture naturel)
             items.sortWith(compareBy<LineAnchor> { it.lineIdx }.thenBy { it.x })
 
-            // 3. Générer le MDM : une ligne par interligne, mots séparés par espaces
+            // 3. Générer le MDM : en-tête + toutes les interlignes (même vides)
             val sb = StringBuilder()
-            var currentLine = -1
+            val totalLines = cachedTemplateLines.size
+            val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+            // En-tête : dimensions du canevas (commentaire, ignoré par le parseur)
+            sb.append("# ${totalLines} lignes × ${spacing.toInt()}px\n")
+            
+            // Produire TOUTES les lignes, y compris les vides
+            val lineToWords = mutableMapOf<Int, MutableList<String>>()
             for (item in items) {
-                // Insérer des lignes vides pour les interlignes sautées
-                while (currentLine >= 0 && item.lineIdx > currentLine + 1) {
-                    sb.append("\n")
-                    currentLine++
+                lineToWords.getOrPut(item.lineIdx) { mutableListOf() }.add(item.label)
+            }
+            
+            for (lineIdx in 0 until totalLines) {
+                val words = lineToWords[lineIdx]
+                if (words != null) {
+                    sb.append(words.joinToString(" ") { "@$it" })
                 }
-                if (item.lineIdx != currentLine) {
-                    if (currentLine >= 0) sb.append("\n")
-                    currentLine = item.lineIdx
-                } else {
-                    sb.append(" ")
-                }
-                sb.append("@${item.label}")
+                if (lineIdx < totalLines - 1) sb.append("\n")
             }
 
-            val mdm = sb.toString().trim()
+            val mdm = sb.toString().trimEnd('\n')
             if (mdm.isNotEmpty()) {
                 java.io.File(dir, "page.mdm").writeText(mdm)
-                Log.i(TAG, "MDM sauvegardé: ${items.size} ancres, ${items.map { it.lineIdx }.toSet().size} lignes → ${mdm.length}B")
+                Log.i(TAG, "MDM sauvegardé: ${items.size} ancres, ${lineToWords.size}/${totalLines} lignes → ${mdm.length}B")
             }
         } catch (e: Exception) {
             Log.w(TAG, "MDM save: ${e.message}")

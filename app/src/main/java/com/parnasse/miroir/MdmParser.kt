@@ -34,7 +34,13 @@ object MdmParser {
         
         for (rawLine in lines) {
             val line = rawLine.trim()
-            if (line.isEmpty() || line.startsWith("#")) continue
+            // Ligne d'en-tête : # N lignes × Xpx — ignorée mais ne compte pas comme ligne
+            if (line.startsWith("#")) continue
+            
+            if (line.isEmpty()) {
+                lineIdx++  // ligne vide = interligne sans contenu
+                continue
+            }
             
             // Détecter alignement
             align = when {
