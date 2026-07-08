@@ -632,12 +632,18 @@ class MiroirIME : InputMethodService() {
         }
     }
 
-    /** Nettoie un label Miroir (*G2-4S comprendre) → extrait le texte transcrit. */
+    /** Nettoie un label Miroir → extrait le texte transcrit.
+     *  Formats possibles : "*G2-4S comprendre", "*G2-4S c'est bien", "bonjour" */
     private fun cleanLabelForMdm(raw: String): String {
-        // Format attendu : "*G{idx}-{N}S {texte}" ou juste "{texte}"
-        val cleaned = raw.replace(Regex("\\*G\\d+-\\d+S\\s*"), "").trim()
-        // Garder seulement les caractères alphanumériques et quelques accents
-        return cleaned.replace(Regex("[^\\p{L}\\p{N} _-]"), "").trim()
+        // Supprimer le préfixe de groupe : "*G{idx}-{N}S "
+        var cleaned = raw.replace(Regex("\\*G\\d+-\\d+S\\s*"), "")
+        // Supprimer les caractères parasites mais garder lettres, accents, chiffres, espaces, apostrophes, tirets
+        cleaned = cleaned.replace(Regex("[^\\p{L}\\p{N} '\\-]"), " ")
+        // Supprimer les espaces multiples
+        cleaned = cleaned.replace(Regex("\\s+"), " ").trim()
+        // Supprimer les mots d'une seule lettre (artefacts)
+        cleaned = cleaned.replace(Regex("\\b\\p{L}\\b"), "").replace(Regex("\\s+"), " ").trim()
+        return cleaned
     }
 
     /** Charge page.mdm — log le markup sans repositionner (non-destructif).
