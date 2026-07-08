@@ -1246,22 +1246,23 @@ class MiroirIME : InputMethodService() {
             val oldLines = cachedTemplateLines
             cachedTemplateLines = t.linePositions(canvasHeight)
             // Re-snap les ancres ET les strokes : chaque groupe garde son numéro de ligne
+            // ET son offset relatif à la ligne (le mot n'est pas sur la ligne, il flotte au-dessus)
             if (oldLines.isNotEmpty() && cachedTemplateLines.isNotEmpty() && groupAnchor.isNotEmpty()) {
                 val newLines = cachedTemplateLines
                 val resnapped = mutableMapOf<Int, Pair<Float, Float>>()
-                // Map: firstIdx → deltaY (pour shifter les strokes après)
                 val anchorDeltas = mutableMapOf<Int, Float>()
                 for ((firstIdx, anchor) in groupAnchor) {
-                    // Trouver l'ancien numéro de ligne
+                    // Trouver l'ancien numéro de ligne et l'offset relatif
                     var oldLineIdx = 0
                     var bestDist = Float.MAX_VALUE
                     for ((i, ly) in oldLines.withIndex()) {
                         val d = Math.abs(anchor.second - ly)
                         if (d < bestDist) { bestDist = d; oldLineIdx = i }
                     }
-                    // Snap à la même ligne dans le nouveau template
+                    val offsetY = anchor.second - oldLines[oldLineIdx]  // distance au-dessus de la ligne
+                    // Appliquer le même offset sur la nouvelle ligne
                     val newLineIdx = oldLineIdx.coerceIn(0, newLines.size - 1)
-                    val newY = newLines[newLineIdx]
+                    val newY = newLines[newLineIdx] + offsetY
                     anchorDeltas[firstIdx] = newY - anchor.second
                     resnapped[firstIdx] = Pair(anchor.first, newY)
                 }
@@ -1288,6 +1289,9 @@ class MiroirIME : InputMethodService() {
                 } else {
                     Log.d(TAG, "Template: ${spacing.toInt()}px — ${groupAnchor.size} ancres re-snappées")
                 }
+                // Rafraîchir l'affichage pour refléter les nouvelles positions
+                rebuildBitmap()
+                imeView?.invalidate()
             }
         }
         cachedTemplateHeight = canvasHeight
