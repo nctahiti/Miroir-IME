@@ -1242,7 +1242,28 @@ class MiroirIME : InputMethodService() {
         // Pré-calculer les positions (cache)
         val t = template
         if (t is Template.HorizontalStaff) {
+            // Sauvegarder les anciennes lignes pour re-snap
+            val oldLines = cachedTemplateLines
             cachedTemplateLines = t.linePositions(canvasHeight)
+            // Re-snap les ancres : chaque groupe garde son numéro de ligne
+            if (oldLines.isNotEmpty() && cachedTemplateLines.isNotEmpty() && groupAnchor.isNotEmpty()) {
+                val newLines = cachedTemplateLines
+                val resnapped = mutableMapOf<Int, Pair<Float, Float>>()
+                for ((firstIdx, anchor) in groupAnchor) {
+                    // Trouver l'ancien numéro de ligne
+                    var oldLineIdx = 0
+                    var bestDist = Float.MAX_VALUE
+                    for ((i, ly) in oldLines.withIndex()) {
+                        val d = Math.abs(anchor.second - ly)
+                        if (d < bestDist) { bestDist = d; oldLineIdx = i }
+                    }
+                    // Snap à la même ligne dans le nouveau template
+                    val newLineIdx = oldLineIdx.coerceIn(0, newLines.size - 1)
+                    resnapped[firstIdx] = Pair(anchor.first, newLines[newLineIdx])
+                }
+                groupAnchor.putAll(resnapped)
+                Log.d(TAG, "Template: ${spacing.toInt()}px — ${groupAnchor.size} ancres re-snappées")
+            }
         }
         cachedTemplateHeight = canvasHeight
         Log.d(TAG, "Template: ${spacing.toInt()}px entre lignes (hauteur=$canvasHeight)")
