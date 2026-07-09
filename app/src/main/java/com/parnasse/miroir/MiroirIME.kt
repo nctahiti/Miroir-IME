@@ -2933,6 +2933,90 @@ class MiroirIME : InputMethodService() {
         return cachedSpatialBounds ?: emptyList()
     }
 
+    /**
+     * 🪄 Décompose un groupe en strokes individuels.
+     * Chaque stroke du groupe devient son propre groupe d'un seul stroke.
+     * @return true si la décomposition a eu lieu
+     */
+    fun decomposeGroupAt(strokeIndex: Int): Boolean {
+        val groups = getSpatialGroups()
+        val targetGroupIdx = groups.indexOfFirst { strokeIndex in it }
+        if (targetGroupIdx < 0) {
+            Log.w(TAG, "🪄 Décompose: stroke $strokeIndex introuvable dans les groupes")
+            return false
+        }
+        val targetGroup = groups[targetGroupIdx]
+        if (targetGroup.size <= 1) {
+            Log.i(TAG, "🪄 Décompose: groupe déjà unitaire (${targetGroup.size} stroke)")
+            return false
+        }
+        // Remplacer le groupe par des groupes d'un seul stroke
+        val newGroups = groups.toMutableList()
+        newGroups.removeAt(targetGroupIdx)
+        for (i in targetGroup.indices.reversed()) {
+            newGroups.add(targetGroupIdx, listOf(targetGroup[i]))
+        }
+        // Mettre à jour le cache spatial
+        cachedSpatialGroups = newGroups
+        cachedSpatialBounds = newGroups.map { group ->
+            val r = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
+            for (idx in group) {
+                if (idx >= strokeRegistry.size) continue
+                for ((px, py) in strokeRegistry[idx].points) {
+                    if (px < r.left) r.left = px; if (px > r.right) r.right = px
+                    if (py < r.top) r.top = py; if (py > r.bottom) r.bottom = py
+                }
+            }
+            r
+        }
+        Log.i(TAG, "🪄 Décompose: groupe [$targetGroupIdx] (${targetGroup.size} strokes) → ${targetGroup.size} groupes unitaires")
+        imeView?.postInvalidate()
+        return true
+    }
+
+    /**
+     * 🔗 Fusionne deux groupes en un seul.
+     * Met à jour le cache spatial et déclenche la ré-inférence.
+     */
+    fun mergeGroups(groupA: List<Int>, groupB: List<Int>) {
+        val currentGroups = getSpatialGroups().map { it.toMutableList() }.toMutableList()
+        val idxA = currentGroups.indexOfFirst { it.any { s -> s in groupA } }
+        val idxB = currentGroups.indexOfFirst { it.any { s -> s in groupB } }
+        if (idxA < 0 || idxB < 0 || idxA == idxB) {
+            Log.w(TAG, "🔗 MergeGroups: groupes introuvables ou identiques (A=$idxA, B=$idxB)")
+            return
+        }
+
+        // Fusionner les deux groupes
+        val merged = (currentGroups[idxA] + currentGroups[idxB]).distinct().toMutableList()
+        val highIdx = maxOf(idxA, idxB)
+        val lowIdx = minOf(idxA, idxB)
+        currentGroups.removeAt(highIdx)
+        currentGroups.removeAt(lowIdx)
+        currentGroups.add(lowIdx, merged)
+
+        // Mettre à jour le cache spatial
+        cachedSpatialGroups = currentGroups
+        cachedSpatialBounds = currentGroups.map { group ->
+            val r = android.graphics.RectF(Float.MAX_VALUE, Float.MAX_VALUE, Float.MIN_VALUE, Float.MIN_VALUE)
+            for (idx in group) {
+                if (idx >= strokeRegistry.size) continue
+                for ((px, py) in strokeRegistry[idx].points) {
+                    if (px < r.left) r.left = px; if (px > r.right) r.right = px
+                    if (py < r.top) r.top = py; if (py > r.bottom) r.bottom = py
+                }
+            }
+            r
+        }
+
+        // Déclencher la ré-inférence du groupe fusionné
+        inferenceQueue.add(merged)
+        startInferencePipeline()
+        rebuildBitmap()
+        imeView?.postInvalidate()
+        Log.i(TAG, "🔗 MergeGroups: [${groupA.size}+${groupB.size}] → ${merged.size} strokes fusionnés")
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // TOUCH HELPER (Onyx SDK)
     // ═══════════════════════════════════════════════════════════════════

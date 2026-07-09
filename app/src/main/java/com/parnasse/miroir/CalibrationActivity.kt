@@ -71,7 +71,6 @@ class CalibrationActivity : Activity() {
     private lateinit var spatialYSeek: SeekBar
     private lateinit var delaySeek: SeekBar
     private lateinit var hoverSeek: SeekBar
-    private var testView: CaptureView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -107,7 +106,6 @@ class CalibrationActivity : Activity() {
         spatialXSeek.setOnSeekBarChangeListener(simpleListener { v ->
             xLabel.text = "Distance spatiale X (↔) : ${v + 5} px"
             prefs(this).edit().putFloat(KEY_SPATIAL_DISTANCE_X, (v + 5).toFloat()).apply()
-            testView?.invalidate()
         })
 
         val yLabel = addSlider(root, "Distance spatiale Y (↕)", 5, 500, currentY.toInt(), "px")
@@ -115,7 +113,6 @@ class CalibrationActivity : Activity() {
         spatialYSeek.setOnSeekBarChangeListener(simpleListener { v ->
             yLabel.text = "Distance spatiale Y (↕) : ${v + 5} px"
             prefs(this).edit().putFloat(KEY_SPATIAL_DISTANCE_Y, (v + 5).toFloat()).apply()
-            testView?.invalidate()
         })
 
         val currentRays = p.getInt(KEY_BLOB_RAY_COUNT, DEFAULT_BLOB_RAY_COUNT)
@@ -134,7 +131,6 @@ class CalibrationActivity : Activity() {
         delaySeek.setOnSeekBarChangeListener(simpleListener { v ->
             delayLabel.text = "Délai inférence : ${v + 500} ms"
             prefs(this).edit().putLong(KEY_AUTO_INFER_DELAY, (v + 500).toLong()).apply()
-            testView?.reloadAutoInferDelay()
         })
 
         val hoverLabel = addSlider(root, "Appui long (sélection)", 500, 3000, currentHover.toInt(), "ms")
@@ -215,35 +211,6 @@ class CalibrationActivity : Activity() {
         })
         root.addView(btnRow)
 
-        // ── Playground ─────────────────────────────────────────────────
-        val playgroundBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(4), 0, dp(8))
-        }
-        val mergeBtn = TextView(this).apply {
-            text = "🔗"; textSize = 28f; setTextColor(Color.WHITE)
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            setBackgroundColor(Color.argb(180, 80, 80, 80)); gravity = Gravity.CENTER
-            setOnClickListener {
-                val newState = !(testView?.mergeMode ?: false)
-                testView?.mergeMode = newState; testView?.mergeSourceGroup = null
-                this.text = if (newState) "🔗✓" else "🔗"
-                this.setBackgroundColor(if (newState) Color.argb(200, 100, 180, 255) else Color.argb(180, 80, 80, 80))
-                if (newState) {
-                    testView?.currentMode = CaptureMode.EDIT_TEMPORAL
-                    Toast.makeText(this@CalibrationActivity, "🔗 Tapez deux groupes pour les fusionner", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-        playgroundBar.addView(mergeBtn)
-        val modeIndicatorBtn = TextView(this).apply {
-            text = "🚢"; textSize = 28f; setTextColor(Color.WHITE)
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            setBackgroundColor(Color.argb(180, 60, 60, 60)); gravity = Gravity.CENTER
-        }
-        playgroundBar.addView(modeIndicatorBtn)
-        root.addView(playgroundBar)
-
         // ═══ 💾 Stockage ═══
         root.addView(sectionHeader("💾 Stockage"))
         val vstarCb = android.widget.CheckBox(this).apply {
@@ -261,22 +228,8 @@ class CalibrationActivity : Activity() {
         }
         root.addView(vstarCb)
 
-        val cv = CaptureView(this).apply { isBlocnoteMode = true; onWordGroupCompleted = null }
-        testView = cv
-        cv.onModeChanged = { mode ->
-            modeIndicatorBtn.text = when {
-                cv.currentMode == CaptureMode.EDIT_TEMPORAL -> "⏳"
-                mode == CaptureMode.CAPTURE -> "🚢"
-                mode == CaptureMode.EDIT -> "🔦"
-                else -> "🚢"
-            }
-        }
-        root.addView(cv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(scroll)
     }
-
-    override fun onResume() { super.onResume(); testView?.initTouchHelper() }
-    override fun onDestroy() { testView?.releaseTouchHelper(); testView = null; super.onDestroy() }
 
     private fun sectionHeader(title: String): TextView = TextView(this).apply {
         text = title; setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
