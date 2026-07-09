@@ -17,18 +17,24 @@
         android:theme="@android:style/Theme.Translucent.NoTitleBar"
         tools:replace="android:label,android:allowBackup">
 
-        <!-- ⚙ Calibration — point d'entrée de l'app (l'IME est activé dans les paramètres) -->
+        <!-- 🚀 Lanceur — ouvre l'IME directement -->
         <activity
-            android:name=".CalibrationActivity"
+            android:name=".LaunchActivity"
             android:exported="true"
-            android:label="Miroir ⚙"
-            android:launchMode="singleInstance"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- ⚙ Calibration — accessible via l'IME (bouton ⚙) -->
+        <activity
+            android:name=".CalibrationActivity"
+            android:exported="false"
+            android:label="Calibration" />
 
         <service
             android:name=".MiroirService"
