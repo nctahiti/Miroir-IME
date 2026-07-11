@@ -13,14 +13,42 @@ import android.view.WindowManager
 import android.widget.*
 
 /**
- * CaptureActivity — surface d'écriture légère (pas l'IME).
- * Utilise MiroirEngine pour les strokes/groupes/pages.
- * L'IME reste le clavier pour les autres apps.
+ * CaptureActivity — surface d'écriture contextuelle.
+ *
+ * Deux modes d'invocation :
+ *   MODE STANDALONE (sans extras) : bloc auto-généré, surface de capture libre.
+ *   MODE CONTEXTUEL (avec extras)  : bloc/page fournis par Parnasse/Flutter.
+ *
+ * Extras supportés :
+ *   EXTRA_BLOCK_ID   — UUID du bloc Parnasse à ouvrir
+ *   EXTRA_PAGE_N     — page à afficher (défaut 0)
+ *   EXTRA_MODE        — "bloc" (capture) ou "note" (mise en forme MDM)
+ *   EXTRA_NOTE_ID     — note cible (mode "note")
+ *   EXTRA_SCREENSHOT_PATH — fond d'écran (screenshot Flutter)
+ *   EXTRA_COEUR_URL   — URL du Cœur Parnasse
  */
 class CaptureActivity : Activity() {
 
     companion object {
         private const val TAG = "Miroir/Capture"
+
+        // ── Extras d'invocation ────────────────────────────────────────
+        const val EXTRA_LIBRARY_ID      = "library_id"
+        const val EXTRA_SHELF_ID        = "shelf_id"
+        const val EXTRA_BLOCK_ID        = "block_id"
+        const val EXTRA_NOTE_ID         = "note_id"
+        const val EXTRA_PAGE_N          = "page_n"
+        const val EXTRA_MODE            = "mode"
+        const val EXTRA_OFFSET_LEFT     = "offset_left"
+        const val EXTRA_OFFSET_TOP      = "offset_top"
+        const val EXTRA_SCREENSHOT_PATH = "screenshot_path"
+        const val EXTRA_SESSION_TEXT    = "session_text"
+        const val EXTRA_SESSION_ID      = "session_id"
+        const val EXTRA_SAMPLE_COUNT    = "sample_count"
+        const val EXTRA_TOTAL_COUNT     = "total_count"
+        const val EXTRA_PREDICTION      = "prediction"
+        const val EXTRA_FLIP_LAYOUT     = "flip_layout"
+        const val EXTRA_COEUR_URL       = "coeur_url"
     }
 
     private val engine = MiroirEngine()
@@ -31,16 +59,50 @@ class CaptureActivity : Activity() {
         Thread(r, "miroir-capture-infer").apply { priority = Thread.NORM_PRIORITY - 1 }
     }
 
+    // ── Contexte d'invocation ──────────────────────────────────────────
+    private var invocBlockId: String? = null
+    private var invocPageN: Int = 0
+    private var invocMode: String = "bloc"   // "bloc" | "note"
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        Log.i(TAG, "=== CAPTURE ACTIVITY (unified) ===")
+
+        // ═══ Lire le contexte d'invocation ═══
+        invocBlockId = intent.getStringExtra(EXTRA_BLOCK_ID)
+        invocPageN   = intent.getIntExtra(EXTRA_PAGE_N, 0)
+        invocMode    = intent.getStringExtra(EXTRA_MODE) ?: "bloc"
+
+        val isContextual = invocBlockId != null
+        Log.i(TAG, "=== CAPTURE ACTIVITY === mode=$invocMode contextual=$isContextual blockId=$invocBlockId page=$invocPageN")
 
         recognizer = DigitalInkWrapper(this).also { it.load() }
-        engine.ensureBlockDir(this, "capture", System.currentTimeMillis())
+
+        // ═══ Initialiser le moteur selon le contexte ═══
+        if (isContextual) {
+            engine.openBlockDir(this, invocBlockId!!)
+        } else {
+            engine.ensureBlockDir(this, "capture", System.currentTimeMillis())
+        }
         engine.initGroupManager(this)
         engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
 
+        // Charger la page demandée
+        if (isContextual && invocPageN > 0 && engine.countPages() > invocPageN) {
+            engine.goToPage(invocPageN)
+        }
+
+        // ═══ Construire l'interface selon le mode ═══
+        when (invocMode) {
+            else -> buildBlockView()  // toujours le mode capture pour l'Activity standalone
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // VUE BLOC — surface de capture manuscrite
+    // ═══════════════════════════════════════════════════════════════════
+
+    private fun buildBlockView() {
         val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
 
         captureView = CaptureSurface(this).also { cv ->
@@ -85,7 +147,7 @@ class CaptureActivity : Activity() {
                 captureView?.invalidate()
             }
         })
-        // Espace
+        // Espace pousseur
         toolbar.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
         toolbar.addView(makeBtn("💾", Color.argb(200, 0, 100, 50)) {
             engine.savePage()
@@ -99,6 +161,10 @@ class CaptureActivity : Activity() {
         setContentView(root)
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // LIFECYCLE
+    // ═══════════════════════════════════════════════════════════════════
+
     override fun onResume() {
         super.onResume()
         captureView?.initTouchHelper()
@@ -110,6 +176,10 @@ class CaptureActivity : Activity() {
         super.onDestroy()
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // HELPERS
+    // ═══════════════════════════════════════════════════════════════════
+
     private fun makeBtn(text: String, bg: Int, onClick: () -> Unit): TextView =
         TextView(this).apply {
             this.text = text; textSize = 22f; setTextColor(Color.WHITE)
@@ -117,7 +187,10 @@ class CaptureActivity : Activity() {
             gravity = Gravity.CENTER; setOnClickListener { onClick() }
         }
 
-    // ── Surface de capture ──────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+    // SURFACE DE CAPTURE
+    // ═══════════════════════════════════════════════════════════════════
+
     inner class CaptureSurface(context: android.content.Context) : View(context) {
         var engine: MiroirEngine? = null
         private val strokePaint = Paint().apply {
@@ -201,18 +274,10 @@ class CaptureActivity : Activity() {
                 MotionEvent.ACTION_UP -> {
                     if (!isStylusDown) return true
                     isStylusDown = false
-                    // Rastériser le stroke dans le bitmap
                     bitmapCanvas?.drawPath(currentPath, strokePaint)
-                    // Créer StrokeRecord
-                    val points = mutableListOf<Pair<Float, Float>>()
-                    // Approximer les points depuis le path (simplifié)
-                    val pathPoints = floatArrayOf(0f, 0f)
-                    // On va utiliser une approche simplifiée : enregistrer via engine
                     val sr = StrokeRecord()
-                    // Collect points from touch history
                     sr.points.add(Pair(event.x, event.y))
                     engine?.strokeRegistry?.add(sr)
-                    // Schedule inference
                     scheduleInference()
                     currentPath.reset()
                     invalidate()
@@ -245,14 +310,11 @@ class CaptureActivity : Activity() {
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            // Fond
             bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
-            // Template
             val eng = engine ?: return
             for (ly in eng.cachedTemplateLines) {
                 canvas.drawLine(0f, ly, width.toFloat(), ly, templatePaint)
             }
-            // Stroke en cours
             if (isStylusDown) {
                 canvas.drawPath(currentPath, strokePaint)
             }

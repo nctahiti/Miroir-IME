@@ -85,6 +85,16 @@ class MiroirEngine {
         return dir
     }
 
+    fun openBlockDir(context: Context, blockId: String): File {
+        val blocksDir = File(context.cacheDir, "blocks"); blocksDir.mkdirs()
+        val dir = File(blocksDir, blockId)
+        if (!dir.exists()) dir.mkdirs()
+        blockDir = dir
+        currentPageIndex = 0
+        Log.i(TAG, "Bloc ouvert: $blockId (pages=${countPages()})")
+        return dir
+    }
+
     fun closeBlock() {
         savePage()
         groupManager?.clearAll()
