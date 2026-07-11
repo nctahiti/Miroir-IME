@@ -1578,7 +1578,8 @@ class MiroirIME : InputMethodService() {
         val mode: String = "bloc",
         val noteId: String? = null,
         val libraryId: String? = null,
-        val coeurUrl: String? = null
+        val coeurUrl: String? = null,
+        val totalNotes: Int = 0
     )
 
     private inner class ContextReceiver : android.content.BroadcastReceiver() {
@@ -1591,30 +1592,29 @@ class MiroirIME : InputMethodService() {
             val noteId = intent.getStringExtra("note_id")
             val libraryId = intent.getStringExtra("library_id")
             val coeurUrl = intent.getStringExtra("coeur_url")
+            val totalNotes = intent.getIntExtra("total_notes", 0)
 
-            Log.i(TAG, "🎯 Contexte Parnasse: bloc=$blockId page=$pageN mode=$mode")
+            Log.i(TAG, "🎯 Contexte Parnasse: bloc=$blockId page=$pageN mode=$mode total=$totalNotes")
 
-            parnasseContext = ParnasseContext(blockId, pageN, mode, noteId, libraryId, coeurUrl)
+            parnasseContext = ParnasseContext(blockId, pageN, mode, noteId, libraryId, coeurUrl, totalNotes)
 
-            // Ouvrir le bloc et positionner la page
+            // Ouvrir le bloc et positionner la page (toujours, même si nouvelle)
             openBlockDir(blockId)
-            if (pageN >= 0 && pageN < countPages()) {
-                currentPageIndex = pageN
-                Log.i(TAG, "Page positionnée: $pageN")
+            currentPageIndex = pageN.coerceAtLeast(0)
+            Log.i(TAG, "Page positionnée: $currentPageIndex (pages existantes=${countPages()})")
+
+            // ═══ Reconstruire l'IME avec le nouveau contexte ═══
+            // (nécessaire si le broadcast arrive après onStartInputView)
+            try {
+                setInputView(onCreateInputView())
+                updatePageIndicator()
+            } catch (e: Exception) {
+                Log.w(TAG, "setInputView: ${e.message}")
             }
         }
     }
 
     override fun onCreateInputView(): View {
-        // ═══ Lire le mode depuis le contexte Parnasse ═══
-        val mode = parnasseContext?.mode ?: "bloc"
-        Log.i(TAG, "onCreateInputView — mode=$mode (blocId=${parnasseContext?.blockId})")
-
-        if (mode == "note") {
-            return buildNoteInputView()
-        }
-
-        // ═══ MODE BLOC — surface de capture stylet ═══
         Log.i(TAG, "onCreateInputView — plein écran")
 
         val density = resources.displayMetrics.density
@@ -1716,6 +1716,7 @@ class MiroirIME : InputMethodService() {
                 loadPage(currentPageIndex)
                 refreshAll()
                 updatePageIndicator()
+                broadcastPageChanged()
             }
         })
 
@@ -1769,6 +1770,7 @@ class MiroirIME : InputMethodService() {
             }
             refreshAll()
             updatePageIndicator()
+            broadcastPageChanged()
         })
 
         toolbar.addView(makeButton("+") {
@@ -2018,97 +2020,70 @@ class MiroirIME : InputMethodService() {
         return root
     }
 
-    /** Vue mise en forme MDM — mode "note" du contexte Parnasse. */
-    private fun buildNoteInputView(): View {
-        Log.i(TAG, "buildNoteInputView — éditeur MDM")
-
-        val root = android.widget.FrameLayout(this).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT)
-            setBackgroundColor(Color.WHITE)
-        }
-
-        val content = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
-        }
-        root.addView(content, android.widget.FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // ── Toolbar minimaliste ──────────────────────────────────
-        val toolbar = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            setPadding(16, 24, 16, 8)
-            setBackgroundColor(Color.argb(240, 245, 245, 250))
-        }
-
-        val closeBtn = android.widget.TextView(this).apply {
-            text = "✕"; textSize = 22f; setTextColor(Color.argb(200, 150, 0, 0))
-            setPadding(16, 8, 16, 8); setOnClickListener { requestHideSelf(0) }
-        }
-        toolbar.addView(closeBtn)
-
-        val titleView = android.widget.TextView(this).apply {
-            text = "Note — ${parnasseContext?.blockId?.take(8) ?: "?"}…"
-            textSize = 14f; setTextColor(Color.argb(150, 60, 60, 60))
-            setPadding(12, 0, 12, 0)
-        }
-        toolbar.addView(titleView)
-
-        val saveBtn = android.widget.TextView(this).apply {
-            text = "💾"; textSize = 22f; setPadding(16, 8, 16, 8)
-            setOnClickListener {
-                // Sauvegarder le MDM
-                val bd = blockDir ?: return@setOnClickListener
-                val dir = java.io.File(bd, "page_$currentPageIndex")
-                dir.mkdirs()
-                java.io.File(dir, "page.mdm").writeText(mdmEditText?.text?.toString() ?: "")
-                android.widget.Toast.makeText(this@MiroirIME, "💾 Sauvegardé", android.widget.Toast.LENGTH_SHORT).show()
-                Log.i(TAG, "MDM sauvegardé page $currentPageIndex")
-            }
-        }
-        toolbar.addView(saveBtn)
-
-        content.addView(toolbar, android.widget.LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-
-        // ── Éditeur MDM ──────────────────────────────────────────
-        mdmEditText = android.widget.EditText(this).apply {
-            setPadding(24, 16, 24, 16)
-            textSize = 16f
-            gravity = android.view.Gravity.TOP or android.view.Gravity.START
-            setBackgroundColor(Color.WHITE)
-            isVerticalScrollBarEnabled = true
-            setHint("# 22 lignes × 99px\n\n@mot1 @mot2 …")
-            // Charger le MDM existant
-            val bd = blockDir
-            if (bd != null) {
-                val mdmFile = java.io.File(bd, "page_$currentPageIndex/page.mdm")
-                if (mdmFile.exists()) {
-                    try { setText(mdmFile.readText()) } catch (_: Exception) {}
-                }
-            }
-        }
-        content.addView(mdmEditText, android.widget.LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-
-        rootView = root
-        return root
-    }
-
-    private var mdmEditText: android.widget.EditText? = null
-
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         val app = info?.packageName ?: "unknown"
         Log.i(TAG, "onStartInputView — app=$app field=${info?.fieldName ?: "?"} inputType=${info?.inputType ?: 0}")
+
+        // ═══ Lire le token de connexion depuis le Cœur (UUID Parnasse) ═══
+        // Relire si restarting ou si pas de contexte
+        if (restarting || parnasseContext == null) {
+            if (app == "com.example.le_parnasse_numerique") {
+            // Attendre que le broadcast arrive (max 500ms)
+            for (i in 0..10) {
+                if (parnasseContext != null) break
+                try { Thread.sleep(50) } catch (_: Exception) {}
+            }
+            // Token Cœur : lire __miroir__ pour obtenir l'UUID Parnasse (thread séparé)
+            if (parnasseContext == null) {
+                val latch = java.util.concurrent.CountDownLatch(1)
+                Thread {
+                    try {
+                        val coeurUrl = "http://127.0.0.1:8008"
+                        val url = java.net.URL("$coeurUrl/api/miroir/state?block_id=__miroir__")
+                        val conn = url.openConnection() as java.net.HttpURLConnection
+                        conn.connectTimeout = 2000
+                        conn.readTimeout = 2000
+                        val code = conn.responseCode
+                        if (code == 200) {
+                            val body = conn.inputStream.bufferedReader().readText()
+                            conn.disconnect()
+                            val json = org.json.JSONObject(body)
+                            val parnasseBlockId = json.optString("parnasse_block_id", "")
+                            if (parnasseBlockId.isNotEmpty()) {
+                                parnasseContext = ParnasseContext(
+                                    blockId = parnasseBlockId,
+                                    pageN = json.optInt("page_n", 0),
+                                    mode = json.optString("mode", "bloc"),
+                                    noteId = json.optString("note_id", null),
+                                    libraryId = json.optString("library_id", null),
+                                    coeurUrl = coeurUrl,
+                                    totalNotes = json.optInt("total_notes", 0)
+                                )
+                                Log.i(TAG, "🎫 Token Cœur: UUID=$parnasseBlockId page=${parnasseContext!!.pageN}")
+                            }
+                        } else {
+                            conn.disconnect()
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Token Cœur: ${e.message}")
+                    } finally {
+                        latch.countDown()
+                    }
+                }.start()
+                // Attendre max 3s que le thread HTTP finisse
+                try { latch.await(3, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+            }
+        }
+        }
+
         // ═══ Ouvrir un bloc pour cette app (sauf si contexte Parnasse déjà ouvert) ═══
         if (parnasseContext == null) {
             ensureBlockDir(app, System.currentTimeMillis())
         } else {
-            Log.i(TAG, "Bloc Parnasse déjà ouvert: ${blockDir?.name} — skip ensureBlockDir")
+            openBlockDir(parnasseContext!!.blockId)
+            currentPageIndex = parnasseContext!!.pageN.coerceAtLeast(0)
+            Log.i(TAG, "Bloc Parnasse: ${blockDir?.name} page=$currentPageIndex")
         }
         // Conduit V★ — initialiser le writer pour la première page
         if (vstarWriter == null || vstarWriter?.isActive() != true) {
@@ -3813,8 +3788,39 @@ class MiroirIME : InputMethodService() {
 
     /** Met à jour l'indicateur de page (numéro page courante / totale). */
     private fun updatePageIndicator() {
-        val total = maxOf(currentPageIndex + 1, countPages())
+        val total = if (parnasseContext?.totalNotes ?: 0 > 0) parnasseContext!!.totalNotes
+                    else maxOf(currentPageIndex + 1, countPages())
         pageLabel?.text = "${currentPageIndex + 1}/$total"
+    }
+
+    /** Notifie le Cœur du changement de page (HTTP, fiable). */
+    private fun broadcastPageChanged() {
+        try {
+            val coeurUrl = parnasseContext?.coeurUrl ?: "http://127.0.0.1:8008"
+            val json = org.json.JSONObject().apply {
+                put("block_id", parnasseContext?.blockId ?: blockDir?.name ?: "")
+                put("page_n", currentPageIndex)
+                put("mode", if (isFormattingMode) "note" else "bloc")
+                put("total_notes", parnasseContext?.totalNotes ?: 0)
+            }
+            Thread {
+                try {
+                    val url = java.net.URL("$coeurUrl/api/miroir/state")
+                    val conn = url.openConnection() as java.net.HttpURLConnection
+                    conn.requestMethod = "POST"
+                    conn.setRequestProperty("Content-Type", "application/json")
+                    conn.doOutput = true
+                    conn.outputStream.write(json.toString().toByteArray())
+                    val code = conn.responseCode
+                    conn.disconnect()
+                    Log.i(TAG, "📡 State → Cœur: page=${currentPageIndex + 1} (HTTP $code)")
+                } catch (e: Exception) {
+                    Log.w(TAG, "📡 State POST failed: ${e.message}")
+                }
+            }.start()
+        } catch (e: Exception) {
+            Log.w(TAG, "broadcastPageChanged: ${e.message}")
+        }
     }
 
     /** Compte le nombre total de pages sauvegardées (avec contenu). */
@@ -3928,6 +3934,25 @@ class MiroirIME : InputMethodService() {
     /** Active/désactive le panneau de mise en forme.
      *  En mode 📝 : mode clavier (non plein écran) → l'app hôte est visible au-dessus.
      *  Le stylet n'est plus en mode capture : il sert de curseur. */
+    /** Génère du MDM depuis les groupLabels (ordre spatial par ligne). */
+    private fun generateMdmFromLabels(): String {
+        if (groupLabels.isEmpty()) return ""
+        val sb = StringBuilder()
+        val spacingPx = (template as? Template.HorizontalStaff)?.spacingPx ?: 120f
+        sb.appendLine("# ${cachedTemplateLines.size} lignes × ${spacingPx.toInt()}px")
+        sb.appendLine()
+        val byLine = mutableMapOf<Int, MutableList<String>>()
+        for ((firstIdx, label) in groupLabels) {
+            val anchor = groupAnchor[firstIdx]
+            val lineIdx = anchor?.let { snapToLine(it.second).toInt() } ?: 0
+            byLine.getOrPut(lineIdx) { mutableListOf() }.add("@$label")
+        }
+        for (lineIdx in byLine.keys.sorted()) {
+            sb.appendLine(byLine[lineIdx]!!.joinToString(" "))
+        }
+        return sb.toString()
+    }
+
     private fun toggleFormattingMode() {
         val panel = formattingPanel ?: return
         val surface = imeView ?: return
@@ -3942,6 +3967,21 @@ class MiroirIME : InputMethodService() {
                 isInsertionMode = false
                 insertionCursorPos = -1
             }
+            // ═══ SYNCHRO CAPTURE → MDM : injecter les labels dans le champ hôte ═══
+            val mdm = generateMdmFromLabels()
+            if (mdm.isNotBlank()) {
+                val ic = currentInputConnection
+                if (ic != null) {
+                    ic.finishComposingText()
+                    // Remplacer le contenu existant par le MDM généré
+                    val before = ic.getTextBeforeCursor(50000, 0) ?: ""
+                    val after = ic.getTextAfterCursor(50000, 0) ?: ""
+                    val totalLen = before.length + after.length
+                    ic.deleteSurroundingText(before.length, after.length)
+                    ic.commitText(mdm, 1)
+                    Log.i(TAG, "📝 Synchro capture→MDM: ${mdm.take(80)}…")
+                }
+            }
             // Forcer le mode clavier (non plein écran) → app hôte visible au-dessus
             updateFullscreenMode()
             // Fond sombre semi-transparent pour le panneau
@@ -3953,6 +3993,8 @@ class MiroirIME : InputMethodService() {
             modeIndicator?.text = "📝"
         } else {
             // ═══ MODE CAPTURE ═══
+            // ═══ SYNCHRO MDM → CAPTURE : parser les @mot et générer les strokes ═══
+            applyMdmLayout()
             updateFullscreenMode()
             root.setBackgroundColor(Color.WHITE)
             panel.visibility = View.GONE
