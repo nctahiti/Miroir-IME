@@ -2139,7 +2139,7 @@ class MiroirIME : InputMethodService() {
         startCoeurPolling()
     }
 
-    /** TRANSMUTATION — Polling avec synchro de page gardée (anti-oscillation). */
+    /** TRANSMUTATION — Polling : détection de bloc via __miroir__ + synchro page. */
     private fun startCoeurPolling() {
         if (parnasseContext == null) return
         if (coeurPollActive) return
@@ -2151,25 +2151,23 @@ class MiroirIME : InputMethodService() {
                 if (!coeurPollActive) return
                 Thread {
                     try {
-                        val blockId = parnasseContext?.blockId ?: return@Thread
-                        val url = java.net.URL("$coeurUrl/api/miroir/state?block_id=$blockId")
-                        val conn = url.openConnection() as java.net.HttpURLConnection
-                        conn.connectTimeout = 1000; conn.readTimeout = 1000
-                        val code = conn.responseCode
-                        if (code == 200) {
-                            val body = conn.inputStream.bufferedReader().readText()
-                            conn.disconnect()
-                            val json = org.json.JSONObject(body)
-                            val newParnasseBlockId = json.optString("parnasse_block_id", "")
-                            val newPage = json.optInt("page_n", -1)
-
-                            // ═══ Détecter un changement de bloc (commande "open" de Flutter) ═══
+                        // ═══ 1. Détecter les changements de bloc via __miroir__ ═══
+                        val miroirUrl = java.net.URL("$coeurUrl/api/miroir/state?block_id=__miroir__")
+                        val miroirConn = miroirUrl.openConnection() as java.net.HttpURLConnection
+                        miroirConn.connectTimeout = 1000; miroirConn.readTimeout = 1000
+                        if (miroirConn.responseCode == 200) {
+                            val miroirBody = miroirConn.inputStream.bufferedReader().readText()
+                            miroirConn.disconnect()
+                            val miroirJson = org.json.JSONObject(miroirBody)
+                            val newParnasseBlockId = miroirJson.optString("parnasse_block_id", "")
                             val currentBlockId = parnasseContext?.blockId ?: ""
+                            
                             if (newParnasseBlockId.isNotEmpty() && newParnasseBlockId != currentBlockId) {
-                                Log.i(TAG, "🔄 Cœur → nouveau bloc $newParnasseBlockId (était: $currentBlockId)")
+                                Log.i(TAG, "🔄 __miroir__ → nouveau bloc $newParnasseBlockId (était: $currentBlockId)")
+                                val newPage = miroirJson.optInt("page_n", 0)
                                 uiHandler.post {
                                     savePage()
-                                    openBlockDir(newParnasseBlockId)
+                                    openBlockDir(newParnasseBlockId)  // crée le bloc s'il n'existe pas
                                     currentPageIndex = newPage.coerceAtLeast(0)
                                     if (!loadPage(currentPageIndex)) {
                                         clearPage(); savePage()
@@ -2179,11 +2177,28 @@ class MiroirIME : InputMethodService() {
                                 }
                                 parnasseContext = parnasseContext?.copy(
                                     blockId = newParnasseBlockId,
-                                    pageN = newPage
+                                    pageN = newPage,
+                                    totalNotes = miroirJson.optInt("total_notes", parnasseContext?.totalNotes ?: 0)
                                 )
-                                lastLocalPageChange = System.currentTimeMillis() // reset guard
-                            } else if (newPage >= 0 && newPage != currentPageIndex) {
-                                // ═══ Synchro de page GARDÉE : suivre seulement si pas d'action locale récente ═══
+                                lastLocalPageChange = System.currentTimeMillis()
+                                return@Thread  // ne pas lire l'ancien bloc après un switch
+                            }
+                        } else {
+                            miroirConn.disconnect()
+                        }
+
+                        // ═══ 2. Synchro de page sur le bloc courant ═══
+                        val blockId = parnasseContext?.blockId ?: return@Thread
+                        val url = java.net.URL("$coeurUrl/api/miroir/state?block_id=$blockId")
+                        val conn = url.openConnection() as java.net.HttpURLConnection
+                        conn.connectTimeout = 1000; conn.readTimeout = 1000
+                        if (conn.responseCode == 200) {
+                            val body = conn.inputStream.bufferedReader().readText()
+                            conn.disconnect()
+                            val json = org.json.JSONObject(body)
+                            val newPage = json.optInt("page_n", -1)
+
+                            if (newPage >= 0 && newPage != currentPageIndex) {
                                 val timeSinceLocal = System.currentTimeMillis() - lastLocalPageChange
                                 if (timeSinceLocal > 2000) {
                                     Log.i(TAG, "🔄 Cœur → page $newPage (était: $currentPageIndex)")
@@ -2204,13 +2219,11 @@ class MiroirIME : InputMethodService() {
                         }
                     } catch (_: Exception) { }
                 }.start()
-                // Relancer dans 500ms
                 if (coeurPollActive) {
                     uiHandler.postDelayed(this, 500)
                 }
             }
         }
-        // Premier poll après 800ms (laisse le temps au Cœur de recevoir l'état initial)
         uiHandler.postDelayed(coeurPollRunnable!!, 800)
     }
 
