@@ -169,7 +169,7 @@ class MiroirIME : InputMethodService() {
     private val groupAnchor = mutableMapOf<Int, Pair<Float, Float>>()  // firstIdx → (x, y)
 
     private var currentPageIndex = 0
-    private val pagesDir by lazy { java.io.File(cacheDir, "ime-pages").also { it.mkdirs() } }
+    private val pagesDir by lazy { java.io.File(filesDir, "ime-pages").also { it.mkdirs() } }
     private var pageLabel: android.widget.TextView? = null
 
     // ── Bloc / Session ────────────────────────────────────────────────
@@ -192,7 +192,7 @@ class MiroirIME : InputMethodService() {
             hostAppName = appName
             blockTimestamp = ts
             val safeName = appName.replace(".", "_")
-            blockDir = java.io.File(cacheDir, "blocks/${safeName}_$ts").also { it.mkdirs() }
+            blockDir = java.io.File(filesDir, "blocks/${safeName}_$ts").also { it.mkdirs() }
             currentPageIndex = 0
             val bd = blockDir!!
             Thread {
@@ -206,7 +206,7 @@ class MiroirIME : InputMethodService() {
     /** Ouvre un bloc existant par son ID (mode contextuel Parnasse). */
     private fun openBlockDir(blockId: String): java.io.File {
         if (blockId.isEmpty()) return ensureBlockDir("standalone", System.currentTimeMillis())
-        blockDir = java.io.File(cacheDir, "blocks/$blockId").also { it.mkdirs() }
+        blockDir = java.io.File(filesDir, "blocks/$blockId").also { it.mkdirs() }
         hostAppName = "parnasse"
         blockTimestamp = System.currentTimeMillis()
         currentPageIndex = 0
@@ -1551,7 +1551,7 @@ class MiroirIME : InputMethodService() {
                     ?.let { strokeRegistry.getOrNull(it)?.points ?: emptyList() }
                     ?: emptyList()
             }
-            val tmpDir = java.io.File(cacheDir, "ime-groups")
+            val tmpDir = java.io.File(filesDir, "ime-groups")
             tmpDir.mkdirs()
             it.persistence = GroupPersistence(java.io.File(tmpDir, "current.groups"))
         }
@@ -4365,7 +4365,7 @@ class MiroirIME : InputMethodService() {
 
     /** Clic long ◀ — Liste des blocs disponibles. */
     private fun showBlockList() {
-        val blocksDir = java.io.File(cacheDir, "blocks")
+        val blocksDir = java.io.File(filesDir, "blocks")
         val blocks = blocksDir.listFiles()
             ?.filter { it.isDirectory && (it.listFiles()?.any { f -> f.isDirectory && f.name.startsWith("page_") } ?: false) }
             ?.sortedByDescending { it.lastModified() }

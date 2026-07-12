@@ -68,7 +68,7 @@ class MiroirEngine {
                     ?.let { strokeRegistry.getOrNull(it)?.points ?: emptyList() }
                     ?: emptyList()
             }
-            val tmpDir = File(context.cacheDir, "groups"); tmpDir.mkdirs()
+            val tmpDir = File(context.filesDir, "groups"); tmpDir.mkdirs()
             it.persistence = GroupPersistence(File(tmpDir, "current.groups"))
         }
     }
@@ -78,7 +78,7 @@ class MiroirEngine {
     // ═══════════════════════════════════════════════════════════════════
 
     fun ensureBlockDir(context: Context, appName: String, ts: Long): File {
-        val blocksDir = File(context.cacheDir, "blocks"); blocksDir.mkdirs()
+        val blocksDir = File(context.filesDir, "blocks"); blocksDir.mkdirs()
         val dir = File(blocksDir, "${appName}_$ts"); dir.mkdirs()
         blockDir = dir
         Log.i(TAG, "Bloc: ${dir.name}")
@@ -86,7 +86,7 @@ class MiroirEngine {
     }
 
     fun openBlockDir(context: Context, blockId: String): File {
-        val blocksDir = File(context.cacheDir, "blocks"); blocksDir.mkdirs()
+        val blocksDir = File(context.filesDir, "blocks"); blocksDir.mkdirs()
         val dir = File(blocksDir, blockId)
         if (!dir.exists()) dir.mkdirs()
         blockDir = dir
