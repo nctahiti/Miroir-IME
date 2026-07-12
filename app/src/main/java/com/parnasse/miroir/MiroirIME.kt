@@ -93,7 +93,8 @@ class MiroirIME : InputMethodService() {
     // ═══ TRANSMUTATION : polling périodique de l'état Cœur ═══
     private var coeurPollRunnable: Runnable? = null
     private var coeurPollActive = false
-    private var lastLocalPageChange = 0L  // timestamp anti-oscillation
+    private var lastLocalPageChange = 0L     // timestamp anti-oscillation
+    private var lastPostedPageN = -1          // dernière page envoyée au Cœur (ignore l'écho)
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "miroir-ime-infer").apply {
             priority = Thread.NORM_PRIORITY - 1
@@ -2199,8 +2200,10 @@ class MiroirIME : InputMethodService() {
                             val newPage = json.optInt("page_n", -1)
 
                             if (newPage >= 0 && newPage != currentPageIndex) {
+                                // ═══ Garde-fou double : ignore l'écho de sa propre page ET délai 5s ═══
+                                val isEcho = (newPage == lastPostedPageN)
                                 val timeSinceLocal = System.currentTimeMillis() - lastLocalPageChange
-                                if (timeSinceLocal > 2000) {
+                                if (!isEcho && timeSinceLocal > 5000) {
                                     Log.i(TAG, "🔄 Cœur → page $newPage (était: $currentPageIndex)")
                                     uiHandler.post {
                                         savePage()
@@ -3925,6 +3928,7 @@ class MiroirIME : InputMethodService() {
             val coeurUrl = parnasseContext?.coeurUrl ?: "http://127.0.0.1:8008"
             val blockId = blockDir?.name ?: return
             lastLocalPageChange = System.currentTimeMillis()  // ═══ anti-oscillation ═══
+            lastPostedPageN = currentPageIndex               // ═══ ignore l'écho ═══
             val json = org.json.JSONObject().apply {
                 put("block_id", blockId)
                 put("page_n", currentPageIndex)
