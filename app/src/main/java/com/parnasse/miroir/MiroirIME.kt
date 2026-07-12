@@ -90,6 +90,9 @@ class MiroirIME : InputMethodService() {
     private var correctionAnnotateHitRect: android.graphics.RectF? = null // zone cliquable 📌 (droite du cadre)
     private var correctionStartRegistrySize: Int = -1  // taille du registre à l'entrée en mode correction
     private val uiHandler = Handler(Looper.getMainLooper())
+    // ═══ VALSE : polling périodique de l'état Cœur ═══
+    private var coeurPollRunnable: Runnable? = null
+    private var coeurPollActive = false
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "miroir-ime-infer").apply {
             priority = Thread.NORM_PRIORITY - 1
@@ -130,6 +133,7 @@ class MiroirIME : InputMethodService() {
      // ── Vue clavier mise en forme ─────────────────────────────────────
      private var formattingPanel: android.widget.LinearLayout? = null
      private var isFormattingMode = false
+     private var isFormattingToggleInProgress = false  // VALSE : anti-race avec le polling Cœur
      private var isShiftLocked = false
      private var isInsertionMode = false          // sous-session capture pour insertion ciblée
      private var insertionCursorPos: Int = -1     // position du curseur hôte sauvegardée
@@ -1767,6 +1771,7 @@ class MiroirIME : InputMethodService() {
             currentPageIndex++
             if (!loadPage(currentPageIndex)) {
                 clearPage()  // page inexistante → page vierge
+                savePage()  // ═══ Créer le dossier immédiatement ═══
             }
             refreshAll()
             updatePageIndicator()
@@ -1781,7 +1786,9 @@ class MiroirIME : InputMethodService() {
 
         // ═══ Bascule capture / mise en forme ═══
         val formattingToggleBtn = makeButton("📝") {
+            isFormattingToggleInProgress = true
             toggleFormattingMode()
+            uiHandler.postDelayed({ isFormattingToggleInProgress = false }, 300)
         }
         toolbar.addView(formattingToggleBtn)
 
@@ -1803,7 +1810,9 @@ class MiroirIME : InputMethodService() {
                 val fullText = buildAllPagesText()
                 ic.commitText(fullText.ifEmpty { "\n" }, 1)
             }
+            isFormattingToggleInProgress = true
             toggleFormattingMode()
+            uiHandler.postDelayed({ isFormattingToggleInProgress = false }, 300)
         })
 
         // ═══ Bouton annotation 📌 (visible uniquement en mode correction) ═══
@@ -2026,8 +2035,8 @@ class MiroirIME : InputMethodService() {
         Log.i(TAG, "onStartInputView — app=$app field=${info?.fieldName ?: "?"} inputType=${info?.inputType ?: 0}")
 
         // ═══ Lire le token de connexion depuis le Cœur (UUID Parnasse) ═══
-        // Relire si restarting ou si pas de contexte
-        if (restarting || parnasseContext == null) {
+        // Relire si pas de contexte. Ne PAS relire sur restarting — le contexte est déjà bon.
+        if (parnasseContext == null) {
             if (app == "com.example.le_parnasse_numerique") {
             // Attendre que le broadcast arrive (max 500ms)
             for (i in 0..10) {
@@ -2081,8 +2090,16 @@ class MiroirIME : InputMethodService() {
         if (parnasseContext == null) {
             ensureBlockDir(app, System.currentTimeMillis())
         } else {
-            openBlockDir(parnasseContext!!.blockId)
-            currentPageIndex = parnasseContext!!.pageN.coerceAtLeast(0)
+            // ═══ Vérifier si le bloc a changé (Flutter a navigué vers un autre bloc) ═══
+            val newBlockId = parnasseContext!!.blockId
+            if (blockDir?.name != newBlockId) {
+                openBlockDir(newBlockId)
+                currentPageIndex = parnasseContext!!.pageN.coerceAtLeast(0)
+                Log.i(TAG, "Bloc Parnasse changé: $newBlockId page=$currentPageIndex")
+            } else if (!restarting || currentPageIndex == 0) {
+                // Ne PAS écraser currentPageIndex sur restarting (le polling a déjà la bonne valeur)
+                currentPageIndex = parnasseContext!!.pageN.coerceAtLeast(0)
+            }
             Log.i(TAG, "Bloc Parnasse: ${blockDir?.name} page=$currentPageIndex")
         }
         // Conduit V★ — initialiser le writer pour la première page
@@ -2104,10 +2121,99 @@ class MiroirIME : InputMethodService() {
         rebuildBitmap()
         // ═══ Rafraîchir le template (prise en compte des changements de calibration) ═══
         imeView?.let { if (it.height > 0) updateTemplateSpacing(it.height) }
-        // ═══ Démarrer en mode CAPTURE (pas formatage) ═══
-        if (isFormattingMode) {
-            toggleFormattingMode()  // revenir en capture si on était en formatage
+        // ═══ VALSE : mode initial dicté par le contexte Parnasse ═══
+        val targetFormatting = parnasseContext?.mode == "note" || parnasseContext?.mode == "formatage"
+        if (isFormattingMode != targetFormatting) {
+            isFormattingToggleInProgress = true
+            toggleFormattingMode()
+            uiHandler.postDelayed({ isFormattingToggleInProgress = false }, 300)
         }
+        // ═══ VALSE : démarrer le polling Cœur (mode Parnasse uniquement) ═══
+        startCoeurPolling()
+    }
+
+    /** VALSE — Démarre le polling périodique de l'état Cœur. */
+    private fun startCoeurPolling() {
+        if (parnasseContext == null) return
+        if (coeurPollActive) return
+        coeurPollActive = true
+        val coeurUrl = parnasseContext!!.coeurUrl
+        
+        coeurPollRunnable = object : Runnable {
+            override fun run() {
+                if (!coeurPollActive) return
+                Thread {
+                    try {
+                        // ═══ Toujours lire __miroir__ pour détecter les changements de bloc ═══
+                        val url = java.net.URL("$coeurUrl/api/miroir/state?block_id=__miroir__")
+                        val conn = url.openConnection() as java.net.HttpURLConnection
+                        conn.connectTimeout = 1000; conn.readTimeout = 1000
+                        val code = conn.responseCode
+                        if (code == 200) {
+                            val body = conn.inputStream.bufferedReader().readText()
+                            conn.disconnect()
+                            val json = org.json.JSONObject(body)
+                            val newPage = json.optInt("page_n", -1)
+                            val newParnasseBlockId = json.optString("parnasse_block_id", "")
+                            val newMode = json.optString("mode", "")
+
+                            // Détecter un changement de bloc
+                            val currentBlockId = parnasseContext?.blockId ?: ""
+                            if (newParnasseBlockId.isNotEmpty() && newParnasseBlockId != currentBlockId) {
+                                Log.i(TAG, "🔄 Cœur → nouveau bloc $newParnasseBlockId (était: $currentBlockId)")
+                                uiHandler.post {
+                                    savePage()
+                                    openBlockDir(newParnasseBlockId)
+                                    currentPageIndex = newPage.coerceAtLeast(0)
+                                    if (!loadPage(currentPageIndex)) {
+                                        clearPage(); savePage()
+                                    }
+                                    refreshAll()
+                                    updatePageIndicator()
+                                }
+                                // Mettre à jour le contexte
+                                parnasseContext = parnasseContext?.copy(
+                                    blockId = newParnasseBlockId,
+                                    pageN = newPage
+                                )
+                            } else if (newPage >= 0 && newPage != currentPageIndex) {
+                                // Synchroniser la page
+                                Log.i(TAG, "🔄 Cœur → page $newPage (était: $currentPageIndex)")
+                                uiHandler.post {
+                                    savePage()
+                                    currentPageIndex = newPage
+                                    if (!loadPage(currentPageIndex)) {
+                                        clearPage(); savePage()
+                                        Log.i(TAG, "📄 Page $currentPageIndex créée (vierge)")
+                                    }
+                                    refreshAll()
+                                    updatePageIndicator()
+                                }
+                            }
+                            // ═══ Le mode n'est PAS synchronisé depuis le Cœur ═══
+                            // Le mode est local : dicté par parnasseContext au démarrage,
+                            // puis par l'utilisateur via le bouton 📝.
+                            // Le Cœur ne dicte que la page, pas le mode.
+                        } else {
+                            conn.disconnect()
+                        }
+                    } catch (_: Exception) { }
+                }.start()
+                // Relancer dans 500ms
+                if (coeurPollActive) {
+                    uiHandler.postDelayed(this, 500)
+                }
+            }
+        }
+        // Premier poll après 800ms (laisse le temps au Cœur de recevoir l'état initial)
+        uiHandler.postDelayed(coeurPollRunnable!!, 800)
+    }
+
+    /** VALSE — Arrête le polling Cœur. */
+    private fun stopCoeurPolling() {
+        coeurPollActive = false
+        uiHandler.removeCallbacks(coeurPollRunnable ?: return)
+        coeurPollRunnable = null
     }
 
     /** Redessine tous les strokes du registre dans le bitmap. */
@@ -2151,6 +2257,8 @@ class MiroirIME : InputMethodService() {
     }
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
+        // ═══ VALSE : arrêter le polling Cœur ═══
+        stopCoeurPolling()
         if (finishingInput) {
             Log.i(TAG, "onFinishInputView — fermeture")
             // ═══ Réinitialiser le contexte Parnasse ═══
@@ -3793,19 +3901,21 @@ class MiroirIME : InputMethodService() {
         pageLabel?.text = "${currentPageIndex + 1}/$total"
     }
 
-    /** Notifie le Cœur du changement de page (HTTP, fiable). */
+    /** Notifie le Cœur du changement de page via /api/miroir/command (VALSE). */
     private fun broadcastPageChanged() {
         try {
             val coeurUrl = parnasseContext?.coeurUrl ?: "http://127.0.0.1:8008"
+            val blockId = parnasseContext?.blockId ?: blockDir?.name ?: ""
             val json = org.json.JSONObject().apply {
-                put("block_id", parnasseContext?.blockId ?: blockDir?.name ?: "")
+                put("action", "goto_page")
+                put("block_id", blockId)
                 put("page_n", currentPageIndex)
-                put("mode", if (isFormattingMode) "note" else "bloc")
+                put("mode", if (isFormattingMode) "formatage" else "capture")
                 put("total_notes", parnasseContext?.totalNotes ?: 0)
             }
             Thread {
                 try {
-                    val url = java.net.URL("$coeurUrl/api/miroir/state")
+                    val url = java.net.URL("$coeurUrl/api/miroir/command")
                     val conn = url.openConnection() as java.net.HttpURLConnection
                     conn.requestMethod = "POST"
                     conn.setRequestProperty("Content-Type", "application/json")
@@ -3813,9 +3923,9 @@ class MiroirIME : InputMethodService() {
                     conn.outputStream.write(json.toString().toByteArray())
                     val code = conn.responseCode
                     conn.disconnect()
-                    Log.i(TAG, "📡 State → Cœur: page=${currentPageIndex + 1} (HTTP $code)")
+                    Log.i(TAG, "📡 Command → Cœur: page=${currentPageIndex + 1} (HTTP $code)")
                 } catch (e: Exception) {
-                    Log.w(TAG, "📡 State POST failed: ${e.message}")
+                    Log.w(TAG, "📡 Command POST failed: ${e.message}")
                 }
             }.start()
         } catch (e: Exception) {
