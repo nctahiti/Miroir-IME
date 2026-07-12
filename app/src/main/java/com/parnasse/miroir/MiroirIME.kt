@@ -1768,21 +1768,27 @@ class MiroirIME : InputMethodService() {
         toolbar.addView(makeButton("▶", {
             showAllTranscriptions()
         }) {
-            savePage()
-            currentPageIndex++
-            if (!loadPage(currentPageIndex)) {
-                clearPage()  // page inexistante → page vierge
-                savePage()  // ═══ Créer le dossier immédiatement ═══
+            val maxPage = (parnasseContext?.totalNotes ?: Int.MAX_VALUE) - 1
+            if (currentPageIndex < maxPage) {
+                savePage()
+                currentPageIndex++
+                if (!loadPage(currentPageIndex)) {
+                    clearPage()  // page inexistante → page vierge
+                    savePage()  // ═══ Créer le dossier immédiatement ═══
+                }
+                refreshAll()
+                updatePageIndicator()
+                postMiroirState()
             }
-            refreshAll()
-            updatePageIndicator()
-            postMiroirState()
         })
 
         toolbar.addView(makeButton("+") {
-            newPage()
-            refreshAll()
-            updatePageIndicator()
+            val maxPage = (parnasseContext?.totalNotes ?: Int.MAX_VALUE) - 1
+            if (currentPageIndex < maxPage) {
+                newPage()
+                refreshAll()
+                updatePageIndicator()
+            }
         })
 
         // ═══ Bascule capture / mise en forme ═══
