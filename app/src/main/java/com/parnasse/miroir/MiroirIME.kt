@@ -90,9 +90,10 @@ class MiroirIME : InputMethodService() {
     private var correctionAnnotateHitRect: android.graphics.RectF? = null // zone cliquable 📌 (droite du cadre)
     private var correctionStartRegistrySize: Int = -1  // taille du registre à l'entrée en mode correction
     private val uiHandler = Handler(Looper.getMainLooper())
-    // ═══ VALSE : polling périodique de l'état Cœur ═══
+    // ═══ TRANSMUTATION : polling périodique de l'état Cœur ═══
     private var coeurPollRunnable: Runnable? = null
     private var coeurPollActive = false
+    private var lastLocalPageChange = 0L  // timestamp anti-oscillation
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "miroir-ime-infer").apply {
             priority = Thread.NORM_PRIORITY - 1
@@ -1720,7 +1721,7 @@ class MiroirIME : InputMethodService() {
                 loadPage(currentPageIndex)
                 refreshAll()
                 updatePageIndicator()
-                broadcastPageChanged()
+                postMiroirState()
             }
         })
 
@@ -1775,7 +1776,7 @@ class MiroirIME : InputMethodService() {
             }
             refreshAll()
             updatePageIndicator()
-            broadcastPageChanged()
+            postMiroirState()
         })
 
         toolbar.addView(makeButton("+") {
@@ -2132,7 +2133,7 @@ class MiroirIME : InputMethodService() {
         startCoeurPolling()
     }
 
-    /** VALSE — Démarre le polling périodique de l'état Cœur. */
+    /** TRANSMUTATION — Polling avec synchro de page gardée (anti-oscillation). */
     private fun startCoeurPolling() {
         if (parnasseContext == null) return
         if (coeurPollActive) return
@@ -2144,8 +2145,8 @@ class MiroirIME : InputMethodService() {
                 if (!coeurPollActive) return
                 Thread {
                     try {
-                        // ═══ Toujours lire __miroir__ pour détecter les changements de bloc ═══
-                        val url = java.net.URL("$coeurUrl/api/miroir/state?block_id=__miroir__")
+                        val blockId = parnasseContext?.blockId ?: return@Thread
+                        val url = java.net.URL("$coeurUrl/api/miroir/state?block_id=$blockId")
                         val conn = url.openConnection() as java.net.HttpURLConnection
                         conn.connectTimeout = 1000; conn.readTimeout = 1000
                         val code = conn.responseCode
@@ -2153,11 +2154,10 @@ class MiroirIME : InputMethodService() {
                             val body = conn.inputStream.bufferedReader().readText()
                             conn.disconnect()
                             val json = org.json.JSONObject(body)
-                            val newPage = json.optInt("page_n", -1)
                             val newParnasseBlockId = json.optString("parnasse_block_id", "")
-                            val newMode = json.optString("mode", "")
+                            val newPage = json.optInt("page_n", -1)
 
-                            // Détecter un changement de bloc
+                            // ═══ Détecter un changement de bloc (commande "open" de Flutter) ═══
                             val currentBlockId = parnasseContext?.blockId ?: ""
                             if (newParnasseBlockId.isNotEmpty() && newParnasseBlockId != currentBlockId) {
                                 Log.i(TAG, "🔄 Cœur → nouveau bloc $newParnasseBlockId (était: $currentBlockId)")
@@ -2171,29 +2171,28 @@ class MiroirIME : InputMethodService() {
                                     refreshAll()
                                     updatePageIndicator()
                                 }
-                                // Mettre à jour le contexte
                                 parnasseContext = parnasseContext?.copy(
                                     blockId = newParnasseBlockId,
                                     pageN = newPage
                                 )
+                                lastLocalPageChange = System.currentTimeMillis() // reset guard
                             } else if (newPage >= 0 && newPage != currentPageIndex) {
-                                // Synchroniser la page
-                                Log.i(TAG, "🔄 Cœur → page $newPage (était: $currentPageIndex)")
-                                uiHandler.post {
-                                    savePage()
-                                    currentPageIndex = newPage
-                                    if (!loadPage(currentPageIndex)) {
-                                        clearPage(); savePage()
-                                        Log.i(TAG, "📄 Page $currentPageIndex créée (vierge)")
+                                // ═══ Synchro de page GARDÉE : suivre seulement si pas d'action locale récente ═══
+                                val timeSinceLocal = System.currentTimeMillis() - lastLocalPageChange
+                                if (timeSinceLocal > 2000) {
+                                    Log.i(TAG, "🔄 Cœur → page $newPage (était: $currentPageIndex)")
+                                    uiHandler.post {
+                                        savePage()
+                                        currentPageIndex = newPage
+                                        if (!loadPage(currentPageIndex)) {
+                                            clearPage(); savePage()
+                                            Log.i(TAG, "📄 Page $currentPageIndex créée (vierge)")
+                                        }
+                                        refreshAll()
+                                        updatePageIndicator()
                                     }
-                                    refreshAll()
-                                    updatePageIndicator()
                                 }
                             }
-                            // ═══ Le mode n'est PAS synchronisé depuis le Cœur ═══
-                            // Le mode est local : dicté par parnasseContext au démarrage,
-                            // puis par l'utilisateur via le bouton 📝.
-                            // Le Cœur ne dicte que la page, pas le mode.
                         } else {
                             conn.disconnect()
                         }
@@ -3901,13 +3900,13 @@ class MiroirIME : InputMethodService() {
         pageLabel?.text = "${currentPageIndex + 1}/$total"
     }
 
-    /** Notifie le Cœur du changement de page via /api/miroir/command (VALSE). */
-    private fun broadcastPageChanged() {
+    /** TRANSMUTATION — Annonce l'état courant au Cœur (page, mode). */
+    private fun postMiroirState() {
         try {
             val coeurUrl = parnasseContext?.coeurUrl ?: "http://127.0.0.1:8008"
-            val blockId = parnasseContext?.blockId ?: blockDir?.name ?: ""
+            val blockId = blockDir?.name ?: return
+            lastLocalPageChange = System.currentTimeMillis()  // ═══ anti-oscillation ═══
             val json = org.json.JSONObject().apply {
-                put("action", "goto_page")
                 put("block_id", blockId)
                 put("page_n", currentPageIndex)
                 put("mode", if (isFormattingMode) "formatage" else "capture")
@@ -3915,7 +3914,7 @@ class MiroirIME : InputMethodService() {
             }
             Thread {
                 try {
-                    val url = java.net.URL("$coeurUrl/api/miroir/command")
+                    val url = java.net.URL("$coeurUrl/api/miroir/state")
                     val conn = url.openConnection() as java.net.HttpURLConnection
                     conn.requestMethod = "POST"
                     conn.setRequestProperty("Content-Type", "application/json")
@@ -3923,13 +3922,13 @@ class MiroirIME : InputMethodService() {
                     conn.outputStream.write(json.toString().toByteArray())
                     val code = conn.responseCode
                     conn.disconnect()
-                    Log.i(TAG, "📡 Command → Cœur: page=${currentPageIndex + 1} (HTTP $code)")
+                    Log.i(TAG, "📡 State → Cœur: page=${currentPageIndex + 1} (HTTP $code)")
                 } catch (e: Exception) {
-                    Log.w(TAG, "📡 Command POST failed: ${e.message}")
+                    Log.w(TAG, "State POST failed: ${e.message}")
                 }
             }.start()
         } catch (e: Exception) {
-            Log.w(TAG, "broadcastPageChanged: ${e.message}")
+            Log.w(TAG, "postMiroirState: ${e.message}")
         }
     }
 
