@@ -182,13 +182,29 @@ class MiroirIME : InputMethodService() {
     private var currentFieldKey: String = ""
     private var blockTimestamp: Long = 0L
     private var blockDir: java.io.File? = null  // null = pas de bloc actif
-    // Conduit V★ — flux binaire parallèle (append-only, 13 octets/point)
+    // Conduit V★ — flux binaire parallèle (append-only, 13 octets/point) — ⬅️ OBSOLÈTE, remplacé par vstarConduit
     private var vstarWriter: VStarWriter? = null
     private var vstarPointCount = 0
-    // Conduit V★ v2.0 — document vivant (16B tokens, GroupTable intégrée)
+    // Conduit V★ v2.0 — document vivant (16B tokens, GroupTable intégrée) — ⬅️ OBSOLÈTE
     private var vstarDoc: VStarDocumentV2? = null
-    // Flag temporaire : active V★ v2.0 pour save/load
+    // Flag temporaire : active V★ v2.0 pour save/load — ⬅️ OBSOLÈTE
     private val useVStarV2 = true
+
+    // ═══ CONDUIT UNIFIÉ V★ v2.0 (16B) — écriture temps réel dans blocks/UUID/page_N/page.vstar ═══
+    private var vstarConduit: VStarConduit? = null
+
+    /** Retourne le fichier .vstar définitif pour la page courante. */
+    private fun conduitFile(): java.io.File? {
+        val bd = blockDir ?: return null
+        return java.io.File(bd, "page_$currentPageIndex/page.vstar")
+    }
+
+    /** Ouvre le Conduit sur la page courante. Si le fichier existe déjà, reprend en append. */
+    private fun openConduit(): Boolean {
+        val file = conduitFile() ?: return false
+        if (vstarConduit == null) vstarConduit = VStarConduit()
+        return vstarConduit!!.open(file, "page_$currentPageIndex")
+    }
 
     /** Construit une clé composite identifiant le champ de saisie.
      *  packageName est toujours présent. fieldId et fieldName sont optionnels.
@@ -278,27 +294,17 @@ class MiroirIME : InputMethodService() {
     /** Ferme le bloc courant — sauvegarde la page active et libère.
      *  Supprime le dossier du bloc s'il ne contient plus de pages après sauvegarde. */
     private fun closeBlock() {
-        savePage()
-        // Conduit V★ — métriques et fermeture
-        vstarWriter?.let { vsw ->
-            val vstarFile = vsw.getCurrentFile()
-            if (vstarFile != null && vstarFile.exists() && blockDir != null) {
-                val vstarSize = vstarFile.length()
-                val pageDir = java.io.File(blockDir, "page_$currentPageIndex")
-                val stateFile = java.io.File(pageDir, "state.json")
-                val groupsFile = java.io.File(pageDir, "groups.json")
-                val jsonSize = (if (stateFile.exists()) stateFile.length() else 0) +
-                               (if (groupsFile.exists()) groupsFile.length() else 0)
-                val ratio = if (jsonSize > 0) vstarSize.toFloat() / jsonSize * 100 else 0f
-                Log.i(TAG, "Conduit V★ METRIQUES: vstar=${vstarSize}B json=${jsonSize}B ratio=${String.format("%.1f", ratio)}% strokes=${strokeRegistry.size} points=$vstarPointCount")
-            }
-            vsw.writeEnd()
-            vsw.close()
-            Log.i(TAG, "Conduit V★ fermé")
-        }
-        vstarWriter = null
+        // ═══ Conduit V★ v2.0 — le fichier est déjà écrit, juste fermer proprement ═══
+        vstarConduit?.endSession()
+        vstarConduit?.close()
+        vstarConduit = null
         vstarPointCount = 0
         val bd = blockDir
+        // Métriques
+        val vstarFile = conduitFile()
+        if (vstarFile != null && vstarFile.exists()) {
+            Log.i(TAG, "Conduit V★ v2.0 fermé: ${vstarFile.name} — ${vstarFile.length()}B, $vstarPointCount points")
+        }
         // Supprimer le dossier du bloc s'il est vide (sans pages)
         if (bd != null) {
             val remainingPages = bd.listFiles()?.count { it.isDirectory && it.name.startsWith("page_") } ?: 0
@@ -346,22 +352,20 @@ class MiroirIME : InputMethodService() {
         activeBlobGroupId = null
         cachedSpatialBounds = null
         resetSyncedNote()
-        // Conduit V★ — nouveau fichier par page (indépendant, pas de contamination)
-        vstarWriter?.writeEnd()
-        vstarWriter?.close()
-        vstarWriter = VStarWriter(this).also {
-            it.openNewSession("page_$currentPageIndex")
-        }
+        // ═══ Conduit V★ v2.0 — fermer l'ancien, ouvrir le nouveau sur la page courante ═══
+        vstarConduit?.endSession()
+        vstarConduit?.close()
+        vstarConduit = VStarConduit()
+        val opened = openConduit()
         vstarPointCount = 0
-        Log.i(TAG, "Conduit V★ page $currentPageIndex: ${vstarWriter?.getCurrentFile()?.name}")
-        // Supprimer le dossier de page fantôme s'il existe
+        Log.i(TAG, "Conduit V★ v2.0 page $currentPageIndex: ${if (opened) conduitFile()?.name else "échec"}")
+        // ═══ Ne plus supprimer le dossier de page — le Conduit écrit dedans ═══
         val bd = blockDir ?: return
         val dir = java.io.File(bd, "page_$currentPageIndex")
         if (dir.exists()) {
-            dir.deleteRecursively()
-            Log.i(TAG, "clearPage: dossier page $currentPageIndex supprimé")
+            Log.i(TAG, "clearPage: page $currentPageIndex existante — session reprise")
         }
-        // Fermer le document V2 s'il était ouvert
+        // Fermer le document V2 s'il était ouvert (obsolète)
         vstarDoc?.close()
         vstarDoc = null
     }
@@ -974,9 +978,11 @@ class MiroirIME : InputMethodService() {
             loadPageMdm(dir)
 
             doc.close()
-            // Conduit V★ v1.1 — réactiver le writer (compatibilité)
-            vstarWriter?.close()
-            vstarWriter = VStarWriter(this).also { it.openNewSession("page_$currentPageIndex") }
+            // ═══ Conduit V★ v2.0 — reprendre la session sur la page chargée ═══
+            vstarConduit?.endSession()
+            vstarConduit?.close()
+            vstarConduit = VStarConduit()
+            openConduit()
             vstarPointCount = 0
 
             return true
@@ -1383,11 +1389,11 @@ class MiroirIME : InputMethodService() {
                 }
             }
             Log.i(TAG, "Page $index chargée: ${strokeRegistry.size} strokes, ${groupLabels.size} labels, ${groupBlobs.size} blobs")
-            // Conduit V★ — nouveau writer pour la page chargée (les strokes sont déjà dans page.vstar)
-            vstarWriter?.close()
-            vstarWriter = VStarWriter(this).also {
-                it.openNewSession("page_$index")
-            }
+            // ═══ Conduit V★ v2.0 — reprendre la session sur la page chargée ═══
+            vstarConduit?.endSession()
+            vstarConduit?.close()
+            vstarConduit = VStarConduit()
+            openConduit()
             vstarPointCount = 0
             return true
         } catch (e: Exception) {
@@ -2180,12 +2186,11 @@ class MiroirIME : InputMethodService() {
         }
         // ═══ Initialisation lourde — SEULEMENT à la première ouverture ═══
         if (!restarting) {
-            // Conduit V★ — initialiser le writer pour la première page
-            if (vstarWriter == null || vstarWriter?.isActive() != true) {
-                vstarWriter?.close()
-                vstarWriter = VStarWriter(this).also {
-                    it.openNewSession("page_0")
-                }
+            // ═══ Conduit V★ v2.0 — initialiser pour la première page ═══
+            if (vstarConduit == null || vstarConduit?.isActive() != true) {
+                vstarConduit?.close()
+                vstarConduit = VStarConduit()
+                openConduit()
                 vstarPointCount = 0
             }
             // ═══ Forcer la réinitialisation du TouchHelper à chaque ouverture ═══
@@ -2356,14 +2361,10 @@ class MiroirIME : InputMethodService() {
             Log.i(TAG, "onFinishInputView — fermeture")
             // ═══ Réinitialiser le contexte Parnasse ═══
             parnasseContext = null
-            // Conduit V★ — fermer le flux si l'IME se cache
-            vstarWriter?.let { vsw ->
-                if (vstarPointCount > 0) {
-                    vsw.writeEnd()
-                    Log.i(TAG, "Conduit V★ fermé (onFinishInputView): ${vsw.getCurrentFile()?.absolutePath} — $vstarPointCount points")
-                }
-                vsw.close()
-            }
+            // ═══ Conduit V★ v2.0 — fermer proprement (le fichier est déjà écrit) ═══
+            vstarConduit?.endSession()
+            vstarConduit?.close()
+            Log.i(TAG, "Conduit V★ v2.0 fermé (onFinishInputView): ${conduitFile()?.name} — $vstarPointCount points")
             // Si le bloc est vide (pas de pages sauvegardées, pas de strokes en cours), le supprimer
             val bd = blockDir
             if (bd != null) {
@@ -3422,7 +3423,7 @@ class MiroirIME : InputMethodService() {
         // Conduit V★ — premier point du stroke (PenDown)
         if (!isFormattingMode && imeView?.isCorrecting() != true) {
             val t = System.currentTimeMillis()
-            vstarWriter?.writePoint(x, y, t, 1.0f, isPenDown = true)
+            vstarConduit?.writePoint(x, y, t, 1.0f, isPenDown = true)
             vstarPointCount++
         }
         }
@@ -3437,7 +3438,7 @@ class MiroirIME : InputMethodService() {
         }
         // Conduit V★ — point intermédiaire
         if (!isFormattingMode && imeView?.isCorrecting() != true) {
-            vstarWriter?.writePoint(x, y, System.currentTimeMillis(), pressure.coerceIn(0f, 1f), isPenDown = false)
+            vstarConduit?.writePoint(x, y, System.currentTimeMillis(), pressure.coerceIn(0f, 1f), isPenDown = false)
             vstarPointCount++
         }
         // Rafraîchir pendant le glissé (fréquence paramétrable via calibration)
@@ -3504,7 +3505,7 @@ class MiroirIME : InputMethodService() {
             stroke.points.lastOrNull()?.let { (px, py) ->
                 val lastTs = stroke.timestamps.lastOrNull() ?: System.currentTimeMillis()
                 val lastPr = stroke.pressures.lastOrNull() ?: 1.0f
-                vstarWriter?.writePoint(px, py, lastTs, lastPr, isPenUp = true)
+                vstarConduit?.writePoint(px, py, lastTs, lastPr, isPenUp = true)
                 vstarPointCount++
             }
         }
@@ -3887,7 +3888,7 @@ class MiroirIME : InputMethodService() {
                     cachedGMCacheSize = -1
                     // Conduit V★ — marquer la séparation de groupe avec son ancre
                     val grpAnchor = groupAnchor[firstIdx]
-                    vstarWriter?.writeGroupSep(grpAnchor?.first ?: 0f, grpAnchor?.second ?: 0f)
+                    vstarConduit?.writeGroupSep(grpAnchor?.first ?: 0f, grpAnchor?.second ?: 0f)
                     Log.d(TAG, "Conduit V★ GROUP_SEP: firstIdx=$firstIdx -> '$result' ancre=(${grpAnchor?.first},${grpAnchor?.second})")
                     // Calculer et cacher le blob pour ce groupe
                     val gm = groupManager ?: return@post
