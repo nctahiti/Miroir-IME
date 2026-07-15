@@ -1675,7 +1675,7 @@ class MiroirIME : InputMethodService() {
         toolbar.addView(makeButton("▶", {
             showAllTranscriptions()
         }) {
-            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()) - 1
+            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: maxOf(currentPageIndex + 1, countPages())) - 1
             if (currentPageIndex < maxPage) {
                 savePage()
                 currentPageIndex++
@@ -1690,7 +1690,7 @@ class MiroirIME : InputMethodService() {
         })
 
         toolbar.addView(makeButton("+") {
-            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()) - 1
+            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: maxOf(currentPageIndex + 1, countPages())) - 1
             if (currentPageIndex < maxPage) {
                 newPage()
                 refreshAll()
@@ -2025,7 +2025,7 @@ class MiroirIME : InputMethodService() {
             val newBlockId = parnasseContext!!.blockId
             if (blockDir?.name != newBlockId) {
                 openBlockDir(newBlockId)
-                val totalPages = parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()
+                val totalPages = parnasseContext?.totalNotes?.takeIf { it > 0 } ?: maxOf(parnasseContext!!.pageN + 1, countPages())
                 currentPageIndex = parnasseContext!!.pageN.coerceIn(0, (totalPages - 1).coerceAtLeast(0))
                 clearPage()  // vider la RAM — l'ancien bloc ne doit pas s'afficher
                 Log.i(TAG, "Bloc Parnasse changé: $newBlockId page=$currentPageIndex (total=$totalPages)")
@@ -2036,7 +2036,7 @@ class MiroirIME : InputMethodService() {
                     // Page 0 active → ne pas changer, laisser le polling synchroniser plus tard
                     Log.i(TAG, "📌 Page 0 active (${strokeRegistry.size} strokes) — on reste, le Parnasse suivra")
                 } else {
-                    val totalPages = parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()
+                    val totalPages = parnasseContext?.totalNotes?.takeIf { it > 0 } ?: maxOf(parnasseContext!!.pageN + 1, countPages())
                     currentPageIndex = parnasseContext!!.pageN.coerceIn(0, (totalPages - 1).coerceAtLeast(0))
                 }
             }
@@ -2111,7 +2111,8 @@ class MiroirIME : InputMethodService() {
                                 uiHandler.post {
                                     savePage()
                                     openBlockDir(newParnasseBlockId)  // crée le bloc s'il n'existe pas
-                                    val maxPage = miroirJson.optInt("total_notes", 1) - 1
+                                    val totalNotes = miroirJson.optInt("total_notes", 0)
+                                    val maxPage = if (totalNotes > 0) totalNotes - 1 else maxOf(newPage, countPages() - 1)
                                     currentPageIndex = newPage.coerceIn(0, maxPage.coerceAtLeast(0))
                                     if (!loadPage(currentPageIndex)) {
                                         clearPage(); savePage()
@@ -2156,7 +2157,7 @@ class MiroirIME : InputMethodService() {
                                         Log.i(TAG, "🔄 Cœur → page $newPage (était: $currentPageIndex)")
                                         uiHandler.post {
                                             savePage()
-                                            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()) - 1
+                                            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: maxOf(currentPageIndex + 1, countPages())) - 1
                                             currentPageIndex = newPage.coerceIn(0, maxPage.coerceAtLeast(0))
                                             if (!loadPage(currentPageIndex)) {
                                                 clearPage(); savePage()
