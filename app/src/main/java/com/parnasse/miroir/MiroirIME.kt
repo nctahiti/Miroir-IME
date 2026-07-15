@@ -2078,6 +2078,11 @@ class MiroirIME : InputMethodService() {
             }
             // ═══ VALSE : démarrer le polling Cœur (mode Parnasse uniquement) ═══
             startCoeurPolling()
+            // ═══ POÉSIE : synchroniser le Cœur avec la page initiale ═══
+            // Sans ça, le premier polling lit l'ancien état et combat.
+            if (parnasseContext != null) {
+                uiHandler.postDelayed({ postMiroirState() }, 500)
+            }
         }
         updatePageIndicator()
     }
@@ -2119,6 +2124,7 @@ class MiroirIME : InputMethodService() {
                                     }
                                     refreshAll()
                                     updatePageIndicator()
+                                    postMiroirState()  // ═══ synchro après changement de bloc ═══
                                 }
                                 parnasseContext = parnasseContext?.copy(
                                     blockId = newParnasseBlockId,
@@ -2165,6 +2171,7 @@ class MiroirIME : InputMethodService() {
                                             }
                                             refreshAll()
                                             updatePageIndicator()
+                                            postMiroirState()  // ═══ synchroniser le Cœur après le changement ═══
                                         }
                                     }
                                 }
