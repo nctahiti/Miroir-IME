@@ -2312,7 +2312,10 @@ class MiroirIME : InputMethodService() {
                                             }
                                             refreshAll()
                                             updatePageIndicator()
-                                            // ═══ POÉSIE : ne pas poster — Flutter nous a déjà amenés ici ═══
+                                            // ═══ POÉSIE : corriger le Cœur si on a clampé ═══
+                                            if (newPage != currentPageIndex) {
+                                                postMiroirState()
+                                            }
                                         }
                                     }
                                 }
