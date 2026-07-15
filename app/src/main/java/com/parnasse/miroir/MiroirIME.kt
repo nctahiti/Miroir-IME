@@ -467,6 +467,11 @@ class MiroirIME : InputMethodService() {
         val bd = blockDir ?: return
         val dir = java.io.File(bd, "page_$currentPageIndex")
         dir.mkdirs()
+        // ═══ DIAG : vérifier que le fichier V★ a bien des données ═══
+        val vstarFile = java.io.File(dir, "page.vstar")
+        val vstarSize = if (vstarFile.exists()) vstarFile.length() else -1
+        val liveStrokes = strokeRegistry.count { !it.isDeleted && it.points.isNotEmpty() }
+        Log.i(TAG, "💾 savePage page=$currentPageIndex vstar=${vstarSize}B strokes=$liveStrokes")
         // Bitmap
         bitmap?.let {
             java.io.FileOutputStream(java.io.File(dir, "bitmap.png")).use { out ->

@@ -84,12 +84,12 @@ class VStarConduit {
                 nextCaptureIndex = 0
                 currentCaptureIndex = 0
             } else {
-                // Session existante : reprendre après le dernier END token
-                // (on écrase le END token précédent — il sera réécrit à la fermeture)
-                // Note: on pourrait chercher le dernier END, mais c'est plus simple
-                // de laisser le décodeur ignorer les tokens après le premier END.
-                // Pour l'instant, on ajoute simplement à la fin.
-                Log.i(TAG, "Session reprise: ${file.name} (${file.length()}B existants)")
+                // Session existante : reprendre après le dernier token.
+                // Scanner les captureIndex existants pour ne pas créer de collision.
+                val maxCI = scanMaxCaptureIndex(file)
+                nextCaptureIndex = (maxCI + 1).toShort()
+                currentCaptureIndex = maxCI
+                Log.i(TAG, "Session reprise: ${file.name} (${file.length()}B, maxCI=$maxCI → nextCI=$nextCaptureIndex)")
             }
 
             currentFile = file
@@ -250,5 +250,28 @@ class VStarConduit {
     private fun toDeltaT(prev: Long, curr: Long): Short {
         val dt = (curr - prev).toInt()
         return dt.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+    }
+
+    /** Scan les tokens existants pour trouver le captureIndex maximum + 1. */
+    private fun scanMaxCaptureIndex(file: File): Short {
+        if (!file.exists() || file.length() < VStarTokenV2.SIZE_BYTES) return -1
+        var maxCI = -1
+        try {
+            DataInputStream(BufferedInputStream(FileInputStream(file))).use { ins ->
+                val fileLength = file.length()
+                var bytesRead = 0L
+                while (bytesRead + VStarTokenV2.SIZE_BYTES <= fileLength) {
+                    try {
+                        val t = VStarTokenV2.read(ins)
+                        bytesRead += VStarTokenV2.SIZE_BYTES
+                        if (t.isEnd() || t.isErased() || t.isGroupMeta()) continue
+                        if (t.captureIndex > maxCI) maxCI = t.captureIndex.toInt()
+                    } catch (e: EOFException) { break }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "scanMaxCaptureIndex erreur: ${e.message}")
+        }
+        return maxCI.toShort()
     }
 }
