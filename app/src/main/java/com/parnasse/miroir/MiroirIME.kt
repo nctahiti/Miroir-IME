@@ -1825,7 +1825,11 @@ class MiroirIME : InputMethodService() {
             }
             refreshAll()
             updatePageIndicator()
-            postMiroirState()
+            // ═══ Ne pas perturber Parnasse si on dépasse ses notes ═══
+            val totalNotes = parnasseContext?.totalNotes ?: Int.MAX_VALUE
+            if (currentPageIndex < totalNotes) {
+                postMiroirState()
+            }
         })
 
         toolbar.addView(makeButton("+") {
@@ -2169,9 +2173,9 @@ class MiroirIME : InputMethodService() {
                 clearPage()  // vider la RAM — l'ancien bloc ne doit pas s'afficher
                 Log.i(TAG, "Bloc Parnasse changé: $newBlockId page=$currentPageIndex (total=$totalPages)")
             } else if (!restarting || currentPageIndex == 0) {
-                // ═══ POÉSIE DE LA PAGE 0 : ne pas écraser une page qui porte des strokes ═══
-                val hasLiveStrokes = strokeRegistry.any { !it.isDeleted && it.points.isNotEmpty() && it.timestamps.isNotEmpty() }
-                if (hasLiveStrokes && currentPageIndex == 0) {
+                // ═══ POÉSIE DE LA PAGE 0 : ne pas écraser une page en cours d'écriture ═══
+                val isActivelyWriting = isStylusDown
+                if (isActivelyWriting && currentPageIndex == 0) {
                     // Page 0 active → ne pas changer, laisser le polling synchroniser plus tard
                     Log.i(TAG, "📌 Page 0 active (${strokeRegistry.size} strokes) — on reste, le Parnasse suivra")
                 } else {
@@ -2292,9 +2296,9 @@ class MiroirIME : InputMethodService() {
                                 // ═══ Garde-fou : ignore l'écho de sa propre page ═══
                                 val isEcho = (newPage == lastPostedPageN)
                                 if (!isEcho) {
-                                    // ═══ POÉSIE DE LA PAGE 0 : ne pas déloger une page active ═══
-                                    val hasLiveStrokes = strokeRegistry.any { !it.isDeleted && it.points.isNotEmpty() && it.timestamps.isNotEmpty() }
-                                    if (hasLiveStrokes) {
+                                    // ═══ POÉSIE DE LA PAGE 0 : ne pas déloger une page en cours d'écriture ═══
+                                    val isActivelyWriting = isStylusDown
+                                    if (isActivelyWriting) {
                                         // Page active → rester, poster l'état réel au Cœur
                                         Log.i(TAG, "📌 Page $currentPageIndex active (${strokeRegistry.size} strokes) — le Parnasse suivra")
                                         uiHandler.post { postMiroirState() }
