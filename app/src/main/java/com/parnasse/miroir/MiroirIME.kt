@@ -2331,7 +2331,7 @@ class MiroirIME : InputMethodService() {
                     } catch (_: Exception) { }
                 }.start()
                 if (coeurPollActive) {
-                    uiHandler.postDelayed(this, 2000)
+                    uiHandler.postDelayed(this, 1000)  // ═══ 1s pour réactivité ═══
                 }
             }
         }
