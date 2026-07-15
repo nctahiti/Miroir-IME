@@ -2221,11 +2221,8 @@ class MiroirIME : InputMethodService() {
             }
             // ═══ VALSE : démarrer le polling Cœur (mode Parnasse uniquement) ═══
             startCoeurPolling()
-            // ═══ POÉSIE : synchroniser le Cœur avec la page initiale ═══
-            // Sans ça, le premier polling lit l'ancien état et combat.
-            if (parnasseContext != null) {
-                uiHandler.postDelayed({ postMiroirState() }, 500)
-            }
+            // ═══ POÉSIE : le polling suffit pour la synchro. Pas de postMiroirState() ici
+            // pour éviter le ping-pong avec Flutter qui répondrait en écho.
         }
         updatePageIndicator()
     }
@@ -2315,7 +2312,7 @@ class MiroirIME : InputMethodService() {
                                             }
                                             refreshAll()
                                             updatePageIndicator()
-                                            postMiroirState()  // ═══ synchroniser le Cœur après le changement ═══
+                                            // ═══ POÉSIE : ne pas poster — Flutter nous a déjà amenés ici ═══
                                         }
                                     }
                                 }
