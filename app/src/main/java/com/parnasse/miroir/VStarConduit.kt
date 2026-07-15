@@ -2,6 +2,7 @@ package com.parnasse.miroir
 
 import android.util.Log
 import java.io.*
+import kotlin.math.roundToInt
 
 /**
  * VStarConduit — Le conduit V★ v2.0 unifié (16B alignés).
