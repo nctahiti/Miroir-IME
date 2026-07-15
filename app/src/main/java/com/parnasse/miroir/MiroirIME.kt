@@ -480,6 +480,80 @@ class MiroirIME : InputMethodService() {
         }
         // MDM
         savePageMdm(dir)
+        // ═══ Groupes & labels : sauvegarde JSON pour rechargement ═══
+        saveGroupsJson(dir)
+    }
+
+    private fun saveGroupsJson(dir: java.io.File) {
+        try {
+            val gm = groupManager ?: return
+            val allGroups = gm.allGroupsFull().filter { it.strokeIds.isNotEmpty() }
+            if (allGroups.isEmpty()) return
+            val arr = org.json.JSONArray()
+            for (g in allGroups) {
+                val obj = org.json.JSONObject()
+                obj.put("id", g.id)
+                val sidArr = org.json.JSONArray()
+                for (sid in g.strokeIds) sidArr.put(sid)
+                obj.put("strokeIds", sidArr)
+                obj.put("state", g.state.toString())
+                // Chercher le label associé
+                val firstSid = g.strokeIds.firstOrNull()
+                val firstRI = firstSid?.let { inkStrokeIdToRegistryIndex[it] }
+                if (firstRI != null) {
+                    groupLabels[firstRI]?.let { obj.put("label", it) }
+                    groupAnchor[firstRI]?.let { a ->
+                        obj.put("anchorX", a.first.toDouble())
+                        obj.put("anchorY", a.second.toDouble())
+                    }
+                }
+                arr.put(obj)
+            }
+            java.io.FileWriter(java.io.File(dir, "groups.json")).use { it.write(arr.toString(2)) }
+            Log.i(TAG, "💾 groups.json: ${allGroups.size} groupes")
+        } catch (e: Exception) {
+            Log.w(TAG, "saveGroupsJson: ${e.message}")
+        }
+    }
+
+    /** Charge les groupes depuis groups.json (fallback si GroupTable vide). */
+    private fun loadGroupsJson(dir: java.io.File, ciToRi: Map<Short, Int>): Int {
+        val file = java.io.File(dir, "groups.json")
+        if (!file.exists()) return 0
+        try {
+            val arr = org.json.JSONArray(file.readText())
+            var count = 0
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val gid = obj.optString("id", "")
+                val sidArr = obj.optJSONArray("strokeIds") ?: continue
+                val inkGroup = InkGroup.create()
+                for (j in 0 until sidArr.length()) {
+                    inkGroup.strokeIds.add(sidArr.getLong(j))
+                }
+                if (inkGroup.strokeIds.isEmpty()) continue
+                groupManager?.registerLoadedGroup(inkGroup)
+                val firstSid = inkGroup.strokeIds.firstOrNull()
+                if (firstSid != null) groupManager?.reactivateGroup(firstSid)
+                // Label & ancre
+                val label = obj.optString("label", null)
+                val ax = obj.optDouble("anchorX", Double.NaN)
+                val ay = obj.optDouble("anchorY", Double.NaN)
+                if (label != null || !ax.isNaN()) {
+                    val firstRI = firstSid?.let { inkStrokeIdToRegistryIndex[it] }
+                    if (firstRI != null) {
+                        if (label != null) { groupLabels[firstRI] = label; originalLabels[firstRI] = label }
+                        if (!ax.isNaN()) groupAnchor[firstRI] = Pair(ax.toFloat(), ay.toFloat())
+                    }
+                }
+                count++
+            }
+            Log.i(TAG, "📂 groups.json chargé: $count groupes")
+            return count
+        } catch (e: Exception) {
+            Log.w(TAG, "loadGroupsJson: ${e.message}")
+        }
+        return 0
     }
 
     /** ⬅️ OBSOLÈTE — Remplacé par le Conduit V★ v2.0 unifié.
@@ -880,6 +954,7 @@ class MiroirIME : InputMethodService() {
             val doc = VStarDocumentV2(vstarFile)
             doc.open()
             val result = doc.load()
+            Log.i(TAG, "🔍 loadPageV2 page=$index file=${vstarFile.length()}B tokens=${result.tokens.size} groups=${result.groups.size}")
             // ⚠️ NE PAS fermer doc ici — loadGroupTokens() en a besoin
 
             // ═══ Reconstruire strokeRegistry depuis les tokens ═══
@@ -895,13 +970,21 @@ class MiroirIME : InputMethodService() {
             val tokensByCI = mutableMapOf<Short, MutableList<VStarTokenV2>>()
             val offsetToCI = mutableMapOf<Int, Short>()  // offset → captureIndex
             var tokenIdx = 0
+            var endCount = 0; var erasedCount = 0; var metaCount = 0; var normalCount = 0
             for (t in result.tokens) {
-                if (t.isEnd()) break
-                if (t.isErased() || t.isGroupMeta()) { tokenIdx++; continue }
+                if (t.isEnd()) { endCount++; continue }  // ═══ ignorer END, ne pas break ═══
+                if (t.isErased()) { erasedCount++; tokenIdx++; continue }
+                if (t.isGroupMeta()) { metaCount++; tokenIdx++; continue }
+                normalCount++
+                // Log les 3 premiers tokens normaux
+                if (normalCount <= 3) {
+                    Log.i(TAG, "🔍 token[$tokenIdx] ci=${t.captureIndex} flags=${t.flags} ps=${t.ps} isPD=${t.isPenDown()} isPU=${t.isPenUp()} dx=${t.dx} dy=${t.dy}")
+                }
                 tokensByCI.getOrPut(t.captureIndex) { mutableListOf() }.add(t)
                 offsetToCI[tokenIdx] = t.captureIndex  // ⚠️ chaque token, pas seulement PEN_DOWN
                 tokenIdx++
             }
+            Log.i(TAG, "🔍 filtrage: end=$endCount erased=$erasedCount meta=$metaCount normal=$normalCount → ${tokensByCI.size} groupes CI")
 
             // Reconstruire StrokeRecord pour chaque captureIndex
             val ciToRi = mutableMapOf<Short, Int>()  // captureIndex → registryIndex
@@ -984,6 +1067,11 @@ class MiroirIME : InputMethodService() {
             cachedGMCacheSize = -1
             currentPageIndex = index
             rebuildBitmap()
+
+            // ═══ Fallback groupes : charger depuis groups.json si GroupTable vide ═══
+            if (groupsLoaded == 0) {
+                groupsLoaded = loadGroupsJson(dir, ciToRi)
+            }
 
             // Recalculer les blobs
             groupBlobs.clear()
