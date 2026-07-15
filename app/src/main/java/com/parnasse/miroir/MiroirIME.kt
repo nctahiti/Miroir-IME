@@ -1816,20 +1816,16 @@ class MiroirIME : InputMethodService() {
         toolbar.addView(makeButton("▶", {
             showAllTranscriptions()
         }) {
-            // ═══ POÉSIE : le Miroir gère ses propres pages. ▶ toujours possible. ═══
-            // Limité seulement par totalNotes du Parnasse s'il est disponible.
-            val maxPage = parnasseContext?.totalNotes?.takeIf { it > 0 }?.minus(1) ?: Int.MAX_VALUE
-            if (currentPageIndex < maxPage) {
-                savePage()
-                currentPageIndex++
-                if (!loadPage(currentPageIndex)) {
-                    clearPage()  // page inexistante → page vierge
-                    savePage()  // ═══ Créer le dossier immédiatement ═══
-                }
-                refreshAll()
-                updatePageIndicator()
-                postMiroirState()
+            // ═══ POÉSIE : le Miroir crée ses pages librement. ▶ jamais bloqué. ═══
+            savePage()
+            currentPageIndex++
+            if (!loadPage(currentPageIndex)) {
+                clearPage()  // page inexistante → page vierge
+                savePage()  // ═══ Créer le dossier immédiatement ═══
             }
+            refreshAll()
+            updatePageIndicator()
+            postMiroirState()
         })
 
         toolbar.addView(makeButton("+") {
