@@ -1675,7 +1675,9 @@ class MiroirIME : InputMethodService() {
         toolbar.addView(makeButton("▶", {
             showAllTranscriptions()
         }) {
-            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: maxOf(currentPageIndex + 1, countPages())) - 1
+            // ═══ POÉSIE : le Miroir gère ses propres pages. ▶ toujours possible. ═══
+            // Limité seulement par totalNotes du Parnasse s'il est disponible.
+            val maxPage = parnasseContext?.totalNotes?.takeIf { it > 0 }?.minus(1) ?: Int.MAX_VALUE
             if (currentPageIndex < maxPage) {
                 savePage()
                 currentPageIndex++
@@ -2163,7 +2165,8 @@ class MiroirIME : InputMethodService() {
                                         Log.i(TAG, "🔄 Cœur → page $newPage (était: $currentPageIndex)")
                                         uiHandler.post {
                                             savePage()
-                                            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: maxOf(currentPageIndex + 1, countPages())) - 1
+                                            // ═══ POÉSIE : le polling respecte totalNotes, sinon ne clamp pas ═══
+                                            val maxPage = parnasseContext?.totalNotes?.takeIf { it > 0 }?.minus(1) ?: Int.MAX_VALUE
                                             currentPageIndex = newPage.coerceIn(0, maxPage.coerceAtLeast(0))
                                             if (!loadPage(currentPageIndex)) {
                                                 clearPage(); savePage()
