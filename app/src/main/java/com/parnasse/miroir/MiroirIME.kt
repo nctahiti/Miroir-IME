@@ -2030,9 +2030,15 @@ class MiroirIME : InputMethodService() {
                 clearPage()  // vider la RAM — l'ancien bloc ne doit pas s'afficher
                 Log.i(TAG, "Bloc Parnasse changé: $newBlockId page=$currentPageIndex (total=$totalPages)")
             } else if (!restarting || currentPageIndex == 0) {
-                // Ne PAS écraser currentPageIndex sur restarting (le polling a déjà la bonne valeur)
-                val totalPages = parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()
-                currentPageIndex = parnasseContext!!.pageN.coerceIn(0, (totalPages - 1).coerceAtLeast(0))
+                // ═══ POÉSIE DE LA PAGE 0 : ne pas écraser une page qui porte des strokes ═══
+                val hasLiveStrokes = strokeRegistry.any { !it.isDeleted && it.points.isNotEmpty() && it.timestamps.isNotEmpty() }
+                if (hasLiveStrokes && currentPageIndex == 0) {
+                    // Page 0 active → ne pas changer, laisser le polling synchroniser plus tard
+                    Log.i(TAG, "📌 Page 0 active (${strokeRegistry.size} strokes) — on reste, le Parnasse suivra")
+                } else {
+                    val totalPages = parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()
+                    currentPageIndex = parnasseContext!!.pageN.coerceIn(0, (totalPages - 1).coerceAtLeast(0))
+                }
             }
             Log.i(TAG, "Bloc Parnasse: ${blockDir?.name} page=$currentPageIndex")
         }
@@ -2140,17 +2146,25 @@ class MiroirIME : InputMethodService() {
                                 // ═══ Garde-fou : ignore l'écho de sa propre page ═══
                                 val isEcho = (newPage == lastPostedPageN)
                                 if (!isEcho) {
-                                    Log.i(TAG, "🔄 Cœur → page $newPage (était: $currentPageIndex)")
-                                    uiHandler.post {
-                                        savePage()
-                                        val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()) - 1
-                                        currentPageIndex = newPage.coerceIn(0, maxPage.coerceAtLeast(0))
-                                        if (!loadPage(currentPageIndex)) {
-                                            clearPage(); savePage()
-                                            Log.i(TAG, "📄 Page $currentPageIndex créée (vierge)")
+                                    // ═══ POÉSIE DE LA PAGE 0 : ne pas déloger une page active ═══
+                                    val hasLiveStrokes = strokeRegistry.any { !it.isDeleted && it.points.isNotEmpty() && it.timestamps.isNotEmpty() }
+                                    if (hasLiveStrokes) {
+                                        // Page active → rester, poster l'état réel au Cœur
+                                        Log.i(TAG, "📌 Page $currentPageIndex active (${strokeRegistry.size} strokes) — le Parnasse suivra")
+                                        uiHandler.post { postMiroirState() }
+                                    } else {
+                                        Log.i(TAG, "🔄 Cœur → page $newPage (était: $currentPageIndex)")
+                                        uiHandler.post {
+                                            savePage()
+                                            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()) - 1
+                                            currentPageIndex = newPage.coerceIn(0, maxPage.coerceAtLeast(0))
+                                            if (!loadPage(currentPageIndex)) {
+                                                clearPage(); savePage()
+                                                Log.i(TAG, "📄 Page $currentPageIndex créée (vierge)")
+                                            }
+                                            refreshAll()
+                                            updatePageIndicator()
                                         }
-                                        refreshAll()
-                                        updatePageIndicator()
                                     }
                                 }
                             }
