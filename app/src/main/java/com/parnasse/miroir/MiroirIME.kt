@@ -602,9 +602,12 @@ class MiroirIME : InputMethodService() {
         return 0
     }
 
-    /** ⬅️ OBSOLÈTE — Remplacé par le Conduit V★ v2.0 unifié.
-     *  Conservé pour référence. Les strokes sont écrits en temps réel,
-     *  plus besoin de ré-encodage batch. */
+    /** Log de diagnostic — synchro Miroir↔Parnasse. */
+    private fun logSync(source: String, extra: String = "") {
+        val tn = parnasseContext?.totalNotes ?: -1
+        val cp = countPages()
+        Log.i(TAG, "🔴 SYNC [$source] ime=$currentPageIndex parnasse_total=$tn pages_disque=$cp $extra".trim())
+    }
     @Suppress("unused")
     private fun savePageV2() {
         // ═══ Création paresseuse du bloc au premier stroke ═══
@@ -1770,6 +1773,7 @@ class MiroirIME : InputMethodService() {
                 refreshAll()
                 updatePageIndicator()
                 postMiroirState()
+                logSync("◀")
             }
         })
 
@@ -1830,6 +1834,7 @@ class MiroirIME : InputMethodService() {
             if (currentPageIndex < totalNotes) {
                 postMiroirState()
             }
+            logSync("▶")
         })
 
         toolbar.addView(makeButton("+") {
@@ -2315,6 +2320,7 @@ class MiroirIME : InputMethodService() {
                                             if (newPage != currentPageIndex) {
                                                 postMiroirState()
                                             }
+                                            logSync("poll→$newPage")
                                         }
                                     }
                                 }
@@ -4015,8 +4021,9 @@ class MiroirIME : InputMethodService() {
 
     /** Met à jour l'indicateur de page (numéro page courante / totale). */
     private fun updatePageIndicator() {
-        val total = if (parnasseContext?.totalNotes ?: 0 > 0) parnasseContext!!.totalNotes
-                    else maxOf(currentPageIndex + 1, countPages())
+        // ═══ POÉSIE : le disque ne ment pas. totalNotes Parnasse est souvent en retard. ═══
+        val cp = countPages()
+        val total = maxOf(currentPageIndex + 1, cp, parnasseContext?.totalNotes ?: 0)
         pageLabel?.text = "${currentPageIndex + 1}/$total"
     }
 
