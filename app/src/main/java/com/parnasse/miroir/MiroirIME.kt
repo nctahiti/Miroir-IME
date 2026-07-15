@@ -2303,9 +2303,8 @@ class MiroirIME : InputMethodService() {
                                         Log.i(TAG, "🔄 Cœur → page $newPage (était: $currentPageIndex)")
                                         uiHandler.post {
                                             savePage()
-                                            // ═══ POÉSIE : le polling respecte totalNotes, sinon ne clamp pas ═══
-                                            val maxPage = parnasseContext?.totalNotes?.takeIf { it > 0 }?.minus(1) ?: Int.MAX_VALUE
-                                            currentPageIndex = newPage.coerceIn(0, maxPage.coerceAtLeast(0))
+                                            // ═══ POÉSIE : suivre Flutter sans clamp. Créer la page si besoin. ═══
+                                            currentPageIndex = newPage.coerceIn(0, Int.MAX_VALUE)
                                             if (!loadPage(currentPageIndex)) {
                                                 clearPage(); savePage()
                                                 Log.i(TAG, "📄 Page $currentPageIndex créée (vierge)")
