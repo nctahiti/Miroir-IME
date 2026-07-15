@@ -76,18 +76,8 @@ class VStarConduit {
             outputStream = DataOutputStream(bos)
 
             if (!exists) {
-                // Nouveau fichier : écrire le header V★ v2.0
-                val headerJson = buildString {
-                    append("{")
-                    append("\"format\":\"miroir-vstar\",")
-                    append("\"version\":\"2.0\",")
-                    append("\"scale\":\"pixels×8\",")
-                    append("\"token_size\":16,")
-                    append("\"unit_factor\":0.125")
-                    append("}")
-                }
-                val headerBytes = (headerJson + HEADER_MARKER).toByteArray(Charsets.UTF_8)
-                outputStream!!.write(headerBytes)
+                // Nouveau fichier : pas de header, tokens V★ v2.0 16B bruts dès l'offset 0
+                // Compatible avec VStarDataRegion.readAll() qui lit directement les 16B.
                 outputStream!!.flush()
                 strokeCount = 0
                 pointCount = 0
