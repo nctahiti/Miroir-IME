@@ -493,9 +493,15 @@ class MiroirIME : InputMethodService() {
             for (g in allGroups) {
                 val obj = org.json.JSONObject()
                 obj.put("id", g.id)
-                val sidArr = org.json.JSONArray()
-                for (sid in g.strokeIds) sidArr.put(sid)
-                obj.put("strokeIds", sidArr)
+                // ═══ Sauvegarder les registryIndex (0-based, = captureIndex) au lieu des inkId ═══
+                // Les inkId changent après rechargement, pas les registryIndex.
+                val riArr = org.json.JSONArray()
+                for (sid in g.strokeIds) {
+                    val ri = inkStrokeIdToRegistryIndex[sid] ?: continue
+                    riArr.put(ri)
+                }
+                if (riArr.length() == 0) continue
+                obj.put("registryIndices", riArr)
                 obj.put("state", g.state.toString())
                 // Chercher le label associé
                 val firstSid = g.strokeIds.firstOrNull()
@@ -532,10 +538,30 @@ class MiroirIME : InputMethodService() {
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
                 val gid = obj.optString("id", "")
-                val sidArr = obj.optJSONArray("strokeIds") ?: continue
+                // ═══ Lire registryIndices (0-based) et traduire via ciToRi → inkId ═══
+                val riArr = obj.optJSONArray("registryIndices")
+                val sidArr = obj.optJSONArray("strokeIds")  // rétrocompatibilité
                 val inkGroup = InkGroup.create()
-                for (j in 0 until sidArr.length()) {
-                    inkGroup.strokeIds.add(sidArr.getLong(j))
+                if (riArr != null) {
+                    for (j in 0 until riArr.length()) {
+                        val ri = riArr.getInt(j)
+                        // Le registryIndex = captureIndex dans le fichier V★
+                        // ciToRi n'est pas inversé, mais on peut chercher le ci qui mappe vers ce ri
+                        // En pratique, ri = ci (pas de strokes supprimés), donc on utilise ri comme ci
+                        val newRi = ciToRi[ri.toShort()] ?: continue
+                        val inkId = (ri + 1).toLong()  // inkId = ci + 1
+                        if (inkStrokeIdToRegistryIndex.containsKey(inkId)) {
+                            inkGroup.strokeIds.add(inkId)
+                        }
+                    }
+                } else if (sidArr != null) {
+                    // Rétrocompatibilité: anciens strokeIds (inkId), filtrer les orphelins
+                    for (j in 0 until sidArr.length()) {
+                        val sid = sidArr.getLong(j)
+                        if (inkStrokeIdToRegistryIndex.containsKey(sid)) {
+                            inkGroup.strokeIds.add(sid)
+                        }
+                    }
                 }
                 if (inkGroup.strokeIds.isEmpty()) continue
                 groupManager?.registerLoadedGroup(inkGroup)
