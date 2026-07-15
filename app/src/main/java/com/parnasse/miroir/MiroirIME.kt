@@ -487,7 +487,7 @@ class MiroirIME : InputMethodService() {
     private fun saveGroupsJson(dir: java.io.File) {
         try {
             val gm = groupManager ?: return
-            val allGroups = gm.allGroupsFull().filter { it.strokeIds.isNotEmpty() }
+            val allGroups = gm.allGroups().filter { it.strokeIds.isNotEmpty() }
             if (allGroups.isEmpty()) return
             val arr = org.json.JSONArray()
             for (g in allGroups) {
