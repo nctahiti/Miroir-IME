@@ -173,9 +173,13 @@ class MiroirIME : InputMethodService() {
     private var pageLabel: android.widget.TextView? = null
 
     // ── Bloc / Session ────────────────────────────────────────────────
-    // Structure : blocks/<appName>_<timestamp>/page_<n>/
+    // Structure standalone : blocks/<app>_<field>_<timestamp>/page_<n>/
+    // Structure Parnasse : blocks/<UUID>/page_<n>/ (via openBlockDir)
+    // La clé du champ identifie de manière unique un bloc de capture :
+    //   - Si fieldId + fieldName sont renseignés → bloc réutilisable (rappel)
+    //   - Sinon → bloc vierge à chaque ouverture (timestamp unique)
     // Le bloc est créé à l'ouverture de l'IME et fermé au ✕.
-    private var hostAppName: String = "unknown"
+    private var currentFieldKey: String = ""
     private var blockTimestamp: Long = 0L
     private var blockDir: java.io.File? = null  // null = pas de bloc actif
     // Conduit V★ — flux binaire parallèle (append-only, 13 octets/point)
@@ -186,28 +190,56 @@ class MiroirIME : InputMethodService() {
     // Flag temporaire : active V★ v2.0 pour save/load
     private val useVStarV2 = true
 
-    /** Initialise (ou réutilise) le bloc courant pour l'app hôte. */
-    private fun ensureBlockDir(appName: String, ts: Long): java.io.File {
-        if (blockDir == null || hostAppName != appName) {
-            hostAppName = appName
+    /** Construit une clé composite identifiant le champ de saisie.
+     *  packageName est toujours présent. fieldId et fieldName sont optionnels.
+     *  S'ils sont absents, le timestamp final rend la clé unique à chaque invocation. */
+    private fun buildFieldKey(info: android.view.inputmethod.EditorInfo?): String {
+        val app = info?.packageName?.replace(".", "_") ?: "unknown"
+        val fid = info?.fieldId ?: 0
+        val fname = info?.fieldName?.takeIf { it.isNotBlank() }?.replace(Regex("[^a-zA-Z0-9_]"), "_")
+        return when {
+            fid > 0 && fname != null -> "${app}_f${fid}_${fname}"
+            fid > 0                    -> "${app}_f${fid}"
+            fname != null              -> "${app}_${fname}"
+            else                       -> app  // timestamp ajouté dans ensureBlockDir
+        }
+    }
+
+    /** Initialise (ou change de) bloc standalone pour une clé de champ.
+     *  Si la clé est nouvelle → bloc vierge. Si c'est la même → continuation. */
+    private fun ensureBlockDir(fieldKey: String, ts: Long): java.io.File {
+        if (blockDir == null || currentFieldKey != fieldKey) {
+            currentFieldKey = fieldKey
             blockTimestamp = ts
-            val safeName = appName.replace(".", "_")
+            val safeName = fieldKey.replace(".", "_")
+            // ═══ Toujours un nouveau bloc — les anciens restent accessibles via le menu ◀ long ═══
             blockDir = java.io.File(filesDir, "blocks/${safeName}_$ts").also { it.mkdirs() }
+            Log.i(TAG, "Bloc nouveau: ${blockDir!!.name}")
             currentPageIndex = 0
+            clearPage()  // vider la RAM pour ne pas afficher l'ancienne page
             val bd = blockDir!!
             Thread {
                 cleanupEmptyPages(bd)
             }.start()
-            Log.i(TAG, "Bloc ouvert: ${blockDir!!.name}")
         }
         return blockDir!!
+    }
+
+    /** Cherche un bloc existant pour une clé de champ (sans le timestamp final). */
+    private fun findExistingBlock(fieldKey: String): java.io.File? {
+        val blocksDir = java.io.File(filesDir, "blocks")
+        if (!blocksDir.exists()) return null
+        val safeKey = fieldKey.replace(".", "_")
+        return blocksDir.listFiles()?.firstOrNull { f ->
+            f.isDirectory && f.name.startsWith(safeKey)
+        }
     }
 
     /** Ouvre un bloc existant par son ID (mode contextuel Parnasse). */
     private fun openBlockDir(blockId: String): java.io.File {
         if (blockId.isEmpty()) return ensureBlockDir("standalone", System.currentTimeMillis())
         blockDir = java.io.File(filesDir, "blocks/$blockId").also { it.mkdirs() }
-        hostAppName = "parnasse"
+        currentFieldKey = "parnasse"
         blockTimestamp = System.currentTimeMillis()
         currentPageIndex = 0
         Log.i(TAG, "Bloc Parnasse ouvert: $blockId (pages=${countPages()})")
@@ -250,7 +282,7 @@ class MiroirIME : InputMethodService() {
         // Conduit V★ — métriques et fermeture
         vstarWriter?.let { vsw ->
             val vstarFile = vsw.getCurrentFile()
-            if (vstarFile != null && vstarFile.exists()) {
+            if (vstarFile != null && vstarFile.exists() && blockDir != null) {
                 val vstarSize = vstarFile.length()
                 val pageDir = java.io.File(blockDir, "page_$currentPageIndex")
                 val stateFile = java.io.File(pageDir, "state.json")
@@ -277,7 +309,7 @@ class MiroirIME : InputMethodService() {
         }
         currentPageIndex = 0
         blockDir = null
-        hostAppName = "unknown"
+        currentFieldKey = ""
         Log.i(TAG, "Bloc fermé — pageIndex remis à 0")
     }
 
@@ -425,6 +457,11 @@ class MiroirIME : InputMethodService() {
 
     /** Sauvegarde la page en V★ v2.0 (document vivant). */
     private fun savePageV2() {
+        // ═══ Création paresseuse du bloc au premier stroke ═══
+        if (blockDir == null && strokeRegistry.any { !it.isDeleted && it.points.isNotEmpty() }) {
+            ensureBlockDir(currentFieldKey.ifEmpty { "standalone" }, System.currentTimeMillis())
+            Log.i(TAG, "Bloc créé paresseusement: ${blockDir?.name}")
+        }
         val bd = blockDir ?: run {
             Log.w(TAG, "savePageV2: pas de bloc actif")
             return
@@ -1695,10 +1732,10 @@ class MiroirIME : InputMethodService() {
 
         // ═══ Reset : ferme le bloc, nouveau bloc, reste en capture ═══
         toolbar.addView(makeButton("✕") {
-            val appName = hostAppName
+            val fKey = currentFieldKey
             closeBlock()
             clearPage()
-            ensureBlockDir(appName, System.currentTimeMillis())
+            ensureBlockDir(fKey, System.currentTimeMillis())
             refreshAll()
         })
 
@@ -1719,7 +1756,10 @@ class MiroirIME : InputMethodService() {
             if (currentPageIndex > 0) {
                 savePage()
                 currentPageIndex--
-                loadPage(currentPageIndex)
+                if (!loadPage(currentPageIndex)) {
+                    clearPage()
+                    Log.i(TAG, "◀ page $currentPageIndex vierge")
+                }
                 refreshAll()
                 updatePageIndicator()
                 postMiroirState()
@@ -1769,7 +1809,7 @@ class MiroirIME : InputMethodService() {
         toolbar.addView(makeButton("▶", {
             showAllTranscriptions()
         }) {
-            val maxPage = (parnasseContext?.totalNotes ?: Int.MAX_VALUE) - 1
+            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()) - 1
             if (currentPageIndex < maxPage) {
                 savePage()
                 currentPageIndex++
@@ -1784,7 +1824,7 @@ class MiroirIME : InputMethodService() {
         })
 
         toolbar.addView(makeButton("+") {
-            val maxPage = (parnasseContext?.totalNotes ?: Int.MAX_VALUE) - 1
+            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()) - 1
             if (currentPageIndex < maxPage) {
                 newPage()
                 refreshAll()
@@ -2095,49 +2135,80 @@ class MiroirIME : InputMethodService() {
         }
 
         // ═══ Ouvrir un bloc pour cette app (sauf si contexte Parnasse déjà ouvert) ═══
+        // ⚠️ Si l'app n'est pas le Parnasse → vider le contexte Parnasse (mode standalone)
+        if (app != "com.example.le_parnasse_numerique") {
+            coeurPollActive = false  // arrêter le polling Cœur
+            parnasseContext = null
+        }
+        // ═══ ANTI-FANTÔME : ignorer les restarting si le bloc est déjà chargé ═══
+        if (restarting && blockDir != null && parnasseContext != null &&
+            blockDir?.name == parnasseContext!!.blockId) {
+            Log.i(TAG, "onStartInputView — restarting ignoré (bloc déjà actif: ${blockDir?.name})")
+            updatePageIndicator()
+            return
+        }
         if (parnasseContext == null) {
-            ensureBlockDir(app, System.currentTimeMillis())
+            // ═══ Mode STANDALONE : page vierge temporaire (pas de bloc disque) ═══
+            blockDir = null
+            currentFieldKey = buildFieldKey(info)
+            currentPageIndex = 0
+            clearPage()
+            Log.i(TAG, "Page vierge standalone — prête pour capture")
         } else {
             // ═══ Vérifier si le bloc a changé (Flutter a navigué vers un autre bloc) ═══
             val newBlockId = parnasseContext!!.blockId
             if (blockDir?.name != newBlockId) {
                 openBlockDir(newBlockId)
-                currentPageIndex = parnasseContext!!.pageN.coerceAtLeast(0)
-                Log.i(TAG, "Bloc Parnasse changé: $newBlockId page=$currentPageIndex")
+                val totalPages = parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()
+                currentPageIndex = parnasseContext!!.pageN.coerceIn(0, (totalPages - 1).coerceAtLeast(0))
+                clearPage()  // vider la RAM — l'ancien bloc ne doit pas s'afficher
+                Log.i(TAG, "Bloc Parnasse changé: $newBlockId page=$currentPageIndex (total=$totalPages)")
             } else if (!restarting || currentPageIndex == 0) {
                 // Ne PAS écraser currentPageIndex sur restarting (le polling a déjà la bonne valeur)
-                currentPageIndex = parnasseContext!!.pageN.coerceAtLeast(0)
+                val totalPages = parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()
+                currentPageIndex = parnasseContext!!.pageN.coerceIn(0, (totalPages - 1).coerceAtLeast(0))
             }
             Log.i(TAG, "Bloc Parnasse: ${blockDir?.name} page=$currentPageIndex")
         }
-        // Conduit V★ — initialiser le writer pour la première page
-        if (vstarWriter == null || vstarWriter?.isActive() != true) {
-            vstarWriter?.close()
-            vstarWriter = VStarWriter(this).also {
-                it.openNewSession("page_0")
+        // ═══ Essayer de charger la page demandée (si bloc existe) ═══
+        if (blockDir != null) {
+            if (!loadPage(currentPageIndex)) {
+                // Page inexistante → page vierge (pas de page fantôme)
+                clearPage()
+                Log.i(TAG, "Page $currentPageIndex vierge — sera créée à la première capture")
             }
-            vstarPointCount = 0
+        }
+        // ═══ Initialisation lourde — SEULEMENT à la première ouverture ═══
+        if (!restarting) {
+            // Conduit V★ — initialiser le writer pour la première page
+            if (vstarWriter == null || vstarWriter?.isActive() != true) {
+                vstarWriter?.close()
+                vstarWriter = VStarWriter(this).also {
+                    it.openNewSession("page_0")
+                }
+                vstarPointCount = 0
+            }
+            // ═══ Forcer la réinitialisation du TouchHelper à chaque ouverture ═══
+            touchHelper = null
+            isWriteMode = false
+            syncGroupManagerParams()
+            rebuildBitmap()
+            val v = imeView
+            if (v != null) initTouchHelper(v)
+            rebuildBitmap()
+            // ═══ Rafraîchir le template (prise en compte des changements de calibration) ═══
+            imeView?.let { if (it.height > 0) updateTemplateSpacing(it.height) }
+            // ═══ VALSE : mode initial dicté par le contexte Parnasse ═══
+            val targetFormatting = parnasseContext?.mode == "note" || parnasseContext?.mode == "formatage"
+            if (isFormattingMode != targetFormatting) {
+                isFormattingToggleInProgress = true
+                toggleFormattingMode()
+                uiHandler.postDelayed({ isFormattingToggleInProgress = false }, 300)
+            }
+            // ═══ VALSE : démarrer le polling Cœur (mode Parnasse uniquement) ═══
+            startCoeurPolling()
         }
         updatePageIndicator()
-        // ═══ Forcer la réinitialisation du TouchHelper à chaque ouverture ═══
-        touchHelper = null
-        isWriteMode = false
-        syncGroupManagerParams()
-        rebuildBitmap()
-        val v = imeView
-        if (v != null) initTouchHelper(v)
-        rebuildBitmap()
-        // ═══ Rafraîchir le template (prise en compte des changements de calibration) ═══
-        imeView?.let { if (it.height > 0) updateTemplateSpacing(it.height) }
-        // ═══ VALSE : mode initial dicté par le contexte Parnasse ═══
-        val targetFormatting = parnasseContext?.mode == "note" || parnasseContext?.mode == "formatage"
-        if (isFormattingMode != targetFormatting) {
-            isFormattingToggleInProgress = true
-            toggleFormattingMode()
-            uiHandler.postDelayed({ isFormattingToggleInProgress = false }, 300)
-        }
-        // ═══ VALSE : démarrer le polling Cœur (mode Parnasse uniquement) ═══
-        startCoeurPolling()
     }
 
     /** TRANSMUTATION — Polling : détection de bloc via __miroir__ + synchro page. */
@@ -2169,7 +2240,8 @@ class MiroirIME : InputMethodService() {
                                 uiHandler.post {
                                     savePage()
                                     openBlockDir(newParnasseBlockId)  // crée le bloc s'il n'existe pas
-                                    currentPageIndex = newPage.coerceAtLeast(0)
+                                    val maxPage = miroirJson.optInt("total_notes", 1) - 1
+                                    currentPageIndex = newPage.coerceIn(0, maxPage.coerceAtLeast(0))
                                     if (!loadPage(currentPageIndex)) {
                                         clearPage(); savePage()
                                     }
@@ -2200,14 +2272,14 @@ class MiroirIME : InputMethodService() {
                             val newPage = json.optInt("page_n", -1)
 
                             if (newPage >= 0 && newPage != currentPageIndex) {
-                                // ═══ Garde-fou double : ignore l'écho de sa propre page ET délai 5s ═══
+                                // ═══ Garde-fou : ignore l'écho de sa propre page ═══
                                 val isEcho = (newPage == lastPostedPageN)
-                                val timeSinceLocal = System.currentTimeMillis() - lastLocalPageChange
-                                if (!isEcho && timeSinceLocal > 5000) {
+                                if (!isEcho) {
                                     Log.i(TAG, "🔄 Cœur → page $newPage (était: $currentPageIndex)")
                                     uiHandler.post {
                                         savePage()
-                                        currentPageIndex = newPage
+                                        val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: countPages()) - 1
+                                        currentPageIndex = newPage.coerceIn(0, maxPage.coerceAtLeast(0))
                                         if (!loadPage(currentPageIndex)) {
                                             clearPage(); savePage()
                                             Log.i(TAG, "📄 Page $currentPageIndex créée (vierge)")
@@ -2223,7 +2295,7 @@ class MiroirIME : InputMethodService() {
                     } catch (_: Exception) { }
                 }.start()
                 if (coeurPollActive) {
-                    uiHandler.postDelayed(this, 500)
+                    uiHandler.postDelayed(this, 2000)
                 }
             }
         }
@@ -4430,9 +4502,10 @@ class MiroirIME : InputMethodService() {
                         clearPage()
                         val sName = selected.name
                         val sLastUnderscore = sName.lastIndexOf('_')
-                        val sAppName = if (sLastUnderscore > 0) sName.substring(0, sLastUnderscore).replace("_", ".") else "unknown"
+                        // La clé du champ = tout ce qui précède le timestamp final
+                        val sFieldKey = if (sLastUnderscore > 0) sName.substring(0, sLastUnderscore) else sName
                         val sTs = if (sLastUnderscore > 0) sName.substring(sLastUnderscore + 1).toLongOrNull() ?: System.currentTimeMillis() else System.currentTimeMillis()
-                        hostAppName = sAppName
+                        currentFieldKey = sFieldKey
                         blockTimestamp = sTs
                         blockDir = selected
                         currentPageIndex = 0
