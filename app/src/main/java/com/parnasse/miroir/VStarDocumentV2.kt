@@ -45,6 +45,7 @@ class VStarDocumentV2(private val file: File) {
     }
 
     fun close() { flush(); dataRegion?.close(); dataRegion = null; groupTable = null; isOpen = false }
+    fun closeWithoutFlush() { dataRegion?.close(); dataRegion = null; groupTable = null; isOpen = false }
     fun flush() { groupTable?.save(groupTableFile()); dataRegion?.flush() }
 
     // ──── Capture ────

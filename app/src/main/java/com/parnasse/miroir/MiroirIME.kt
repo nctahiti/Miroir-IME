@@ -1137,7 +1137,9 @@ class MiroirIME : InputMethodService() {
             // ═══ MDM — MarkDownMiroir ═══
             loadPageMdm(dir)
 
-            doc.close()
+            // ═══ NE PAS appeler doc.close() — son flush() écrase page.groups.json ═══
+            // On utilise groups.json maintenant. closeWithoutFlush() ferme juste le DataRegion.
+            doc.closeWithoutFlush()
             // ═══ Conduit V★ v2.0 — reprendre la session sur la page chargée ═══
             vstarConduit?.endSession()
             vstarConduit?.close()
