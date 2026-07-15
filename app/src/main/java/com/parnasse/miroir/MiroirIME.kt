@@ -520,6 +520,12 @@ class MiroirIME : InputMethodService() {
     private fun loadGroupsJson(dir: java.io.File, ciToRi: Map<Short, Int>): Int {
         val file = java.io.File(dir, "groups.json")
         if (!file.exists()) return 0
+        // ═══ Sécurité : ignorer les fichiers trop gros (>100KB = persistance accumulée) ═══
+        if (file.length() > 100_000) {
+            Log.w(TAG, "groups.json trop volumineux (${file.length()}B) — ignoré")
+            file.delete()
+            return 0
+        }
         try {
             val arr = org.json.JSONArray(file.readText())
             var count = 0
