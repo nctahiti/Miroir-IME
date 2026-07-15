@@ -1951,8 +1951,8 @@ class MiroirIME : InputMethodService() {
         Log.i(TAG, "onStartInputView — app=$app field=${info?.fieldName ?: "?"} inputType=${info?.inputType ?: 0}")
 
         // ═══ Lire le token de connexion depuis le Cœur (UUID Parnasse) ═══
-        // Relire si pas de contexte. Ne PAS relire sur restarting — le contexte est déjà bon.
-        if (parnasseContext == null) {
+        // Sur restarting, relire aussi — le bloc Parnasse a pu changer.
+        if (parnasseContext == null || restarting) {
             if (app == "com.example.le_parnasse_numerique") {
             // Attendre que le broadcast arrive (max 500ms)
             for (i in 0..10) {
