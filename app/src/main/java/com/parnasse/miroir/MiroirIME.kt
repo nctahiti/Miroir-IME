@@ -524,16 +524,30 @@ class MiroirIME : InputMethodService() {
 
     /** Charge les groupes depuis groups.json (fallback si GroupTable vide). */
     private fun loadGroupsJson(dir: java.io.File, ciToRi: Map<Short, Int>): Int {
+        // ═══ Fallback 1: notre format groups.json ═══
         val file = java.io.File(dir, "groups.json")
-        if (!file.exists()) return 0
+        // ═══ Fallback 2: ancien format page.groups.json (GroupTable) ═══
+        val legacyFile = java.io.File(dir, "page.groups.json")
+        val useFile = when {
+            file.exists() -> file
+            legacyFile.exists() -> legacyFile
+            else -> return 0
+        }
         // ═══ Sécurité : ignorer les fichiers trop gros (>100KB = persistance accumulée) ═══
-        if (file.length() > 100_000) {
-            Log.w(TAG, "groups.json trop volumineux (${file.length()}B) — ignoré")
-            file.delete()
+        if (useFile.length() > 100_000) {
+            Log.w(TAG, "groups.json trop volumineux (${useFile.length()}B) — ignoré")
+            useFile.delete()
             return 0
         }
         try {
-            val arr = org.json.JSONArray(file.readText())
+            val raw = useFile.readText().trim()
+            val arr = if (raw.startsWith("{")) {
+                // Format legacy : {"groups": [...]}
+                org.json.JSONObject(raw).optJSONArray("groups") ?: org.json.JSONArray()
+            } else {
+                // Notre format : [...]
+                org.json.JSONArray(raw)
+            }
             var count = 0
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)

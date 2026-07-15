@@ -34,9 +34,10 @@ class VStarDocumentV2(private val file: File) {
         dataRegion = VStarDataRegion(file).also { it.open() }
         groupTable = VStarGroupTable()
         val tableFile = groupTableFile()
+        Log.i(TAG, "GroupTable file: ${tableFile.absolutePath} exists=${tableFile.exists()} size=${if (tableFile.exists()) tableFile.length() else -1}")
         if (tableFile.exists()) {
-            groupTable!!.load(tableFile)
-            Log.i(TAG, "Ouvert: ${tokenCount} tokens, ${groupCount} groupes")
+            val ok = groupTable!!.load(tableFile)
+            Log.i(TAG, "GroupTable chargé: ok=$ok groupes=${groupCount}")
         } else {
             Log.i(TAG, "Nouveau: ${file.absolutePath}")
         }
