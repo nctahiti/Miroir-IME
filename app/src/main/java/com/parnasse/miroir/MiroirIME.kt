@@ -537,8 +537,14 @@ class MiroirIME : InputMethodService() {
                 }
                 arr.put(obj)
             }
-            java.io.FileWriter(java.io.File(dir, "groups.json")).use { it.write(arr.toString(2)) }
-            Log.i(TAG, "💾 groups.json: ${allGroups.size} groupes")
+            java.io.FileWriter(java.io.File(dir, "groups.json")).use { w ->
+                val root = org.json.JSONObject()
+                // ═══ LIEN NOTE↔CAPTURE : id partagé pour retrouver la note Parnasse ═══
+                parnasseContext?.noteId?.takeIf { it.isNotEmpty() }?.let { root.put("note_id", it) }
+                root.put("groups", arr)
+                w.write(root.toString(2))
+            }
+            Log.i(TAG, "💾 groups.json: ${allGroups.size} groupes${parnasseContext?.noteId?.let { " (note=$it)" } ?: ""}")
         } catch (e: Exception) {
             Log.w(TAG, "saveGroupsJson: ${e.message}")
         }
@@ -4407,6 +4413,8 @@ class MiroirIME : InputMethodService() {
         isFormattingMode = !isFormattingMode
         if (isFormattingMode) {
             // ═══ MODE MISE EN FORME ═══
+            // Sauvegarder la page (groupes + labels) avant de basculer
+            savePage()
             // Si on revient au clavier depuis le mode insertion, annuler l'insertion
             if (isInsertionMode) {
                 Log.i(TAG, "✎ Insertion annulée (retour clavier)")
