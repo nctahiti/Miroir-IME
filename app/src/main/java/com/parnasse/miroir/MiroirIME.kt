@@ -53,6 +53,7 @@ class MiroirIME : InputMethodService() {
 
     companion object {
         private const val TAG = "Miroir/IME"
+        private const val SEMA = "Miroir/Sema"  // ═══ Séma to gramme — mesure des flux ═══
         // 0 = plein écran (le système donne toute la hauteur disponible)
         private const val IME_HEIGHT_DP = 0
     }
@@ -60,6 +61,7 @@ class MiroirIME : InputMethodService() {
     // ── Dessin ────────────────────────────────────────────────────────
     private var bitmap: Bitmap? = null
     private var bitmapCanvas: Canvas? = null
+    private var semaStart = 0L  // ═══ Séma to gramme — timestamp T0 ═══
     private val strokePaint = Paint().apply {
         color = Color.BLACK
         strokeWidth = 3f
@@ -258,8 +260,25 @@ class MiroirIME : InputMethodService() {
         currentFieldKey = "parnasse"
         blockTimestamp = System.currentTimeMillis()
         currentPageIndex = 0
+        // ═══ NETTOYAGE FANTÔMES : pages au-delà de totalNotes = notes supprimées ═══
+        cleanupGhostPages()
         Log.i(TAG, "Bloc Parnasse ouvert: $blockId (pages=${countPages()})")
         return blockDir!!
+    }
+
+    /** Supprime les répertoires de page qui n'ont plus de note correspondante dans Parnasse.
+     *  Appelé à l'ouverture du bloc. Compare countPages() avec parnasseContext.totalNotes. */
+    private fun cleanupGhostPages() {
+        val bd = blockDir ?: return
+        val totalNotes = parnasseContext?.totalNotes?.takeIf { it > 0 } ?: return
+        val pageDirs = bd.listFiles()?.filter { it.isDirectory && it.name.startsWith("page_") } ?: return
+        for (dir in pageDirs) {
+            val pageNum = dir.name.removePrefix("page_").toIntOrNull() ?: continue
+            if (pageNum >= totalNotes) {
+                dir.deleteRecursively()
+                Log.i(TAG, "👻 Page fantôme supprimée: ${dir.name} (page=$pageNum ≥ totalNotes=$totalNotes)")
+            }
+        }
     }
 
     /** Supprime les pages vides (state.json sans strokes ni labels) du bloc donné. */
@@ -482,12 +501,14 @@ class MiroirIME : InputMethodService() {
         savePageMdm(dir)
         // ═══ Groupes & labels : sauvegarde JSON pour rechargement ═══
         saveGroupsJson(dir)
+        Log.i(SEMA, "T5|savePage|${System.currentTimeMillis() - semaStart}ms|vstar=${vstarSize}B|strokes=$liveStrokes|page=$currentPageIndex")
     }
 
     private fun saveGroupsJson(dir: java.io.File) {
         try {
             val gm = groupManager ?: return
-            val allGroups = gm.allGroups().filter { it.strokeIds.isNotEmpty() }
+            // ═══ allGroupsFull() : mémoire + persistence (groupes évincés) ═══
+            val allGroups = gm.allGroupsFull().filter { it.strokeIds.isNotEmpty() }
             if (allGroups.isEmpty()) return
             val arr = org.json.JSONArray()
             for (g in allGroups) {
@@ -595,6 +616,7 @@ class MiroirIME : InputMethodService() {
                 count++
             }
             Log.i(TAG, "📂 groups.json chargé: $count groupes")
+            Log.i(SEMA, "T4|loadGroupsJson|${System.currentTimeMillis() - semaStart}ms|groupes=$count|file=${useFile.length()}B")
             return count
         } catch (e: Exception) {
             Log.w(TAG, "loadGroupsJson: ${e.message}")
@@ -1004,6 +1026,7 @@ class MiroirIME : InputMethodService() {
             doc.open()
             val result = doc.load()
             Log.i(TAG, "🔍 loadPageV2 page=$index file=${vstarFile.length()}B tokens=${result.tokens.size} groups=${result.groups.size}")
+            Log.i(SEMA, "T3|loadPageV2|${System.currentTimeMillis() - semaStart}ms|file=${vstarFile.length()}B|tokens=${result.tokens.size}|groups=${result.groups.size}")
             // ⚠️ NE PAS fermer doc ici — loadGroupTokens() en a besoin
 
             // ═══ Reconstruire strokeRegistry depuis les tokens ═══
@@ -1649,21 +1672,27 @@ class MiroirIME : InputMethodService() {
 
             Log.i(TAG, "🎯 Contexte Parnasse: bloc=$blockId page=$pageN mode=$mode total=$totalNotes")
 
+            // ═══ DÉMARRAGE RAPIDE : ne plus recréer la vue (setInputView détruit TouchHelper/bitmap) ═══
+            val isNewBlock = parnasseContext?.blockId != blockId
             parnasseContext = ParnasseContext(blockId, pageN, mode, noteId, libraryId, coeurUrl, totalNotes)
 
-            // Ouvrir le bloc et positionner la page (toujours, même si nouvelle)
-            openBlockDir(blockId)
-            currentPageIndex = pageN.coerceAtLeast(0)
-            Log.i(TAG, "Page positionnée: $currentPageIndex (pages existantes=${countPages()})")
-
-            // ═══ Reconstruire l'IME avec le nouveau contexte ═══
-            // (nécessaire si le broadcast arrive après onStartInputView)
-            try {
-                setInputView(onCreateInputView())
+            if (isNewBlock || blockDir?.name != blockId) {
+                // Bloc nouveau → reconfigurer complètement
+                onParnasseContextReady()
+            } else if (pageN != currentPageIndex) {
+                // Même bloc, page différente → naviguer
+                lastLocalPageChange = System.currentTimeMillis()  // ═══ anti-polling ═══
+                savePage()
+                currentPageIndex = pageN.coerceAtLeast(0)
+                if (!loadPage(currentPageIndex)) {
+                    clearPage()
+                }
+                refreshAll()
                 updatePageIndicator()
-            } catch (e: Exception) {
-                Log.w(TAG, "setInputView: ${e.message}")
+                lastPostedPageN = currentPageIndex  // ═══ anti-écho ═══
+                postMiroirState()  // ═══ synchro immédiate → le polling ne ramènera pas en arrière ═══
             }
+            // Si même bloc et même page → rien à faire
         }
     }
 
@@ -1764,6 +1793,8 @@ class MiroirIME : InputMethodService() {
             showBlockList()
         }) {
             if (currentPageIndex > 0) {
+                setNavigating(true)  // ═══ TÉMOIN : fond inversé ═══
+                lastLocalPageChange = System.currentTimeMillis()
                 savePage()
                 currentPageIndex--
                 if (!loadPage(currentPageIndex)) {
@@ -1821,11 +1852,18 @@ class MiroirIME : InputMethodService() {
             showAllTranscriptions()
         }) {
             // ═══ POÉSIE : le Miroir crée ses pages librement. ▶ jamais bloqué. ═══
+            lastLocalPageChange = System.currentTimeMillis()  // ═══ anti-dédoublement ═══
+            setNavigating(true)  // ═══ TÉMOIN ═══
             savePage()
             currentPageIndex++
+            // ═══ ANTI-FANTÔME : ne pas dépasser totalNotes (notes supprimées = pages fantômes) ═══
+            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: (currentPageIndex + 1)) - 1
+            if (currentPageIndex > maxPage) {
+                currentPageIndex = maxPage.coerceAtLeast(0)
+                Log.i(TAG, "🧹 ▶ clampé à $currentPageIndex (totalNotes=${parnasseContext?.totalNotes})")
+            }
             if (!loadPage(currentPageIndex)) {
-                clearPage()  // page inexistante → page vierge
-                savePage()  // ═══ Créer le dossier immédiatement ═══
+                clearPage()  // page inexistante → page vierge (créée au 1er stroke)
             }
             refreshAll()
             updatePageIndicator()
@@ -2095,57 +2133,20 @@ class MiroirIME : InputMethodService() {
         super.onStartInputView(info, restarting)
         val app = info?.packageName ?: "unknown"
         Log.i(TAG, "onStartInputView — app=$app field=${info?.fieldName ?: "?"} inputType=${info?.inputType ?: 0}")
+        semaStart = System.currentTimeMillis()  // ═══ T0 ═══
+        Log.i(SEMA, "T0|onStartInputView|0ms|app=$app")
 
         // ═══ Lire le token de connexion depuis le Cœur (UUID Parnasse) ═══
         // Sur restarting, relire aussi — le bloc Parnasse a pu changer.
         if (parnasseContext == null || restarting) {
             if (app == "com.example.le_parnasse_numerique") {
-            // Attendre que le broadcast arrive (max 500ms)
-            for (i in 0..10) {
-                if (parnasseContext != null) break
-                try { Thread.sleep(50) } catch (_: Exception) {}
+                // ═══ DÉMARRAGE RAPIDE : ne plus bloquer le thread principal ═══
+                // Vérifier si le broadcast Flutter est déjà arrivé
+                if (parnasseContext == null) {
+                    // Lancer le fetch Cœur en arrière-plan (non-bloquant)
+                    fetchCoeurTokenBg()
+                }
             }
-            // Token Cœur : lire __miroir__ pour obtenir l'UUID Parnasse (thread séparé)
-            if (parnasseContext == null) {
-                val latch = java.util.concurrent.CountDownLatch(1)
-                Thread {
-                    try {
-                        val coeurUrl = "http://127.0.0.1:8008"
-                        val url = java.net.URL("$coeurUrl/api/miroir/state?block_id=__miroir__")
-                        val conn = url.openConnection() as java.net.HttpURLConnection
-                        conn.connectTimeout = 2000
-                        conn.readTimeout = 2000
-                        val code = conn.responseCode
-                        if (code == 200) {
-                            val body = conn.inputStream.bufferedReader().readText()
-                            conn.disconnect()
-                            val json = org.json.JSONObject(body)
-                            val parnasseBlockId = json.optString("parnasse_block_id", "")
-                            if (parnasseBlockId.isNotEmpty()) {
-                                parnasseContext = ParnasseContext(
-                                    blockId = parnasseBlockId,
-                                    pageN = json.optInt("page_n", 0),
-                                    mode = json.optString("mode", "bloc"),
-                                    noteId = json.optString("note_id", null),
-                                    libraryId = json.optString("library_id", null),
-                                    coeurUrl = coeurUrl,
-                                    totalNotes = json.optInt("total_notes", 0)
-                                )
-                                Log.i(TAG, "🎫 Token Cœur: UUID=$parnasseBlockId page=${parnasseContext!!.pageN}")
-                            }
-                        } else {
-                            conn.disconnect()
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Token Cœur: ${e.message}")
-                    } finally {
-                        latch.countDown()
-                    }
-                }.start()
-                // Attendre max 3s que le thread HTTP finisse
-                try { latch.await(3, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
-            }
-        }
         }
 
         // ═══ Ouvrir un bloc pour cette app (sauf si contexte Parnasse déjà ouvert) ═══
@@ -2198,38 +2199,130 @@ class MiroirIME : InputMethodService() {
                 Log.i(TAG, "Page $currentPageIndex vierge — sera créée à la première capture")
             }
         }
-        // ═══ Initialisation lourde — SEULEMENT à la première ouverture ═══
+        // ═══ Initialisation surface — SEULEMENT à la première ouverture ═══
         if (!restarting) {
-            // ═══ Conduit V★ v2.0 — initialiser pour la première page ═══
-            if (vstarConduit == null || vstarConduit?.isActive() != true) {
-                vstarConduit?.close()
-                vstarConduit = VStarConduit()
-                openConduit()
-                vstarPointCount = 0
+            // Mode standalone ou contexte Parnasse déjà connu → init immédiate
+            // Mode Parnasse sans contexte → le callback fetchCoeurTokenBg() s'en chargera
+            if (parnasseContext != null || app != "com.example.le_parnasse_numerique") {
+                initSurface()
+                if (parnasseContext != null) {
+                    startCoeurPolling()
+                }
             }
-            // ═══ Forcer la réinitialisation du TouchHelper à chaque ouverture ═══
-            touchHelper = null
-            isWriteMode = false
-            syncGroupManagerParams()
-            rebuildBitmap()
-            val v = imeView
-            if (v != null) initTouchHelper(v)
-            rebuildBitmap()
-            // ═══ Rafraîchir le template (prise en compte des changements de calibration) ═══
-            imeView?.let { if (it.height > 0) updateTemplateSpacing(it.height) }
-            // ═══ VALSE : mode initial dicté par le contexte Parnasse ═══
-            val targetFormatting = parnasseContext?.mode == "note" || parnasseContext?.mode == "formatage"
-            if (isFormattingMode != targetFormatting) {
-                isFormattingToggleInProgress = true
-                toggleFormattingMode()
-                uiHandler.postDelayed({ isFormattingToggleInProgress = false }, 300)
-            }
-            // ═══ VALSE : démarrer le polling Cœur (mode Parnasse uniquement) ═══
-            startCoeurPolling()
-            // ═══ POÉSIE : le polling suffit pour la synchro. Pas de postMiroirState() ici
-            // pour éviter le ping-pong avec Flutter qui répondrait en écho.
         }
         updatePageIndicator()
+    }
+
+    /** TRANSMUTATION — Fetch non-bloquant du token Cœur au démarrage.
+     *  Appelé depuis onStartInputView quand le broadcast Flutter n'est pas encore arrivé.
+     *  Le thread principal n'est JAMAIS bloqué — la réponse est traitée via uiHandler. */
+    private fun fetchCoeurTokenBg() {
+        Thread {
+            try {
+                val coeurUrl = "http://127.0.0.1:8008"
+                val url = java.net.URL("$coeurUrl/api/miroir/state?block_id=__miroir__")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 1500
+                conn.readTimeout = 1500
+                val code = conn.responseCode
+                if (code == 200) {
+                    val body = conn.inputStream.bufferedReader().readText()
+                    conn.disconnect()
+                    val json = org.json.JSONObject(body)
+                    val parnasseBlockId = json.optString("parnasse_block_id", "")
+                    if (parnasseBlockId.isNotEmpty()) {
+                        uiHandler.post {
+                            // ═══ Éviter d'écraser un contexte déjà reçu (broadcast arrivé entre-temps) ═══
+                            if (parnasseContext != null && parnasseContext!!.blockId == parnasseBlockId) return@post
+                            parnasseContext = ParnasseContext(
+                                blockId = parnasseBlockId,
+                                pageN = json.optInt("page_n", 0),
+                                mode = json.optString("mode", "bloc"),
+                                noteId = json.optString("note_id", null),
+                                libraryId = json.optString("library_id", null),
+                                coeurUrl = coeurUrl,
+                                totalNotes = json.optInt("total_notes", 0)
+                            )
+                            Log.i(TAG, "🎫 Token Cœur async: UUID=$parnasseBlockId page=${parnasseContext!!.pageN}")
+                            Log.i(SEMA, "T1|fetchCoeurTokenBg|${System.currentTimeMillis() - semaStart}ms|body=${body.length}B")
+                            // ═══ Compléter la configuration Parnasse (bloc + page + surface) ═══
+                            onParnasseContextReady()
+                        }
+                    }
+                } else {
+                    conn.disconnect()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Token Cœur async: ${e.message}")
+            }
+        }.start()
+    }
+
+    /** Complète la configuration après réception du contexte Parnasse (broadcast ou HTTP).
+     *  Appelé sur le thread principal. Sans danger si appelé plusieurs fois. */
+    private fun onParnasseContextReady() {
+        val ctx = parnasseContext ?: return
+        // ═══ Ouvrir le bloc Parnasse ═══
+        val newBlockId = ctx.blockId
+        if (blockDir?.name != newBlockId) {
+            openBlockDir(newBlockId)
+            // ═══ totalNotes=0 est un poison — utiliser countPages() en fallback ═══
+            val effectiveTotal = if (ctx.totalNotes > 0) ctx.totalNotes else countPages()
+            val totalPages = maxOf(ctx.pageN + 1, effectiveTotal)
+            currentPageIndex = ctx.pageN.coerceIn(0, (totalPages - 1).coerceAtLeast(0))
+            clearPage()
+            Log.i(TAG, "🎯 Parnasse ready: bloc=$newBlockId page=$currentPageIndex (total=$totalPages)")
+        }
+        // ═══ Initialiser la surface immédiatement (TouchHelper, Conduit, bitmap) ═══
+        initSurface()
+        // ═══ Démarrer le polling + synchro ═══
+        startCoeurPolling()
+        postMiroirState()
+        updatePageIndicator()
+        // ═══ Charger la page en arrière-plan (les strokes sont lourds → pas de blocage UI) ═══
+        if (blockDir != null) {
+            val pageIdx = currentPageIndex
+            Thread {
+                val success = loadPage(pageIdx)
+                uiHandler.post {
+                    if (!success) {
+                        clearPage()
+                        Log.i(TAG, "Page $pageIdx vierge — sera créée à la première capture")
+                    } else {
+                        refreshAll()
+                        updatePageIndicator()
+                    }
+                }
+            }.start()
+        }
+    }
+
+    /** Initialise la surface d'écriture : Conduit V★, TouchHelper, bitmap, template.
+     *  Appelé une seule fois après que le contexte Parnasse est connu. */
+    private fun initSurface() {
+        // Conduit V★ v2.0
+        if (vstarConduit == null || vstarConduit?.isActive() != true) {
+            vstarConduit?.close()
+            vstarConduit = VStarConduit()
+            openConduit()
+            vstarPointCount = 0
+        }
+        // TouchHelper
+        touchHelper = null
+        isWriteMode = false
+        syncGroupManagerParams()
+        rebuildBitmap()  // ═══ appel UNIQUE (était en double) ═══
+        val v = imeView
+        if (v != null) initTouchHelper(v)
+        // Template
+        imeView?.let { if (it.height > 0) updateTemplateSpacing(it.height) }
+        // Mode formatage si demandé
+        val targetFormatting = parnasseContext?.mode == "note" || parnasseContext?.mode == "formatage"
+        if (isFormattingMode != targetFormatting) {
+            isFormattingToggleInProgress = true
+            toggleFormattingMode()
+            uiHandler.postDelayed({ isFormattingToggleInProgress = false }, 300)
+        }
     }
 
     /** TRANSMUTATION — Polling : détection de bloc via __miroir__ + synchro page. */
@@ -2254,22 +2347,36 @@ class MiroirIME : InputMethodService() {
                             val miroirJson = org.json.JSONObject(miroirBody)
                             val newParnasseBlockId = miroirJson.optString("parnasse_block_id", "")
                             val currentBlockId = parnasseContext?.blockId ?: ""
+                            // ═══ Toujours mettre à jour totalNotes depuis __miroir__ (source de vérité Flutter) ═══
+                            val miroirTotalNotes = miroirJson.optInt("total_notes", 0)
+                            if (miroirTotalNotes > 0 && miroirTotalNotes != (parnasseContext?.totalNotes ?: 0)) {
+                                parnasseContext = parnasseContext?.copy(totalNotes = miroirTotalNotes)
+                                Log.i(TAG, "📊 totalNotes mis à jour: ${parnasseContext?.totalNotes} → $miroirTotalNotes")
+                            }
                             
                             if (newParnasseBlockId.isNotEmpty() && newParnasseBlockId != currentBlockId) {
                                 Log.i(TAG, "🔄 __miroir__ → nouveau bloc $newParnasseBlockId (était: $currentBlockId)")
                                 val newPage = miroirJson.optInt("page_n", 0)
                                 uiHandler.post {
                                     savePage()
-                                    openBlockDir(newParnasseBlockId)  // crée le bloc s'il n'existe pas
+                                    openBlockDir(newParnasseBlockId)
                                     val totalNotes = miroirJson.optInt("total_notes", 0)
                                     val maxPage = if (totalNotes > 0) totalNotes - 1 else maxOf(newPage, countPages() - 1)
                                     currentPageIndex = newPage.coerceIn(0, maxPage.coerceAtLeast(0))
-                                    if (!loadPage(currentPageIndex)) {
-                                        clearPage(); savePage()
-                                    }
-                                    refreshAll()
-                                    updatePageIndicator()
-                                    postMiroirState()  // ═══ synchro après changement de bloc ═══
+                                    // ═══ ANTI-OSCILLATION : marquer immédiatement ═══
+                                    lastPostedPageN = currentPageIndex
+                                    lastLocalPageChange = System.currentTimeMillis()
+                                    // ═══ Charger en arrière-plan ═══
+                                    val pageIdx = currentPageIndex
+                                    Thread {
+                                        val success = loadPage(pageIdx)
+                                        uiHandler.post {
+                                            if (!success) { clearPage(); savePage() }
+                                            refreshAll()
+                                            updatePageIndicator()
+                                            postMiroirState()
+                                        }
+                                    }.start()
                                 }
                                 parnasseContext = parnasseContext?.copy(
                                     blockId = newParnasseBlockId,
@@ -2285,6 +2392,11 @@ class MiroirIME : InputMethodService() {
 
                         // ═══ 2. Synchro de page sur le bloc courant ═══
                         val blockId = parnasseContext?.blockId ?: return@Thread
+                        // ═══ Nettoyage périodique : pages au-delà de totalNotes ═══
+                        val tn = parnasseContext?.totalNotes ?: 0
+                        if (tn > 0 && countPages() > tn) {
+                            uiHandler.post { cleanupGhostPages() }
+                        }
                         val url = java.net.URL("$coeurUrl/api/miroir/state?block_id=$blockId")
                         val conn = url.openConnection() as java.net.HttpURLConnection
                         conn.connectTimeout = 1000; conn.readTimeout = 1000
@@ -2295,32 +2407,42 @@ class MiroirIME : InputMethodService() {
                             val newPage = json.optInt("page_n", -1)
 
                             if (newPage >= 0 && newPage != currentPageIndex) {
+                                // ═══ ANTI-FANTÔME : ne jamais dépasser totalNotes ═══
+                                val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: (newPage + 1)) - 1
+                                val clampedPage = newPage.coerceIn(0, maxPage)
+                                if (clampedPage != newPage) {
+                                    Log.i(TAG, "🧹 poll clampé $newPage→$clampedPage (totalNotes=${parnasseContext?.totalNotes})")
+                                    // ═══ Corriger le Cœur immédiatement pour casser l'oscillation ═══
+                                    if (clampedPage == currentPageIndex) {
+                                        uiHandler.post { postMiroirState() }
+                                    }
+                                }
                                 // ═══ Garde-fou : ignore l'écho de sa propre page ═══
-                                val isEcho = (newPage == lastPostedPageN)
-                                if (!isEcho) {
-                                    // ═══ POÉSIE DE LA PAGE 0 : ne pas déloger une page en cours d'écriture ═══
+                                val isEcho = (clampedPage == lastPostedPageN)
+                                // ═══ Garde-fou 2 : changement local récent → ignorer (8s) ═══
+                                val isRecentLocal = (System.currentTimeMillis() - lastLocalPageChange < 8000)
+                                if (!isEcho && !isRecentLocal) {
                                     val isActivelyWriting = isStylusDown
                                     if (isActivelyWriting) {
-                                        // Page active → rester, poster l'état réel au Cœur
                                         Log.i(TAG, "📌 Page $currentPageIndex active (${strokeRegistry.size} strokes) — le Parnasse suivra")
                                         uiHandler.post { postMiroirState() }
                                     } else {
-                                        Log.i(TAG, "🔄 Cœur → page $newPage (était: $currentPageIndex)")
+                                        Log.i(TAG, "🔄 Cœur → page $clampedPage (était: $currentPageIndex)")
                                         uiHandler.post {
                                             savePage()
-                                            // ═══ POÉSIE : suivre Flutter sans clamp. Créer la page si besoin. ═══
-                                            currentPageIndex = newPage.coerceIn(0, Int.MAX_VALUE)
-                                            if (!loadPage(currentPageIndex)) {
-                                                clearPage(); savePage()
-                                                Log.i(TAG, "📄 Page $currentPageIndex créée (vierge)")
-                                            }
-                                            refreshAll()
-                                            updatePageIndicator()
-                                            // ═══ POÉSIE : corriger le Cœur si on a clampé ═══
-                                            if (newPage != currentPageIndex) {
-                                                postMiroirState()
-                                            }
-                                            logSync("poll→$newPage")
+                                            currentPageIndex = clampedPage
+                                            lastPostedPageN = currentPageIndex
+                                            val pageIdx = currentPageIndex
+                                            Thread {
+                                                val success = loadPage(pageIdx)
+                                                uiHandler.post {
+                                                    if (!success) { clearPage(); Log.i(TAG, "📄 Page $pageIdx vierge (créée au 1er stroke)") }
+                                                    refreshAll()
+                                                    updatePageIndicator()
+                                                    if (clampedPage != newPage) { postMiroirState() }
+                                                    logSync("poll→$clampedPage")
+                                                }
+                                            }.start()
                                         }
                                     }
                                 }
@@ -3051,10 +3173,12 @@ class MiroirIME : InputMethodService() {
         }
 
         fun exitEditMode() {
+            val t0 = System.currentTimeMillis()
             editMode = EditMode.NONE
             longPressTriggered = false
-            annotateToolbarBtn?.visibility = View.GONE  // cacher le 📌
-            correctionPaths.clear()  // effacer les strokes de correction du bitmap
+            annotateToolbarBtn?.visibility = View.GONE
+            correctionPaths.clear()
+            Log.i(TAG, "🔚 exitEditMode: début (erasedStrokes=${erasedStrokes.size})")
             // ═══ Nettoyer les strokes de correction du registre ═══
             if (correctionStartRegistrySize >= 0 && correctionStartRegistrySize < strokeRegistry.size) {
                 for (i in correctionStartRegistrySize until strokeRegistry.size) {
@@ -3071,6 +3195,7 @@ class MiroirIME : InputMethodService() {
             // ═══ Effacement définitif des strokes neutralisés ═══
             val erasedSids = mutableListOf<Long>()
             if (erasedStrokes.isNotEmpty()) {
+                val t1 = System.currentTimeMillis()
                 val gm = groupManager
                 val animatedGroupId = activeBlobGroupId
                 // val erasedSids = mutableListOf<Long>()  ← déplacé avant le bloc
@@ -3089,24 +3214,31 @@ class MiroirIME : InputMethodService() {
                         inkStrokeIdToRegistryIndex.remove(sid)
                     }
                 }
+                Log.i(TAG, "🔚 exitEditMode: strokes nettoyés (${System.currentTimeMillis() - t1}ms)")
                 // Retirer les strokeIds effacés de TOUS les groupes (pas seulement l'actif)
                 for (group in gm?.allGroups() ?: emptyList()) {
                     group.strokeIds.removeAll(erasedSids)
                 }
-                // Nettoyer aussi les groupes en persistance
+                Log.i(TAG, "🔚 exitEditMode: groupes nettoyés (${System.currentTimeMillis() - t1}ms)")
+                // Nettoyer aussi les groupes en persistance (arrière-plan : 6000+ groupes = plusieurs secondes)
                 gm?.persistence?.let { p ->
-                    val persistedGroups = p.readAllGroups()
-                    for (g in persistedGroups) {
-                        g.strokeIds.removeAll(erasedSids)
-                        if (g.strokeIds.isNotEmpty()) p.writeGroup(g)
-                    }
+                    Thread {
+                        try {
+                            val persistedGroups = p.readAllGroups()
+                            for (g in persistedGroups) {
+                                g.strokeIds.removeAll(erasedSids)
+                                if (g.strokeIds.isNotEmpty()) p.writeGroup(g)
+                            }
+                        } catch (_: Exception) {}
+                    }.start()
                 }
                 erasedStrokes.clear()
-                Log.i(TAG, "🧹 ${erasedSids.size} strokes définitivement effacés")
+                Log.i(TAG, "🔚 exitEditMode: erasedStrokes vidé (${System.currentTimeMillis() - t1}ms, ${erasedSids.size} strokes)")
             }
             // ═══ Si le groupe est vidé de tous ses strokes → supprimer label + blob ═══
             val erasedGroupId = activeBlobGroupId
             if (erasedGroupId != null) {
+                val t2 = System.currentTimeMillis()
                 val g = groupManager?.allGroups()?.find { it.id == erasedGroupId }
                 // Ne supprimer que si le groupe existe ET est vraiment vide (pas juste évincé)
                 if (g != null && g.strokeIds.isEmpty()) {
@@ -3123,7 +3255,7 @@ class MiroirIME : InputMethodService() {
                         }
                     }
                     scrubbedGroupFirstIdx = null
-                    Log.i(TAG, "🗑️ Groupe ${erasedGroupId.take(8)} vidé → supprimé")
+                    Log.i(TAG, "🔚 exitEditMode: groupe vidé supprimé (${System.currentTimeMillis() - t2}ms)")
                 }
             }
             // ═══ Réactiver le groupe modifié comme SELECTED pour GroupManager ═══
@@ -3176,15 +3308,14 @@ class MiroirIME : InputMethodService() {
                 uiHandler.post { scheduleGroupInference() }
             }
             scrubbedGroupFirstIdx = null
-            imeView?.postInvalidate()  // redessiner sans les strokes de correction
-            // ═══ Mettre à jour le bitmap AVANT le refresh unique ═══
-            // poserLabelPuisDU(GU) fait déjà un refreshScreen(GU) — inutile de le dupliquer
+            imeView?.postInvalidate()
             redrawBitmapOnly()
             cachedGMCacheSize = -1
             displayController?.poserLabelPuisDU(DisplayMode.GU)
             updateModeIndicator()
-            imeView?.postInvalidate()  // rafraîchir la vue (effacer le cadre de correction)
-            Log.i(TAG, "🔚 Sortie édition → retour DU")
+            imeView?.postInvalidate()
+            Log.i(TAG, "🔚 exitEditMode: fin (${System.currentTimeMillis() - t0}ms)")
+            Log.i(SEMA, "T7|exitEditMode|${System.currentTimeMillis() - t0}ms|erased=${erasedStrokes.size}")
         }
 
         private fun updateModeIndicator() {
@@ -3428,6 +3559,7 @@ class MiroirIME : InputMethodService() {
     private var isStylusDown = false
 
     private fun onStylusDown(x: Float, y: Float) {
+        lastLocalPageChange = System.currentTimeMillis()  // ═══ stylet actif → ne pas suivre Flutter ═══
         // ═══ Mode correction sans cible → clic dans le vide (sortie) → pas de stroke ═══
         if (imeView?.isCorrecting() == true && correctLetterIndex < 0 && insertAtIndex < 0) {
             return  // le TouchHelper forward, onTouchEvent → exitEditMode
@@ -3803,6 +3935,8 @@ class MiroirIME : InputMethodService() {
         val indices = inferenceQueue.poll() ?: run {
             isInferring = false
             Log.i(TAG, "Pipeline inférence: terminé")
+            // ═══ TRANSMUTATION : pousser le texte complet vers Parnasse ═══
+            pushTextToParnasse()
             return
         }
         inferExecutor.submit {
@@ -4024,10 +4158,72 @@ class MiroirIME : InputMethodService() {
         // ═══ POÉSIE : le disque ne ment pas. totalNotes Parnasse est souvent en retard. ═══
         val cp = countPages()
         val total = maxOf(currentPageIndex + 1, cp, parnasseContext?.totalNotes ?: 0)
-        pageLabel?.text = "${currentPageIndex + 1}/$total"
+        // ═══ TÉMOIN DE NAVIGATION : ">" visible pendant la transition ═══
+        val navPrefix = if (isNavigating) "> " else ""
+        pageLabel?.text = "$navPrefix${currentPageIndex + 1}/$total"
     }
 
-    /** TRANSMUTATION — Annonce l'état courant au Cœur (page, mode). */
+    /** Active le témoin de navigation. Appelé au début d'un changement de page. */
+    private fun setNavigating(active: Boolean) {
+        if (active) {
+            isNavigating = true
+            navigatingSince = System.currentTimeMillis()
+            uiHandler.removeCallbacks(navigatingTimeout)
+            uiHandler.postDelayed(navigatingTimeout, 3000)  // sécurité 3s
+        } else {
+            // ═══ Délai minimum 600ms pour que l'e-ink ait le temps de rafraîchir ═══
+            val elapsed = System.currentTimeMillis() - navigatingSince
+            if (elapsed < 600) {
+                uiHandler.postDelayed({ setNavigating(false) }, 600 - elapsed)
+                return
+            }
+            isNavigating = false
+        }
+        Log.i(SEMA, "NAV|navigating=$active|page=$currentPageIndex")
+        updatePageIndicator()
+    }
+    private var isNavigating = false
+    private var navigatingSince = 0L
+    private val navigatingTimeout = Runnable { setNavigating(false) }
+
+    /** TRANSMUTATION — Pousse le texte complet vers le Cœur après le pipeline d'inférence.
+     *  Appelé quand le timer d'inactivité a expiré et tous les groupes sont reconnus.
+     *  Le Cœur stocke le texte dans miroirState → Flutter le lit et met à jour la note. */
+    private fun pushTextToParnasse() {
+        val ctx = parnasseContext ?: return
+        val blockId = blockDir?.name ?: return
+        try {
+            val text = buildAllPagesText()
+            if (text.isBlank()) return
+            val coeurUrl = ctx.coeurUrl ?: "http://127.0.0.1:8008"
+            val json = org.json.JSONObject().apply {
+                put("block_id", blockId)
+                put("page_n", currentPageIndex)
+                put("text", text)
+                val tn = ctx.totalNotes
+                if (tn > 0) put("total_notes", tn)
+            }
+            Thread {
+                try {
+                    val url = java.net.URL("$coeurUrl/api/miroir/state")
+                    val conn = url.openConnection() as java.net.HttpURLConnection
+                    conn.requestMethod = "POST"
+                    conn.setRequestProperty("Content-Type", "application/json")
+                    conn.doOutput = true
+                    conn.outputStream.write(json.toString().toByteArray())
+                    val code = conn.responseCode
+                    conn.disconnect()
+                    Log.i(TAG, "📝 Texte → Parnasse: page=$currentPageIndex chars=${text.length} (HTTP $code)")
+                    Log.i(SEMA, "TT|pushText|chars=${text.length}|page=$currentPageIndex")
+                } catch (e: Exception) {
+                    Log.w(TAG, "pushTextToParnasse: ${e.message}")
+                }
+            }.start()
+        } catch (e: Exception) {
+            Log.w(TAG, "pushTextToParnasse: ${e.message}")
+        }
+    }
+
     private fun postMiroirState() {
         try {
             val coeurUrl = parnasseContext?.coeurUrl ?: "http://127.0.0.1:8008"
@@ -4038,7 +4234,9 @@ class MiroirIME : InputMethodService() {
                 put("block_id", blockId)
                 put("page_n", currentPageIndex)
                 put("mode", if (isFormattingMode) "formatage" else "capture")
-                put("total_notes", parnasseContext?.totalNotes ?: 0)
+                // ═══ Ne JAMAIS envoyer total_notes=0 — Flutter est la source de vérité ═══
+                val tn = parnasseContext?.totalNotes ?: 0
+                if (tn > 0) put("total_notes", tn)
             }
             Thread {
                 try {
@@ -4051,8 +4249,10 @@ class MiroirIME : InputMethodService() {
                     val code = conn.responseCode
                     conn.disconnect()
                     Log.i(TAG, "📡 State → Cœur: page=${currentPageIndex + 1} (HTTP $code)")
+                    uiHandler.post { setNavigating(false) }  // ═══ libérer le témoin ═══
                 } catch (e: Exception) {
                     Log.w(TAG, "State POST failed: ${e.message}")
+                    uiHandler.post { setNavigating(false) }  // ═══ libérer même si échec ═══
                 }
             }.start()
         } catch (e: Exception) {

@@ -315,13 +315,14 @@ class GroupManager(
     fun groupsInState(state: GroupState): List<InkGroup> = groups.values.filter { it.state == state }
     fun cacheSize(): Int = groups.size
 
-    /** Vide tous les groupes (cache + machine à états). Appelé au clear(). */
+    /** Vide tous les groupes (cache + machine à états + persistence). Appelé au clear(). */
     fun clearAll() {
         groups.clear()
         strokeToGroup.clear()
         machine.reset()
         timeoutFuture?.cancel(false)
         timeoutGroupId = null
+        persistence?.deleteAll()  // ═══ le fichier aussi (changement de page/bloc) ═══
         Log.i(TAG, "GroupManager: tous les groupes vidés")
     }
 
@@ -338,9 +339,10 @@ class GroupManager(
         Log.d(TAG, "Evince: " + groupId + " -> .groups | cache=" + groups.size)
     }
 
-    /** Supprime definitivement un groupe (quel que soit son etat). */
+    /** Supprime définitivement un groupe (quel que soit son état). */
     fun removeGroup(groupId: String) {
         groups.remove(groupId)
+        persistence?.deleteGroup(groupId)  // ═══ nettoyer aussi le fichier (anti-fuite) ═══
     }
 
     private fun evictAllStored() {
