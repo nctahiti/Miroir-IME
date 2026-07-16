@@ -272,9 +272,10 @@ class MiroirIME : InputMethodService() {
         val bd = blockDir ?: return
         val totalNotes = parnasseContext?.totalNotes?.takeIf { it > 0 } ?: return
         val pageDirs = bd.listFiles()?.filter { it.isDirectory && it.name.startsWith("page_") } ?: return
+        val currentPage = currentPageIndex  // ═══ jamais supprimer la page active ═══
         for (dir in pageDirs) {
             val pageNum = dir.name.removePrefix("page_").toIntOrNull() ?: continue
-            if (pageNum >= totalNotes) {
+            if (pageNum >= totalNotes && pageNum != currentPage) {
                 dir.deleteRecursively()
                 Log.i(TAG, "👻 Page fantôme supprimée: ${dir.name} (page=$pageNum ≥ totalNotes=$totalNotes)")
             }
@@ -1793,8 +1794,9 @@ class MiroirIME : InputMethodService() {
             showBlockList()
         }) {
             if (currentPageIndex > 0) {
-                setNavigating(true)  // ═══ TÉMOIN : fond inversé ═══
+                setNavigating(true)
                 lastLocalPageChange = System.currentTimeMillis()
+                pushTextToParnasse()  // ═══ pousser le texte avant de quitter ═══
                 savePage()
                 currentPageIndex--
                 if (!loadPage(currentPageIndex)) {
@@ -1852,16 +1854,11 @@ class MiroirIME : InputMethodService() {
             showAllTranscriptions()
         }) {
             // ═══ POÉSIE : le Miroir crée ses pages librement. ▶ jamais bloqué. ═══
-            lastLocalPageChange = System.currentTimeMillis()  // ═══ anti-dédoublement ═══
-            setNavigating(true)  // ═══ TÉMOIN ═══
+            lastLocalPageChange = System.currentTimeMillis()
+            setNavigating(true)
+            pushTextToParnasse()  // ═══ pousser le texte avant de quitter ═══
             savePage()
             currentPageIndex++
-            // ═══ ANTI-FANTÔME : ne pas dépasser totalNotes (notes supprimées = pages fantômes) ═══
-            val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: (currentPageIndex + 1)) - 1
-            if (currentPageIndex > maxPage) {
-                currentPageIndex = maxPage.coerceAtLeast(0)
-                Log.i(TAG, "🧹 ▶ clampé à $currentPageIndex (totalNotes=${parnasseContext?.totalNotes})")
-            }
             if (!loadPage(currentPageIndex)) {
                 clearPage()  // page inexistante → page vierge (créée au 1er stroke)
             }
@@ -2350,8 +2347,33 @@ class MiroirIME : InputMethodService() {
                             // ═══ Toujours mettre à jour totalNotes depuis __miroir__ (source de vérité Flutter) ═══
                             val miroirTotalNotes = miroirJson.optInt("total_notes", 0)
                             if (miroirTotalNotes > 0 && miroirTotalNotes != (parnasseContext?.totalNotes ?: 0)) {
+                                val oldTn = parnasseContext?.totalNotes ?: 0
                                 parnasseContext = parnasseContext?.copy(totalNotes = miroirTotalNotes)
-                                Log.i(TAG, "📊 totalNotes mis à jour: ${parnasseContext?.totalNotes} → $miroirTotalNotes")
+                                Log.i(TAG, "📊 totalNotes mis à jour: $oldTn → $miroirTotalNotes")
+                                // ═══ Nouvelle note détectée → suivre immédiatement si au repos ═══
+                                if (miroirTotalNotes > oldTn && !isStylusDown) {
+                                    val newPage = miroirJson.optInt("page_n", -1)
+                                    if (newPage >= 0 && newPage != currentPageIndex) {
+                                        Log.i(TAG, "📄 Nouvelle note → page $newPage")
+                                        uiHandler.post {
+                                            savePage()
+                                            currentPageIndex = newPage.coerceAtLeast(0)
+                                            lastPostedPageN = currentPageIndex
+                                            lastLocalPageChange = System.currentTimeMillis()
+                                            val pageIdx = currentPageIndex
+                                            Thread {
+                                                val success = loadPage(pageIdx)
+                                                uiHandler.post {
+                                                    if (!success) { clearPage() }
+                                                    refreshAll()
+                                                    updatePageIndicator()
+                                                    postMiroirState()
+                                                    logSync("📄→$newPage")
+                                                }
+                                            }.start()
+                                        }
+                                    }
+                                }
                             }
                             
                             if (newParnasseBlockId.isNotEmpty() && newParnasseBlockId != currentBlockId) {
@@ -2394,6 +2416,45 @@ class MiroirIME : InputMethodService() {
                         val tn = parnasseContext?.totalNotes ?: 0
                         if (tn > 0 && countPages() > tn) {
                             uiHandler.post { cleanupGhostPages() }
+                        }
+
+                        // ═══ 2. Synchro page légère : suivre Parnasse UNIQUEMENT au repos ═══
+                        // Le Miroir ne poursuit pas Flutter — il l'écoute seulement quand il est immobile.
+                        val idle = !isStylusDown && (System.currentTimeMillis() - lastLocalPageChange > 3000)
+                        if (idle) {
+                            val blockId = parnasseContext?.blockId ?: return@Thread
+                            val url = java.net.URL("$coeurUrl/api/miroir/state?block_id=$blockId")
+                            val conn = url.openConnection() as java.net.HttpURLConnection
+                            conn.connectTimeout = 800; conn.readTimeout = 800
+                            if (conn.responseCode == 200) {
+                                val body = conn.inputStream.bufferedReader().readText()
+                                conn.disconnect()
+                                val json = org.json.JSONObject(body)
+                                val coeurPage = json.optInt("page_n", -1)
+                                if (coeurPage >= 0 && coeurPage != currentPageIndex) {
+                                    val target = coeurPage.coerceAtLeast(0)
+                                    Log.i(TAG, "🌊 Parnasse → page $target (idle, était: $currentPageIndex)")
+                                    uiHandler.post {
+                                        savePage()
+                                        currentPageIndex = target
+                                        lastPostedPageN = currentPageIndex
+                                        lastLocalPageChange = System.currentTimeMillis()
+                                        val pageIdx = currentPageIndex
+                                        Thread {
+                                            val success = loadPage(pageIdx)
+                                            uiHandler.post {
+                                                if (!success) { clearPage() }
+                                                refreshAll()
+                                                updatePageIndicator()
+                                                postMiroirState()  // ═══ ancrer : dire au Cœur "je suis là" ═══
+                                                logSync("🌊→$target")
+                                            }
+                                        }.start()
+                                    }
+                                }
+                            } else {
+                                conn.disconnect()
+                            }
                         }
                     } catch (_: Exception) { }
                 }.start()
@@ -3881,6 +3942,7 @@ class MiroirIME : InputMethodService() {
             isInferring = false
             Log.i(TAG, "Pipeline inférence: terminé")
             // ═══ TRANSMUTATION : pousser le texte complet vers Parnasse ═══
+            Log.i(TAG, "📝 appel pushTextToParnasse (parnasseContext=${parnasseContext != null}, labels=${groupLabels.size})")
             pushTextToParnasse()
             return
         }
@@ -4135,11 +4197,13 @@ class MiroirIME : InputMethodService() {
      *  Appelé quand le timer d'inactivité a expiré et tous les groupes sont reconnus.
      *  Le Cœur stocke le texte dans miroirState → Flutter le lit et met à jour la note. */
     private fun pushTextToParnasse() {
-        val ctx = parnasseContext ?: return
-        val blockId = blockDir?.name ?: return
+        val ctx = parnasseContext
+        if (ctx == null) { Log.w(TAG, "📝 pushText: pas de parnasseContext"); return }
+        val blockId = blockDir?.name
+        if (blockId == null) { Log.w(TAG, "📝 pushText: pas de blockDir"); return }
         try {
             val text = buildAllPagesText()
-            if (text.isBlank()) return
+            if (text.isBlank()) { Log.w(TAG, "📝 pushText: texte vide (${groupLabels.size} labels)"); return }
             val coeurUrl = ctx.coeurUrl ?: "http://127.0.0.1:8008"
             val json = org.json.JSONObject().apply {
                 put("block_id", blockId)
