@@ -2390,65 +2390,10 @@ class MiroirIME : InputMethodService() {
                             miroirConn.disconnect()
                         }
 
-                        // ═══ 2. Synchro de page sur le bloc courant ═══
-                        val blockId = parnasseContext?.blockId ?: return@Thread
                         // ═══ Nettoyage périodique : pages au-delà de totalNotes ═══
                         val tn = parnasseContext?.totalNotes ?: 0
                         if (tn > 0 && countPages() > tn) {
                             uiHandler.post { cleanupGhostPages() }
-                        }
-                        val url = java.net.URL("$coeurUrl/api/miroir/state?block_id=$blockId")
-                        val conn = url.openConnection() as java.net.HttpURLConnection
-                        conn.connectTimeout = 1000; conn.readTimeout = 1000
-                        if (conn.responseCode == 200) {
-                            val body = conn.inputStream.bufferedReader().readText()
-                            conn.disconnect()
-                            val json = org.json.JSONObject(body)
-                            val newPage = json.optInt("page_n", -1)
-
-                            if (newPage >= 0 && newPage != currentPageIndex) {
-                                // ═══ ANTI-FANTÔME : ne jamais dépasser totalNotes ═══
-                                val maxPage = (parnasseContext?.totalNotes?.takeIf { it > 0 } ?: (newPage + 1)) - 1
-                                val clampedPage = newPage.coerceIn(0, maxPage)
-                                if (clampedPage != newPage) {
-                                    Log.i(TAG, "🧹 poll clampé $newPage→$clampedPage (totalNotes=${parnasseContext?.totalNotes})")
-                                    // ═══ Corriger le Cœur immédiatement pour casser l'oscillation ═══
-                                    if (clampedPage == currentPageIndex) {
-                                        uiHandler.post { postMiroirState() }
-                                    }
-                                }
-                                // ═══ Garde-fou : ignore l'écho de sa propre page ═══
-                                val isEcho = (clampedPage == lastPostedPageN)
-                                // ═══ Garde-fou 2 : changement local récent → ignorer (8s) ═══
-                                val isRecentLocal = (System.currentTimeMillis() - lastLocalPageChange < 8000)
-                                if (!isEcho && !isRecentLocal) {
-                                    val isActivelyWriting = isStylusDown
-                                    if (isActivelyWriting) {
-                                        Log.i(TAG, "📌 Page $currentPageIndex active (${strokeRegistry.size} strokes) — le Parnasse suivra")
-                                        uiHandler.post { postMiroirState() }
-                                    } else {
-                                        Log.i(TAG, "🔄 Cœur → page $clampedPage (était: $currentPageIndex)")
-                                        uiHandler.post {
-                                            savePage()
-                                            currentPageIndex = clampedPage
-                                            lastPostedPageN = currentPageIndex
-                                            val pageIdx = currentPageIndex
-                                            Thread {
-                                                val success = loadPage(pageIdx)
-                                                uiHandler.post {
-                                                    if (!success) { clearPage(); Log.i(TAG, "📄 Page $pageIdx vierge (créée au 1er stroke)") }
-                                                    refreshAll()
-                                                    updatePageIndicator()
-                                                    if (clampedPage != newPage) { postMiroirState() }
-                                                    logSync("poll→$clampedPage")
-                                                }
-                                            }.start()
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            conn.disconnect()
                         }
                     } catch (_: Exception) { }
                 }.start()
