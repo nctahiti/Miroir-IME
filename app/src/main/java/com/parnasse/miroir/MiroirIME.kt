@@ -76,6 +76,10 @@ class MiroirIME : InputMethodService() {
     // ── TouchHelper Onyx ───────────────────────────────────────────────
     private var touchHelper: TouchHelper? = null
 
+    // ── Portabilité EPD/Stylet ─────────────────────────────────────────
+    private var stylusPort: StylusPort? = null
+    private var epdPort: EpdPort? = null
+
     // ── Reconnaissance ML Kit ──────────────────────────────────────────
     private var recognizer: DigitalInkWrapper? = null
     private val strokeRegistry = mutableListOf<StrokeRecord>()
@@ -3617,6 +3621,44 @@ class MiroirIME : InputMethodService() {
             touchHelper = null
             Log.w(TAG, "TouchHelper indisponible: ${e.message} — fallback onTouchEvent")
         }
+
+        // ═══ Portabilité : initialiser le StylusPort (séquence DU→REGAL, hover) ═══
+        initStylusPort(target)
+    }
+
+    /** Initialise le StylusPort pour la séquence de refresh et la portabilité. */
+    private fun initStylusPort(view: View) {
+        // EpdPort
+        if (epdPort == null) {
+            epdPort = if (OnyxStylusPort.isAvailable()) OnyxEpdPort(view) else AndroidEpdPort(view)
+        }
+        // StylusPort — détection auto Onyx vs Android
+        if (stylusPort == null) {
+            stylusPort = if (OnyxStylusPort.isAvailable()) {
+                OnyxStylusPort().also { (it as OnyxStylusPort).setCallback(stylusCallback) }
+            } else {
+                AndroidStylusPort().also { (it as AndroidStylusPort).setCallback(stylusCallback) }
+            }
+            stylusPort?.init(view)
+            stylusPort?.setActive(true)
+            Log.i(TAG, "StylusPort: ${stylusPort!!.javaClass.simpleName}")
+        }
+    }
+
+    /** Callback du StylusPort — séquence de refresh DU→REGAL. */
+    private val stylusCallback = object : StylusPort.Callback {
+        override fun onStylusDown(x: Float, y: Float, pressure: Float, timestamp: Long) {
+            epdPort?.setDefaultMode(DisplayMode.DU)  // ═══ ultra-rapide pour le trait ═══
+        }
+        override fun onStylusMove(x: Float, y: Float, pressure: Float, timestamp: Long) {}
+        override fun onStylusUp(x: Float, y: Float, pressure: Float, timestamp: Long) {
+            // ═══ Nettoyer le ghosting après le trait ═══
+            uiHandler.postDelayed({
+                if (!isStylusDown) epdPort?.setDefaultMode(DisplayMode.REGAL)
+            }, 150)
+        }
+        override fun onStylusHoverEnter() { stylusPort?.setActive(true) }
+        override fun onStylusHoverExit() { stylusPort?.setActive(false) }
     }
 
     private fun releaseTouchHelper() {
