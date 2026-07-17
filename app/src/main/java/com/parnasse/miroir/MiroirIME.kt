@@ -201,11 +201,21 @@ class MiroirIME : InputMethodService() {
         return java.io.File(bd, "page_$currentPageIndex/page.vstar")
     }
 
-    /** Ouvre le Conduit sur la page courante. Si le fichier existe déjà, reprend en append. */
+    /** Ouvre le Conduit sur la page courante. Crée le bloc si nécessaire. */
     private fun openConduit(): Boolean {
-        val file = conduitFile() ?: return false
+        if (blockDir == null) {
+            ensureBlockDir(currentFieldKey.ifEmpty { "standalone" }, System.currentTimeMillis())
+            Log.i(TAG, "Conduit: bloc créé paresseusement → ${blockDir?.name}")
+        }
+        val file = conduitFile()
+        if (file == null) {
+            Log.w(TAG, "Conduit: conduitFile() est null (blockDir=${blockDir?.name} page=$currentPageIndex)")
+            return false
+        }
         if (vstarConduit == null) vstarConduit = VStarConduit()
-        return vstarConduit!!.open(file, "page_$currentPageIndex")
+        val ok = vstarConduit!!.open(file, "page_$currentPageIndex")
+        if (!ok) Log.w(TAG, "Conduit: open() a échoué pour ${file.absolutePath} (exists=${file.exists()})")
+        return ok
     }
 
     /** Construit une clé composite identifiant le champ de saisie.
@@ -483,19 +493,55 @@ class MiroirIME : InputMethodService() {
      *  Cette fonction ne fait plus que flusher le buffer et sauvegarder les
      *  métadonnées (bitmap, MDM). Les strokes sont déjà sur disque. */
     private fun savePage() {
-        vstarConduit?.flush()
         val bd = blockDir ?: return
         val dir = java.io.File(bd, "page_$currentPageIndex")
         dir.mkdirs()
-        // ═══ DIAG : vérifier que le fichier V★ a bien des données ═══
         val vstarFile = java.io.File(dir, "page.vstar")
-        val vstarSize = if (vstarFile.exists()) vstarFile.length() else -1
         val liveStrokes = strokeRegistry.count { !it.isDeleted && it.points.isNotEmpty() }
-        Log.i(TAG, "💾 savePage page=$currentPageIndex vstar=${vstarSize}B strokes=$liveStrokes")
+
+        // ═══ RÉÉCRITURE PROPRE : fermer le Conduit, réécrire avec strokes vivants seulement ═══
+        vstarConduit?.endSession()
+        vstarConduit?.close()
+
+        if (liveStrokes > 0) {
+            // Supprimer l'ancien fichier (avec accumulation fantôme) et réécrire au propre
+            if (vstarFile.exists()) vstarFile.delete()
+            val dataRegion = VStarDataRegion(vstarFile)
+            dataRegion.open()
+            val liveIndices = strokeRegistry.indices
+                .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() }
+                .toList()  // ═══ matérialiser avant itération (évite IndexOutOfBounds) ═══
+            for (ri in liveIndices) {
+                val sr = strokeRegistry[ri]
+                val inkId = inkStrokeIdToRegistryIndex.entries.firstOrNull { it.value == ri }?.key
+                val ci = inkId?.let { (it - 1).toShort() } ?: continue
+                val tokens = strokeRecordToTokensV2(sr, ci)
+                for (t in tokens) dataRegion.append(t)
+            }
+            dataRegion.close()
+            Log.i(TAG, "💾 savePage page=$currentPageIndex vstar=${vstarFile.length()}B strokes=$liveStrokes (réécrit, CI préservés)")
+        } else {
+            if (vstarFile.exists()) { vstarFile.delete() }
+            Log.i(TAG, "💾 savePage page=$currentPageIndex — page vide, fichier supprimé")
+        }
+
+        // Rouvrir le Conduit en APPEND sur le fichier nettoyé
+        vstarConduit = VStarConduit()
+        openConduit()
         // 🔬 DIAG TRACE : 3 premiers strokes AVANT sauvegarde
         strokeRegistry.filter { !it.isDeleted && it.points.isNotEmpty() }.take(3).forEachIndexed { i, sr ->
             val p = sr.points.first()
             Log.i(TAG, "🔬 TRACE save stroke[$i] id=${sr.id} first=(${p.first.toInt()},${p.second.toInt()}) pts=${sr.points.size}")
+        }
+        // 🔬 SÉMATOGRAMME save : chaque stroke vivant avec son CI estimé (inkId-1)
+        strokeRegistry.forEachIndexed { ri, sr ->
+            if (!sr.isDeleted && sr.points.isNotEmpty()) {
+                val p0 = sr.points.first(); val pN = sr.points.last()
+                // Trouver le inkId correspondant
+                val inkId = inkStrokeIdToRegistryIndex.entries.firstOrNull { it.value == ri }?.key
+                val ci = inkId?.let { it - 1 } ?: -1
+                Log.i(SEMA, "SÉMA|save|ci=$ci|ri=$ri|pts=${sr.points.size}|first=(${p0.first.toInt()},${p0.second.toInt()})|last=(${pN.first.toInt()},${pN.second.toInt()})")
+            }
         }
         // Bitmap
         bitmap?.let {
@@ -507,7 +553,7 @@ class MiroirIME : InputMethodService() {
         savePageMdm(dir)
         // ═══ Groupes & labels : sauvegarde JSON pour rechargement ═══
         saveGroupsJson(dir)
-        Log.i(SEMA, "T5|savePage|${System.currentTimeMillis() - semaStart}ms|vstar=${vstarSize}B|strokes=$liveStrokes|page=$currentPageIndex")
+        Log.i(SEMA, "T5|savePage|${System.currentTimeMillis() - semaStart}ms|vstar=${vstarFile.length()}B|strokes=$liveStrokes|page=$currentPageIndex")
     }
 
     private fun saveGroupsJson(dir: java.io.File) {
@@ -520,15 +566,17 @@ class MiroirIME : InputMethodService() {
             for (g in allGroups) {
                 val obj = org.json.JSONObject()
                 obj.put("id", g.id)
-                // ═══ Sauvegarder les registryIndex (0-based, = captureIndex) au lieu des inkId ═══
-                // Les inkId changent après rechargement, pas les registryIndex.
-                val riArr = org.json.JSONArray()
+                // ═══ Sauvegarder les captureIndex (immuables, 0-65535) au lieu des registryIndex ═══
+                // Les registryIndex changent après rechargement (trous d'effacement).
+                // Le captureIndex est gravé dans le flux V★ — il survit à tout.
+                // inkId = captureIndex + 1 → captureIndex = inkId - 1
+                val ciArr = org.json.JSONArray()
                 for (sid in g.strokeIds) {
-                    val ri = inkStrokeIdToRegistryIndex[sid] ?: continue
-                    riArr.put(ri)
+                    val ci = (sid - 1).coerceIn(0, 65535)
+                    ciArr.put(ci)
                 }
-                if (riArr.length() == 0) continue
-                obj.put("registryIndices", riArr)
+                if (ciArr.length() == 0) continue
+                obj.put("captureIndices", ciArr)
                 obj.put("state", g.state.toString())
                 // Chercher le label associé
                 val firstSid = g.strokeIds.firstOrNull()
@@ -585,26 +633,35 @@ class MiroirIME : InputMethodService() {
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
                 val gid = obj.optString("id", "")
-                // ═══ Lire registryIndices (0-based) et traduire via ciToRi → inkId ═══
-                val riArr = obj.optJSONArray("registryIndices")
-                val sidArr = obj.optJSONArray("strokeIds")  // rétrocompatibilité
+                // ═══ Lire captureIndices (immuables) — prioritaire, ou registryIndices (rétrocompatibilité) ═══
+                val ciArr = obj.optJSONArray("captureIndices")
+                val riArr = obj.optJSONArray("registryIndices")  // rétrocompatibilité
+                val sidArr = obj.optJSONArray("strokeIds")       // rétrocompatibilité ancienne
                 val inkGroup = InkGroup.create()
-                if (riArr != null) {
-                    // ═══ Construire mapping inverse registryIndex → captureIndex (robuste) ═══
-                    // ciToRi: captureIndex → registryIndex. On inverse pour trouver le CI.
+                if (ciArr != null) {
+                    // ═══ Format V2 : captureIndices directs → ciToRi ═══
+                    for (j in 0 until ciArr.length()) {
+                        val ci = ciArr.getInt(j).toShort()
+                        val ri = ciToRi[ci] ?: continue
+                        val inkId = (ci + 1).toLong()
+                        if (inkStrokeIdToRegistryIndex.containsKey(inkId)) {
+                            inkGroup.strokeIds.add(inkId)
+                        }
+                    }
+                } else if (riArr != null) {
+                    // ═══ Rétrocompatibilité V1 : registryIndices → riToCi ═══
                     val riToCi = mutableMapOf<Int, Short>()
                     for ((ci, ri) in ciToRi) { riToCi[ri] = ci }
                     for (j in 0 until riArr.length()) {
                         val savedRI = riArr.getInt(j)
-                        // Chercher le vrai captureIndex correspondant à ce registryIndex
                         val ci = riToCi[savedRI] ?: continue
-                        val inkId = (ci + 1).toLong()  // inkId = captureIndex + 1
+                        val inkId = (ci + 1).toLong()
                         if (inkStrokeIdToRegistryIndex.containsKey(inkId)) {
                             inkGroup.strokeIds.add(inkId)
                         }
                     }
                 } else if (sidArr != null) {
-                    // Rétrocompatibilité: anciens strokeIds (inkId), filtrer les orphelins
+                    // Rétrocompatibilité V0 : anciens strokeIds (inkId), filtrer les orphelins
                     for (j in 0 until sidArr.length()) {
                         val sid = sidArr.getLong(j)
                         if (inkStrokeIdToRegistryIndex.containsKey(sid)) {
@@ -1144,6 +1201,13 @@ class MiroirIME : InputMethodService() {
                     val p = sr.points.first()
                     Log.i(TAG, "🔬 TRACE load stroke[$i] id=${sr.id} first=(${p.first.toInt()},${p.second.toInt()}) pts=${sr.points.size}")
                 }
+            }
+            // 🔬 SÉMATOGRAMME : chaque stroke chargé — CI, position, points
+            for ((ci, ri) in ciToRi) {
+                val sr = strokeRegistry.getOrNull(ri) ?: continue
+                if (sr.points.isEmpty()) continue
+                val p0 = sr.points.first(); val pN = sr.points.last()
+                Log.i(SEMA, "SÉMA|load|ci=$ci|ri=$ri|pts=${sr.points.size}|first=(${p0.first.toInt()},${p0.second.toInt()})|last=(${pN.first.toInt()},${pN.second.toInt()})")
             }
             Log.i(TAG, "V★ v2.0 chargé: page $index — ${strokeRegistry.size} strokes, $groupsLoaded groupes, ${groupLabels.size} labels, ${groupBlobs.size} blobs")
             // ═══ MDM — MarkDownMiroir ═══
@@ -1756,12 +1820,33 @@ class MiroirIME : InputMethodService() {
         }
 
         // ═══ Reset : ferme le bloc, nouveau bloc, reste en capture ═══
-        toolbar.addView(makeButton("✕") {
-            val fKey = currentFieldKey
+        toolbar.addView(makeButton("\u2715", {
+            // Appui long → reset bloc + vider le champ texte + nouveau bloc
+            val ic = currentInputConnection
+            if (ic != null) {
+                val before = ic.getTextBeforeCursor(50000, 0) ?: ""
+                val after = ic.getTextAfterCursor(50000, 0) ?: ""
+                ic.deleteSurroundingText(before.length, after.length)
+            }
             closeBlock()
             clearPage()
+            val fKey = currentFieldKey
             ensureBlockDir(fKey, System.currentTimeMillis())
             refreshAll()
+        }) {
+            // Clic court → reset vue courante (si capture) ou reset texte champ (si clavier)
+            if (isFormattingMode) {
+                val ic = currentInputConnection
+                if (ic != null) {
+                    val before = ic.getTextBeforeCursor(50000, 0) ?: ""
+                    val after = ic.getTextAfterCursor(50000, 0) ?: ""
+                    ic.deleteSurroundingText(before.length, after.length)
+                    ic.commitText("", 1)
+                }
+            } else {
+                clearPage()
+                refreshAll()
+            }
         })
 
         toolbar.addView(makeButton("⚙") {
@@ -1874,27 +1959,31 @@ class MiroirIME : InputMethodService() {
         }
         toolbar.addView(formattingToggleBtn)
 
-        // ═══ Validation : clic court = mise en forme, appui long = exécuter/fermer ═══
+        // ═══ Validation : clic court = page courante, appui long = tout le bloc ═══
         toolbar.addView(makeButton("✓", {
-            // Appui long → commit + fermer l'IME (exécution)
+            // Appui long → push + commit TOUT le bloc (ne ferme pas l'IME)
             savePage()
+            pushTextToParnasse()
             val ic = currentInputConnection
             if (ic != null) {
                 val fullText = buildAllPagesText()
                 ic.commitText(fullText.ifEmpty { "\n" }, 1)
             }
-            requestHideSelf(0)
         }) {
-            // Clic court → commit + basculer vers la vue mise en forme
+            // Clic court → push + commit page courante. Si en capture, basculer vers clavier.
             savePage()
+            pushTextToParnasse()
             val ic = currentInputConnection
             if (ic != null) {
-                val fullText = buildAllPagesText()
-                ic.commitText(fullText.ifEmpty { "\n" }, 1)
+                val pageText = buildReadingOrderText()
+                ic.commitText(pageText.ifEmpty { "\n" }, 1)
             }
-            isFormattingToggleInProgress = true
-            toggleFormattingMode()
-            uiHandler.postDelayed({ isFormattingToggleInProgress = false }, 300)
+            // ═══ Ne basculer que si on est en mode capture (pas de clavier→capture) ═══
+            if (!isFormattingMode) {
+                isFormattingToggleInProgress = true
+                toggleFormattingMode()
+                uiHandler.postDelayed({ isFormattingToggleInProgress = false }, 300)
+            }
         })
 
         // ═══ Bouton annotation 📌 (visible uniquement en mode correction) ═══
@@ -4110,7 +4199,9 @@ class MiroirIME : InputMethodService() {
         val words = mutableListOf<Word>()
         for ((firstIdx, text) in groupLabels) {
             val anchor = groupAnchor[firstIdx] ?: continue
-            words.add(Word(snapToLine(anchor.second), anchor.first, text))
+            val clean = cleanLabelForMdm(text)
+            if (clean.isEmpty()) continue
+            words.add(Word(snapToLine(anchor.second), anchor.first, clean))
         }
         if (words.isEmpty()) return ""
         // Trier les mots par ligne (Y) puis X
@@ -4269,7 +4360,8 @@ class MiroirIME : InputMethodService() {
         val dir = blockDir ?: return buildReadingOrderText()
         if (!dir.exists() || !dir.isDirectory) return buildReadingOrderText()
         val pageDirs = dir.listFiles()
-            ?.filter { it.isDirectory && it.name.startsWith("page_") && java.io.File(it, "state.json").exists() }
+            ?.filter { it.isDirectory && it.name.startsWith("page_") &&
+                (java.io.File(it, "state.json").exists() || java.io.File(it, "page.vstar").exists()) }
             ?.sortedBy { it.name.removePrefix("page_").toIntOrNull() ?: -1 }
             ?: emptyList()
         val sb = StringBuilder()
@@ -4285,13 +4377,39 @@ class MiroirIME : InputMethodService() {
                     sb.append(pageText)
                 }
             } else {
-                // Autre page → reconstruire l'ordre de lecture depuis les ancres
+                // Autre page → reconstruire l'ordre de lecture depuis state.json ou groups.json
                 val stateFile = java.io.File(pd, "state.json")
-                if (!stateFile.exists()) continue
+                val groupsFile = java.io.File(pd, "groups.json")
+                val sourceFile = when {
+                    stateFile.exists() -> stateFile
+                    groupsFile.exists() -> groupsFile
+                    else -> null
+                }
+                if (sourceFile == null) continue
                 try {
-                    val json = org.json.JSONObject(stateFile.readText())
-                    val labelsObj = json.optJSONObject("labels") ?: continue
-                    val anchorsObj = json.optJSONObject("anchors")
+                    val raw = sourceFile.readText()
+                    // groups.json a un wrapper {"groups": [...]}, state.json a "labels" direct
+                    val labelsObj = if (sourceFile == groupsFile) {
+                        val root = org.json.JSONObject(raw)
+                        val groupsArr = root.optJSONArray("groups") ?: org.json.JSONArray()
+                        val obj = org.json.JSONObject()
+                        for (i in 0 until groupsArr.length()) {
+                            val g = groupsArr.getJSONObject(i)
+                            val label = g.optString("label", null) ?: continue
+                            val ciArr = g.optJSONArray("captureIndices")
+                                ?: g.optJSONArray("registryIndices") ?: continue
+                            if (ciArr.length() > 0) {
+                                obj.put(ciArr.getInt(0).toString(), label)
+                            }
+                        }
+                        obj
+                    } else {
+                        org.json.JSONObject(raw).optJSONObject("labels") ?: continue
+                    }
+                    // Ancre seulement si state.json (groups.json n'a pas d'ancres)
+                    val anchorsObj = if (sourceFile == stateFile) {
+                        org.json.JSONObject(raw).optJSONObject("anchors")
+                    } else null
                     data class Word(val y: Float, val x: Float, val text: String)
                     val words = mutableListOf<Word>()
                     for (key in labelsObj.keys()) {
@@ -4400,19 +4518,17 @@ class MiroirIME : InputMethodService() {
                 isInsertionMode = false
                 insertionCursorPos = -1
             }
-            // ═══ SYNCHRO CAPTURE → MDM : injecter les labels dans le champ hôte ═══
-            val mdm = generateMdmFromLabels()
-            if (mdm.isNotBlank()) {
+            // ═══ SYNCHRO CAPTURE → TEXTE PROPRE : injecter le texte nettoyé (pas le MDM brut) ═══
+            val text = buildReadingOrderText()
+            if (text.isNotBlank()) {
                 val ic = currentInputConnection
                 if (ic != null) {
                     ic.finishComposingText()
-                    // Remplacer le contenu existant par le MDM généré
                     val before = ic.getTextBeforeCursor(50000, 0) ?: ""
                     val after = ic.getTextAfterCursor(50000, 0) ?: ""
-                    val totalLen = before.length + after.length
                     ic.deleteSurroundingText(before.length, after.length)
-                    ic.commitText(mdm, 1)
-                    Log.i(TAG, "📝 Synchro capture→MDM: ${mdm.take(80)}…")
+                    ic.commitText(text, 1)
+                    Log.i(TAG, "📝 Synchro capture→texte: ${text.take(80)}…")
                 }
             }
             // Forcer le mode clavier (non plein écran) → app hôte visible au-dessus
@@ -4602,7 +4718,8 @@ class MiroirIME : InputMethodService() {
 
     private fun getBlockPreview(dir: java.io.File): String {
         val pageDirs = dir.listFiles()
-            ?.filter { it.isDirectory && it.name.startsWith("page_") && java.io.File(it, "state.json").exists() }
+            ?.filter { it.isDirectory && it.name.startsWith("page_") &&
+                (java.io.File(it, "state.json").exists() || java.io.File(it, "page.vstar").exists()) }
             ?.sortedBy { it.name.removePrefix("page_").toIntOrNull() ?: -1 }
             ?: emptyList()
         if (pageDirs.isEmpty()) return ""
@@ -4610,9 +4727,28 @@ class MiroirIME : InputMethodService() {
         val allWords = mutableListOf<String>()
         for (pd in pageDirs) {
             try {
-                val json = org.json.JSONObject(java.io.File(pd, "state.json").readText())
-                val labelsObj = json.optJSONObject("labels") ?: continue
-                val anchorsObj = json.optJSONObject("anchors")
+                val stateFile = java.io.File(pd, "state.json")
+                val groupsFile = java.io.File(pd, "groups.json")
+                val raw = when {
+                    stateFile.exists() -> stateFile.readText()
+                    groupsFile.exists() -> groupsFile.readText()
+                    else -> continue
+                }
+                // groups.json → extraire les labels
+                val labelsObj = if (stateFile.exists()) {
+                    org.json.JSONObject(raw).optJSONObject("labels") ?: continue
+                } else {
+                    val root = org.json.JSONObject(raw)
+                    val groupsArr = root.optJSONArray("groups") ?: org.json.JSONArray()
+                    val obj = org.json.JSONObject()
+                    for (i in 0 until groupsArr.length()) {
+                        val g = groupsArr.getJSONObject(i)
+                        val label = g.optString("label", null) ?: continue
+                        obj.put(g.optString("id", i.toString()), label)
+                    }
+                    obj
+                }
+                val anchorsObj = if (stateFile.exists()) org.json.JSONObject(raw).optJSONObject("anchors") else null
                 data class Word(val y: Float, val x: Float, val text: String)
                 val words = mutableListOf<Word>()
                 for (key in labelsObj.keys()) {
