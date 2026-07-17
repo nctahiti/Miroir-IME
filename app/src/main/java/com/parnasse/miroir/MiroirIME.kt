@@ -3946,21 +3946,8 @@ class MiroirIME : InputMethodService() {
         if (!recognizer.isLoaded) return
 
         try {
-            // ═══ TRI SPATIAL : ordre de lecture (Y/ligne puis X) — uniquement pour l'inférence ML Kit ═══
-            // Le flux V★ reste en ordre chronologique. Seule la tokenisation ML Kit est spatialisée.
-            val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
-            val sortedIndices = if (spacing > 0f && indices.size > 1) {
-                indices.sortedWith(compareBy<Int> {
-                    val sr = strokeRegistry.getOrNull(it) ?: return@compareBy 0
-                    val firstPoint = sr.points.firstOrNull() ?: return@compareBy 0
-                    (firstPoint.second / spacing).toInt()  // ligne (Y)
-                }.thenBy {
-                    val sr = strokeRegistry.getOrNull(it) ?: return@thenBy 0f
-                    sr.points.firstOrNull()?.first ?: 0f  // colonne (X)
-                })
-            } else indices
             val strokesCopy = strokeRegistry.toList()
-            val result = recognizer.recognize(strokesCopy, sortedIndices)
+            val result = recognizer.recognize(strokesCopy, indices)
             if (!result.isNullOrBlank()) {
                 Log.i(TAG, "Reconnaissance groupe: \"$result\" (${indices.size} strokes)")
                 uiHandler.post {
