@@ -8,10 +8,14 @@ package com.parnasse.miroir
  * La traduction DisplayMode -> UpdateMode vit uniquement dans l'adaptateur OnyxEpdPort.
  */
 enum class DisplayMode {
-    /** Direct Update — l'encre suit le stylet en direct, pas de rafraîchissement. (écriture) */
+    /** Direct Update — l'encre suit le stylet en direct (écriture). ~0ms latence. */
     DU,
-    /** Gray Update — rafraîchissement général ponctuel. (CaptureView L531) */
+    /** Gray Update — rafraîchissement général ponctuel. */
     GU,
-    /** Regal — mode vue optimisé texte, ~120 ms. (MiroirIME.enterViewMode L337) */
-    REGAL
+    /** Regal — mode vue optimisé texte, ~120ms. Nettoie le ghosting. */
+    REGAL,
+    /** Animation — mode ultra-rapide pour le stylet (équivalent A2 sur certaines tablettes). */
+    ANIMATION,
+    /** Grayscale Clear — nettoyage complet de l'écran (ghosting résiduel). */
+    GC
 }

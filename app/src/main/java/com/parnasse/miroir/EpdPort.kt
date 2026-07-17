@@ -22,4 +22,10 @@ interface EpdPort {
 
     /** refreshScreen(view, mode) — rafraîchissement PONCTUEL (ne change pas le mode par défaut). */
     fun refresh(mode: DisplayMode)
+
+    /** enterScribbleMode(view) — optimise pour l'écriture (raw drawing). */
+    fun enterScribble()
+
+    /** leaveScribbleMode(view) — restaure le mode normal. */
+    fun leaveScribble()
 }

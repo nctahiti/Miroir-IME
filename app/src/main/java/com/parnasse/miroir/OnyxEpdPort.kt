@@ -31,9 +31,19 @@ class OnyxEpdPort(private val view: View) : EpdPort {
         EpdController.refreshScreen(view, mode.toOnyx())
     }
 
+    override fun enterScribble() {
+        EpdController.enterScribbleMode(view)
+    }
+
+    override fun leaveScribble() {
+        EpdController.leaveScribbleMode(view)
+    }
+
     private fun DisplayMode.toOnyx(): UpdateMode = when (this) {
         DisplayMode.DU -> UpdateMode.DU
         DisplayMode.GU -> UpdateMode.GU
         DisplayMode.REGAL -> UpdateMode.REGAL
+        DisplayMode.ANIMATION -> UpdateMode.ANIMATION
+        DisplayMode.GC -> UpdateMode.GC
     }
 }
