@@ -3593,6 +3593,9 @@ class MiroirIME : InputMethodService() {
     // ═══════════════════════════════════════════════════════════════════
 
     private fun initTouchHelper(target: View) {
+        // ═══ ANCIEN TouchHelper — remplacé par StylusPort ci-dessous ═══
+        // Gardé en fallback silencieux si le StylusPort échoue
+        if (stylusPort != null) return  // déjà initialisé via initStylusPort
         if (touchHelper != null) return
         try {
             touchHelper = TouchHelper.create(target, TouchHelper.FEATURE_APP_TOUCH_RENDER,
@@ -3608,18 +3611,16 @@ class MiroirIME : InputMethodService() {
                     override fun onRawErasingTouchPointMoveReceived(p0: OnyxTouchPoint) {}
                     override fun onRawErasingTouchPointListReceived(p0: TouchPointList) {}
                 })
-
             touchHelper!!.setRawInputReaderEnable(true)
             touchHelper!!.setBrushRawDrawingEnabled(true)
             touchHelper!!.setRawDrawingEnabled(true)
             touchHelper!!.openRawDrawing()
-            touchHelper!!.setPostInputEvent(true)  // forward vers onTouchEvent
-            Log.i(TAG, "TouchHelper actif")
-
-            enterWriteMode()  // mode DU pour l'écriture
+            touchHelper!!.setPostInputEvent(true)
+            Log.i(TAG, "TouchHelper actif (fallback)")
+            enterWriteMode()
         } catch (e: Exception) {
             touchHelper = null
-            Log.w(TAG, "TouchHelper indisponible: ${e.message} — fallback onTouchEvent")
+            Log.w(TAG, "TouchHelper indisponible: ${e.message}")
         }
 
         // ═══ Portabilité : initialiser le StylusPort (séquence DU→REGAL, hover) ═══
@@ -3645,13 +3646,17 @@ class MiroirIME : InputMethodService() {
         }
     }
 
-    /** Callback du StylusPort — séquence de refresh DU→REGAL. */
+    /** Callback du StylusPort — forwarde vers la capture Miroir + séquence DU→REGAL. */
     private val stylusCallback = object : StylusPort.Callback {
         override fun onStylusDown(x: Float, y: Float, pressure: Float, timestamp: Long) {
             epdPort?.setDefaultMode(DisplayMode.DU)  // ═══ ultra-rapide pour le trait ═══
+            if (!isStylusDown) onStylusDown(x, y)
         }
-        override fun onStylusMove(x: Float, y: Float, pressure: Float, timestamp: Long) {}
+        override fun onStylusMove(x: Float, y: Float, pressure: Float, timestamp: Long) {
+            if (isStylusDown) onStylusPoint(x, y, pressure)
+        }
         override fun onStylusUp(x: Float, y: Float, pressure: Float, timestamp: Long) {
+            onStylusUp()
             // ═══ Nettoyer le ghosting après le trait ═══
             uiHandler.postDelayed({
                 if (!isStylusDown) epdPort?.setDefaultMode(DisplayMode.REGAL)
