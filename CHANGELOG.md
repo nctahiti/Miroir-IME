@@ -1,6 +1,26 @@
 # Changelog — Miroir IME
 
-## 2026-06-29 — Session « UxK — Cinématique »
+## 2026-07-17 — Session « Stabilité des groupes »
+
+### `0073f99` — fix: réécriture V★ propre + captureIndices + flux texte MDM
+
+**Stockage V★** (`MiroirIME.kt` + `VStarConduit.kt`) :
+- `savePage()` réécrit `page.vstar` avec strokes vivants seulement (CI préservés, plus d'accumulation)
+- `captureIndex` traité en non signé (`and 0xFFFF`) — plage 0-65535, plus de wraparound à 32767
+
+**Groupes** (`MiroirIME.kt`) :
+- `groups.json` utilise `captureIndices` (immuables) au lieu de `registryIndices` (volatils après effacement)
+- Rétrocompatibilité V1 (`registryIndices`) + V0 (`strokeIds`)
+
+**Inférence ML Kit** (`MiroirIME.kt`) :
+- `recognizeGroup()` : ordre chronologique (tri spatial supprimé — ML Kit lisait à l'envers)
+
+**Texte & UI** (`MiroirIME.kt`) :
+- `buildReadingOrderText()` : nettoie les labels avec `cleanLabelForMdm()` (plus de balises `@`)
+- `toggleFormattingMode()` : injecte texte propre au lieu de MDM brut
+- Bouton ✓ : `pushTextToParnasse()` + toggle seulement si `!isFormattingMode`
+- `openConduit()` : crée le bloc si `blockDir` null (survie navigation)
+
 
 ### `932ed3c` — fix: UxK — cinématique de sélection, curseur d'insertion, labels grisés
 
