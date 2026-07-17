@@ -131,6 +131,9 @@ class MiroirIME : InputMethodService() {
     // ── Dessin ────────────────────────────────────────────────────────
     private var imeView: CaptureSurfaceView? = null
 
+    /** Overlay EPD transparent (SurfaceView) pour le contrôle de rafraîchissement indépendant. */
+    private var epdOverlayView: EpdOverlayView? = null
+
      /** Séquenceur de modes EPD (État A) — initialisé quand la surface IME est créée. */
      private var displayController: DisplayController? = null
 
@@ -1543,13 +1546,14 @@ class MiroirIME : InputMethodService() {
 
     /** Active le mode écriture (DU) — tracé fluide 16ms, overlays invisibles. */
     private fun enterWriteMode() {
-        if (isWriteMode) return  // déjà en DU, ne pas rafraîchir inutilement
-        val v = imeView ?: return
+        if (isWriteMode) return
+        val v = epdOverlayView ?: return  // ═══ cibler l'overlay EPD, pas la vue IME ═══
         try {
             EpdController.setScreenHandWritingPenState(v, 1)
             EpdController.enablePost(v, 0)
             EpdController.setViewDefaultUpdateMode(v, UpdateMode.DU)
             isWriteMode = true
+            Log.v(TAG, "enterWriteMode: DU sur EpdOverlayView")
         } catch (e: Exception) {
             Log.w(TAG, "enterWriteMode: EpdController error: ${e.message}")
         }
@@ -1557,14 +1561,15 @@ class MiroirIME : InputMethodService() {
 
     /** Active le mode vue (REGAL) — overlays visibles, texte optimisé ~120ms. */
     private fun enterViewMode() {
-        if (!isWriteMode) return  // déjà en vue
-        val v = imeView ?: return
+        if (!isWriteMode) return
+        val v = epdOverlayView ?: return  // ═══ cibler l'overlay EPD ═══
         try {
             EpdController.setScreenHandWritingPenState(v, 0)
             EpdController.enablePost(v, 1)
             EpdController.setViewDefaultUpdateMode(v, UpdateMode.REGAL)
-            v.postInvalidate()
+            // Pas de postInvalidate() global — le bitmap est déjà dessiné
             isWriteMode = false
+            Log.v(TAG, "enterViewMode: REGAL sur EpdOverlayView")
         } catch (e: Exception) {
             Log.w(TAG, "enterViewMode: EpdController error: ${e.message}")
         }
@@ -2027,6 +2032,20 @@ class MiroirIME : InputMethodService() {
          // Initialisation du séquenceur de modes (État A) — la surface IME est la cible EPD
          displayController = DisplayController(OnyxEpdPort(surface))
         mainContent.addView(surface)
+
+        // ═══ EpdOverlayView — SurfaceView transparent par-dessus la capture ═══
+        val epdOverlay = EpdOverlayView(this).apply {
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT)
+            configureStroke(Color.BLACK, strokePaint.strokeWidth)
+        }
+        epdOverlayView = epdOverlay
+        // Lier l'EPD à l'overlay (pas à la vue IME)
+        epdOverlay.epdPort = OnyxEpdPort(epdOverlay)
+        root.addView(epdOverlay)
+        epdOverlay.bringToFront()
+        Log.i(TAG, "EpdOverlayView ajouté — contrôle EPD indépendant")
 
         // ═══ Panneau de mise en forme (caché par défaut) ═══
         formattingPanel = android.widget.LinearLayout(this).apply {
@@ -3798,6 +3817,13 @@ class MiroirIME : InputMethodService() {
                 vstarConduit?.writePoint(px, py, lastTs, lastPr, isPenUp = true)
                 vstarPointCount++
             }
+        }
+
+        // ═══ LOW-LATENCY : revenir en mode REGAL après le trait (nettoie le ghosting) ═══
+        if (!imeView?.isCorrecting()!!) {
+            uiHandler.postDelayed({
+                if (!isStylusDown) enterViewMode()
+            }, 200)  // 200ms — laisse le temps à l'utilisateur d'enchaîner un autre trait
         }
 
         // Ajouter au registre
