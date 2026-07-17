@@ -1552,31 +1552,28 @@ class MiroirIME : InputMethodService() {
     /** Active le mode écriture (DU) — tracé fluide 16ms, overlays invisibles. */
     private fun enterWriteMode() {
         if (isWriteMode) return
-        val v = epdOverlayView ?: return  // ═══ cibler l'overlay EPD, pas la vue IME ═══
+        val v = imeView ?: return  // ═══ cibler la vue IME ═══
         try {
             EpdController.setScreenHandWritingPenState(v, 1)
             EpdController.enablePost(v, 0)
             EpdController.setViewDefaultUpdateMode(v, UpdateMode.DU)
             isWriteMode = true
-            Log.v(TAG, "enterWriteMode: DU sur EpdOverlayView")
         } catch (e: Exception) {
-            Log.w(TAG, "enterWriteMode: EpdController error: ${e.message}")
+            Log.w(TAG, "enterWriteMode: ${e.message}")
         }
     }
 
     /** Active le mode vue (REGAL) — overlays visibles, texte optimisé ~120ms. */
     private fun enterViewMode() {
         if (!isWriteMode) return
-        val v = epdOverlayView ?: return  // ═══ cibler l'overlay EPD ═══
+        val v = imeView ?: return  // ═══ cibler la vue IME ═══
         try {
             EpdController.setScreenHandWritingPenState(v, 0)
             EpdController.enablePost(v, 1)
             EpdController.setViewDefaultUpdateMode(v, UpdateMode.REGAL)
-            // Pas de postInvalidate() global — le bitmap est déjà dessiné
             isWriteMode = false
-            Log.v(TAG, "enterViewMode: REGAL sur EpdOverlayView")
         } catch (e: Exception) {
-            Log.w(TAG, "enterViewMode: EpdController error: ${e.message}")
+            Log.w(TAG, "enterViewMode: ${e.message}")
         }
     }
 
@@ -2046,11 +2043,9 @@ class MiroirIME : InputMethodService() {
             configureStroke(Color.BLACK, strokePaint.strokeWidth)
         }
         epdOverlayView = epdOverlay
-        // Lier l'EPD à l'overlay (pas à la vue IME)
-        epdOverlay.epdPort = OnyxEpdPort(epdOverlay)
-        root.addView(epdOverlay)
-        epdOverlay.bringToFront()
-        Log.i(TAG, "EpdOverlayView ajouté — contrôle EPD indépendant")
+        // ═══ NE PAS ajouter au layout — le SurfaceView peut bloquer l'affichage ═══
+        // L'EPD sera sur imeView (enterWriteMode/enterViewMode déjà ciblent imeView)
+        Log.i(TAG, "EpdOverlayView créé (hors layout)")
 
         // ═══ Panneau de mise en forme (caché par défaut) ═══
         formattingPanel = android.widget.LinearLayout(this).apply {
