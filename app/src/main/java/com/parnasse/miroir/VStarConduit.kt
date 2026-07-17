@@ -18,8 +18,13 @@ import kotlin.math.roundToInt
  *   ...
  *   [END token]
  *
- * Chaque token contient un captureIndex pérenne (Short, 0-65535),
+ * Chaque token contient un captureIndex pérenne (Short, 0-65535 non signé),
  * créé au PEN_DOWN et immuable pour toute la durée de vie du stroke.
+ *
+ * ⚠️ CONTRAT 16-BIT : le captureIndex est stocké en Short (signé Kotlin)
+ * mais interprété en NON SIGNÉ (0-65535). scanMaxCaptureIndex() utilise
+ * `and 0xFFFF` pour éviter le débordement signé après 32767.
+ * Le wraparound à 65535→0 est acceptable car <65536 strokes/page.
  */
 class VStarConduit {
 
@@ -87,7 +92,8 @@ class VStarConduit {
                 // Session existante : reprendre après le dernier token.
                 // Scanner les captureIndex existants pour ne pas créer de collision.
                 val maxCI = scanMaxCaptureIndex(file)
-                nextCaptureIndex = (maxCI + 1).toShort()
+                // ═══ Incrément non signé (0-65535) — wraparound géré ═══
+                nextCaptureIndex = ((maxCI.toInt() and 0xFFFF) + 1).toShort()
                 currentCaptureIndex = maxCI
                 Log.i(TAG, "Session reprise: ${file.name} (${file.length()}B, maxCI=$maxCI → nextCI=$nextCaptureIndex)")
             }
@@ -265,7 +271,9 @@ class VStarConduit {
                         val t = VStarTokenV2.read(ins)
                         bytesRead += VStarTokenV2.SIZE_BYTES
                         if (t.isEnd() || t.isErased() || t.isGroupMeta()) continue
-                        if (t.captureIndex > maxCI) maxCI = t.captureIndex.toInt()
+                        // ═══ captureIndex en NON SIGNÉ (0-65535) — évite le débordement signé ═══
+                        val ci = t.captureIndex.toInt() and 0xFFFF
+                        if (ci > maxCI) maxCI = ci
                     } catch (e: EOFException) { break }
                 }
             }

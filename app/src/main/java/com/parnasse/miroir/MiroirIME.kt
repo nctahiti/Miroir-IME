@@ -492,6 +492,11 @@ class MiroirIME : InputMethodService() {
         val vstarSize = if (vstarFile.exists()) vstarFile.length() else -1
         val liveStrokes = strokeRegistry.count { !it.isDeleted && it.points.isNotEmpty() }
         Log.i(TAG, "💾 savePage page=$currentPageIndex vstar=${vstarSize}B strokes=$liveStrokes")
+        // 🔬 DIAG TRACE : 3 premiers strokes AVANT sauvegarde
+        strokeRegistry.filter { !it.isDeleted && it.points.isNotEmpty() }.take(3).forEachIndexed { i, sr ->
+            val p = sr.points.first()
+            Log.i(TAG, "🔬 TRACE save stroke[$i] id=${sr.id} first=(${p.first.toInt()},${p.second.toInt()}) pts=${sr.points.size}")
+        }
         // Bitmap
         bitmap?.let {
             java.io.FileOutputStream(java.io.File(dir, "bitmap.png")).use { out ->
@@ -585,13 +590,15 @@ class MiroirIME : InputMethodService() {
                 val sidArr = obj.optJSONArray("strokeIds")  // rétrocompatibilité
                 val inkGroup = InkGroup.create()
                 if (riArr != null) {
+                    // ═══ Construire mapping inverse registryIndex → captureIndex (robuste) ═══
+                    // ciToRi: captureIndex → registryIndex. On inverse pour trouver le CI.
+                    val riToCi = mutableMapOf<Int, Short>()
+                    for ((ci, ri) in ciToRi) { riToCi[ri] = ci }
                     for (j in 0 until riArr.length()) {
-                        val ri = riArr.getInt(j)
-                        // Le registryIndex = captureIndex dans le fichier V★
-                        // ciToRi n'est pas inversé, mais on peut chercher le ci qui mappe vers ce ri
-                        // En pratique, ri = ci (pas de strokes supprimés), donc on utilise ri comme ci
-                        val newRi = ciToRi[ri.toShort()] ?: continue
-                        val inkId = (ri + 1).toLong()  // inkId = ci + 1
+                        val savedRI = riArr.getInt(j)
+                        // Chercher le vrai captureIndex correspondant à ce registryIndex
+                        val ci = riToCi[savedRI] ?: continue
+                        val inkId = (ci + 1).toLong()  // inkId = captureIndex + 1
                         if (inkStrokeIdToRegistryIndex.containsKey(inkId)) {
                             inkGroup.strokeIds.add(inkId)
                         }
@@ -705,6 +712,15 @@ class MiroirIME : InputMethodService() {
             val allLiveIndices = strokeRegistry.indices
                 .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() && strokeRegistry[it].timestamps.isNotEmpty() }
                 .toList()
+
+            // 🔬 DIAG : ordre des strokes sauvegardés
+            if (allLiveIndices.isNotEmpty()) {
+                val firstPts = allLiveIndices.take(5).map { ri ->
+                    val p = strokeRegistry[ri].points[0]
+                    "ri$ri@(${p.first.toInt()},${p.second.toInt()})"
+                }
+                Log.i(TAG, "🔬 DIAG save: ${allLiveIndices.size} strokes, 5 premiers: $firstPts")
+            }
 
             // Map: registryIndex → captureIndex + offset dans le fichier
             val registryToCI = mutableMapOf<Int, Short>()
@@ -1095,62 +1111,18 @@ class MiroirIME : InputMethodService() {
                 }
             }
 
-            // ═══ Reconstruire les groupes depuis la GroupTable (via offsetToCI, pas de re-lecture fichier) ═══
+            // ═══ Reconstruire les groupes depuis groups.json (état exact de la session) ═══
+            // groups.json est sauvegardé par saveGroupsJson() → reflète l'état du GroupManager.
+            // Pas de reconstruction depuis GROUP_META — le flux V★ est brut, chronologique, immuable.
+            // Seul l'ordre de tokenisation ML Kit est spatialisé (dans recognizeGroup).
             var groupsLoaded = 0
-            for (g in result.groups) {
-                if (g.isEmpty) continue
-                val inkGroup = InkGroup.create()
-                // Trouver les captureIndex via les offsets dans les extents
-                val seenCIs = mutableSetOf<Short>()
-                val unresolvedOffsets = mutableListOf<Int>()
-                for (extent in g.extents) {
-                    for (i in 0 until extent.count) {
-                        val off = extent.offset + i
-                        val ci = offsetToCI[off]
-                        if (ci != null) seenCIs.add(ci)
-                        else unresolvedOffsets.add(off)
-                    }
-                }
-                if (unresolvedOffsets.isNotEmpty()) {
-                    Log.w(TAG, "V★ v2.0 DIAG load: g=${g.id.take(6)} extents=${g.extents} unresolved=${unresolvedOffsets.take(5)}/${unresolvedOffsets.size} offsetToCI_size=${offsetToCI.size}")
-                }
-                // Convertir captureIndex → inkStrokeId
-                for (ci in seenCIs) {
-                    val ri = ciToRi[ci] ?: continue
-                    val inkId = (ci + 1).toLong()
-                    inkGroup.strokeIds.add(inkId)
-                }
-                if (inkGroup.strokeIds.isNotEmpty()) {
-                    groupManager?.registerLoadedGroup(inkGroup)
-                    // ⚠️ Réactiver en LOADED pour que l'absorption fonctionne (pas STORED → évincé)
-                    val firstSid = inkGroup.strokeIds.firstOrNull()
-                    if (firstSid != null) groupManager?.reactivateGroup(firstSid)
-                    groupsLoaded++
-                    // Restaurer le label et l'ancre sur le PREMIER extent (ordre d'écriture)
-                    val firstExtent = g.extents.firstOrNull()
-                    val firstCI = firstExtent?.let { offsetToCI[it.offset] }
-                    if (firstCI != null) {
-                        val firstRi = ciToRi[firstCI] ?: continue
-                        if (g.label != null) {
-                            groupLabels[firstRi] = g.label!!
-                            originalLabels[firstRi] = g.label!!
-                        }
-                        if (g.labelCorrected != null) {
-                            groupLabels[firstRi] = g.labelCorrected!!
-                        }
-                        groupAnchor[firstRi] = Pair(g.anchorX, g.anchorY)
-                    }
-                }
-            }
+            Log.i(TAG, "🔬 DIAG groupes: ${result.groups.size} dans GroupTable (ignoré), offsetToCI=${offsetToCI.size} entrées, ciToRi=${ciToRi.size} entrées")
+            groupsLoaded = loadGroupsJson(dir, ciToRi)
+            Log.i(TAG, "🔬 DIAG: loadGroupsJson → $groupsLoaded groupes chargés (structure + labels)")
 
             cachedGMCacheSize = -1
             currentPageIndex = index
             rebuildBitmap()
-
-            // ═══ Fallback groupes : charger depuis groups.json si GroupTable vide ═══
-            if (groupsLoaded == 0) {
-                groupsLoaded = loadGroupsJson(dir, ciToRi)
-            }
 
             // Recalculer les blobs
             groupBlobs.clear()
@@ -1165,6 +1137,13 @@ class MiroirIME : InputMethodService() {
                 val p0 = firstSR.points.first()
                 val pN = firstSR.points.last()
                 Log.i(TAG, "V★ v2.0 DIAG load: premier=(${p0.first},${p0.second}) dernier=(${pN.first},${pN.second}) pts=${firstSR.points.size}")
+            }
+            // 🔬 DIAG TRACE : 3 premiers strokes — positions absolues
+            strokeRegistry.take(3).forEachIndexed { i, sr ->
+                if (sr.points.isNotEmpty()) {
+                    val p = sr.points.first()
+                    Log.i(TAG, "🔬 TRACE load stroke[$i] id=${sr.id} first=(${p.first.toInt()},${p.second.toInt()}) pts=${sr.points.size}")
+                }
             }
             Log.i(TAG, "V★ v2.0 chargé: page $index — ${strokeRegistry.size} strokes, $groupsLoaded groupes, ${groupLabels.size} labels, ${groupBlobs.size} blobs")
             // ═══ MDM — MarkDownMiroir ═══
@@ -3967,8 +3946,21 @@ class MiroirIME : InputMethodService() {
         if (!recognizer.isLoaded) return
 
         try {
+            // ═══ TRI SPATIAL : ordre de lecture (Y/ligne puis X) — uniquement pour l'inférence ML Kit ═══
+            // Le flux V★ reste en ordre chronologique. Seule la tokenisation ML Kit est spatialisée.
+            val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
+            val sortedIndices = if (spacing > 0f && indices.size > 1) {
+                indices.sortedWith(compareBy<Int> {
+                    val sr = strokeRegistry.getOrNull(it) ?: return@compareBy 0
+                    val firstPoint = sr.points.firstOrNull() ?: return@compareBy 0
+                    (firstPoint.second / spacing).toInt()  // ligne (Y)
+                }.thenBy {
+                    val sr = strokeRegistry.getOrNull(it) ?: return@thenBy 0f
+                    sr.points.firstOrNull()?.first ?: 0f  // colonne (X)
+                })
+            } else indices
             val strokesCopy = strokeRegistry.toList()
-            val result = recognizer.recognize(strokesCopy, indices)
+            val result = recognizer.recognize(strokesCopy, sortedIndices)
             if (!result.isNullOrBlank()) {
                 Log.i(TAG, "Reconnaissance groupe: \"$result\" (${indices.size} strokes)")
                 uiHandler.post {
