@@ -11,7 +11,7 @@ import android.view.SurfaceView
 /**
  * Overlay EPD transparent — canal de rafraîchissement indépendant de l'IME.
  *
- * Placé au-dessus de [CaptureSurfaceView] avec [setZOrderOnTop] = true.
+ * Placé au-dessus de [CaptureSurfaceView] avec [set] = true.
  * Intercepte les événements stylet et les forwarde vers :
  *   1. TouchHelper → raw drawing hardware (near-zero latency, trait DU)
  *   2. MiroirIME → rastérisation bitmap (permanent)
@@ -40,9 +40,9 @@ class EpdOverlayView(context: Context) : SurfaceView(context) {
 
     init {
         setWillNotDraw(false)  // permet onDraw() sur SurfaceView
-        setZOrderOnTop(true)   // au-dessus de l'app hôte
+        setZOrderMediaOverlay(true)   // au-dessus de l'app hôte
         holder.setFormat(PixelFormat.TRANSPARENT)  // fond transparent
-        Log.i(TAG, "EpdOverlayView créé — SurfaceView transparent ZOrderOnTop")
+        Log.i(TAG, "EpdOverlayView créé — SurfaceView transparent ")
     }
 
     fun configureStroke(color: Int, width: Float) {

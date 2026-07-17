@@ -1544,6 +1544,11 @@ class MiroirIME : InputMethodService() {
     // ═══ Jonglage de modes EPD ═══
     private var isWriteMode = true  // true = DU (écriture), false = REGAL/GU (vue)
 
+    /** Runnable pour passer en REGAL après une pause d'écriture (annulé si nouveau stroke). */
+    private val enterViewRunnable = Runnable {
+        if (!isStylusDown) enterViewMode()
+    }
+
     /** Active le mode écriture (DU) — tracé fluide 16ms, overlays invisibles. */
     private fun enterWriteMode() {
         if (isWriteMode) return
@@ -3617,7 +3622,7 @@ class MiroirIME : InputMethodService() {
         if (stylusPort != null) return  // déjà initialisé via initStylusPort
         if (touchHelper != null) return
         try {
-            touchHelper = TouchHelper.create(target, TouchHelper.FEATURE_APP_TOUCH_RENDER,
+            touchHelper = TouchHelper.create(target,
                 object : RawInputCallback() {
                     override fun onBeginRawDrawing(p0: Boolean, p1: OnyxTouchPoint) {
                         if (!isStylusDown) onStylusDown(p1.x, p1.y)
@@ -3630,13 +3635,14 @@ class MiroirIME : InputMethodService() {
                     override fun onRawErasingTouchPointMoveReceived(p0: OnyxTouchPoint) {}
                     override fun onRawErasingTouchPointListReceived(p0: TouchPointList) {}
                 })
+            // ═══ Séquence : tout APRÈS openRawDrawing() (qui réinitialise) ═══
+            touchHelper!!.openRawDrawing()
             touchHelper!!.setRawInputReaderEnable(true)
+            touchHelper!!.setRawDrawingRenderEnabled(true)
             touchHelper!!.setBrushRawDrawingEnabled(true)
             touchHelper!!.setRawDrawingEnabled(true)
-            touchHelper!!.openRawDrawing()
             touchHelper!!.setPostInputEvent(true)
-            Log.i(TAG, "TouchHelper actif (fallback)")
-            enterWriteMode()
+            Log.i(TAG, "TouchHelper actif — raw drawing")
         } catch (e: Exception) {
             touchHelper = null
             Log.w(TAG, "TouchHelper indisponible: ${e.message}")
@@ -3655,13 +3661,12 @@ class MiroirIME : InputMethodService() {
         // StylusPort — détection auto Onyx vs Android
         if (stylusPort == null) {
             stylusPort = if (OnyxStylusPort.isAvailable()) {
-                OnyxStylusPort().also { (it as OnyxStylusPort).setCallback(stylusCallback) }
+                OnyxStylusPort()
             } else {
-                AndroidStylusPort().also { (it as AndroidStylusPort).setCallback(stylusCallback) }
+                AndroidStylusPort()
             }
-            stylusPort?.init(view)
-            stylusPort?.setActive(true)
-            Log.i(TAG, "StylusPort: ${stylusPort!!.javaClass.simpleName}")
+            // NE PAS appeler init(view) — crée un 2e TouchHelper (conflit)
+            Log.i(TAG, "StylusPort: ${stylusPort!!.javaClass.simpleName} (sans TouchHelper)")
         }
     }
 
@@ -3819,11 +3824,10 @@ class MiroirIME : InputMethodService() {
             }
         }
 
-        // ═══ LOW-LATENCY : revenir en mode REGAL après le trait (nettoie le ghosting) ═══
+        // ═══ LOW-LATENCY : REGAL différé — ne nettoie qu'après une pause d'écriture ═══
         if (!imeView?.isCorrecting()!!) {
-            uiHandler.postDelayed({
-                if (!isStylusDown) enterViewMode()
-            }, 200)  // 200ms — laisse le temps à l'utilisateur d'enchaîner un autre trait
+            uiHandler.removeCallbacks(enterViewRunnable)
+            uiHandler.postDelayed(enterViewRunnable, 2000)  // 2s de pause → REGAL
         }
 
         // Ajouter au registre
