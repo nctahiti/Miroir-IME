@@ -149,13 +149,16 @@ class CaptureActivity : Activity() {
                 FrameLayout.LayoutParams.MATCH_PARENT))
         }
 
-        // Couche 2 : SurfaceView FONTAINE — capture + rendu plume (MediaOverlay)
+        // Couche 2 : SurfaceView FONTAINE — capture + rendu plume
         fontaineOverlay = FontaineOverlay(this, engine).also { fo ->
             fo.onStrokeFinished = { _ -> scheduleInference() }
             root.addView(fo, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT))
         }
+
+        // Pont : la View standard peut désactiver la fontaine en mode interaction
+        captureView?.fontaineOverlay = fontaineOverlay
 
         // Barre d'outils flottante
         val toolbar = LinearLayout(this).apply {

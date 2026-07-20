@@ -79,6 +79,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     // ── Callbacks ─────────────────────────────────────────────────────
     var onStrokeFinished: ((registryIndex: Int) -> Unit)? = null
 
+    /** Référence à la FontaineOverlay — pour activer/désactiver le mode interaction. */
+    var fontaineOverlay: FontaineOverlay? = null
+
     // ═══════════════════════════════════════════════════════════════════
     // TOUCH HELPER ONYX
     // ═══════════════════════════════════════════════════════════════════
@@ -318,6 +321,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         selectedGroupId?.let { gm.deselectGroup(it) }
         selectedGroupId = gid
         gm.selectGroup(gid)
+        // Mode interaction : la fontaine laisse passer les événements
+        fontaineOverlay?.let { it.modeInteraction = true; it.desactiver() }
 
         val group = gm.allGroupsFull().find { it.id == gid }
         val firstSid = group?.strokeIds?.firstOrNull()
@@ -333,6 +338,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         selectedGroupId?.let { gm?.deselectGroup(it) }
         selectedGroupId = null
         selectedGroupLabel = null
+        // Sortir du mode interaction → réactiver la fontaine
+        fontaineOverlay?.let { it.modeInteraction = false; it.activer() }
         invalidate()
     }
 

@@ -28,6 +28,9 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
 
     var onStrokeFinished: ((registryIndex: Int) -> Unit)? = null
 
+    /** Si true, la fontaine ignore les strokes (mode interaction : drag, erase, correction). */
+    var modeInteraction: Boolean = false
+
     init {
         holder.addCallback(this)
         setZOrderOnTop(true)                     // au-dessus de tout
@@ -56,6 +59,8 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
             touchHelper = com.onyx.android.sdk.pen.TouchHelper.create(this,
                 object : com.onyx.android.sdk.pen.RawInputCallback() {
                     override fun onBeginRawDrawing(eraser: Boolean, tp: com.onyx.android.sdk.data.note.TouchPoint) {
+                        // Mode interaction : on laisse passer les événements vers la View standard
+                        if (modeInteraction) return
                         strokeCount++
                         Log.i(TAG, "🖊️ BEGIN #$strokeCount eraser=$eraser x=${tp.x.toInt()} y=${tp.y.toInt()}")
                         isStylusDown = true
@@ -145,5 +150,19 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
         } catch (_: Exception) {} finally {
             try { canvas?.let { holder.unlockCanvasAndPost(it) } } catch (_: Exception) {}
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // TOUCH — en mode interaction, on laisse tout passer à la View standard
+    // ═══════════════════════════════════════════════════════════════════
+
+    override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+        if (modeInteraction) return false  // laisse passer à la View dessous
+        return super.onTouchEvent(event)
+    }
+
+    override fun onHoverEvent(event: android.view.MotionEvent): Boolean {
+        if (modeInteraction) return false
+        return super.onHoverEvent(event)
     }
 }
