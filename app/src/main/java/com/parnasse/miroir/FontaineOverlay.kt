@@ -28,9 +28,10 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     }
 
     private var touchHelper: com.onyx.android.sdk.pen.TouchHelper? = null
-    private var isStylusDown = false
+    internal var isStylusDown = false
     private var surfaceReady = false
     private var strokeCount = 0
+    private var penStillTimer: java.lang.Runnable? = null  // long-press sur blob
 
     // Déduplication des points (Move vs List peuvent envoyer les mêmes points)
     private val processedPoints = mutableSetOf<String>()
@@ -46,7 +47,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     init {
         holder.addCallback(this)
         setZOrderOnTop(true)
-        holder.setFormat(PixelFormat.TRANSPARENT)  // OpenInkBridge utilise TRANSPARENT
+        holder.setFormat(PixelFormat.TRANSLUCENT)  // TRANSLUCENT pour compatibilité Onyx
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -88,19 +89,21 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                     processedPoints.clear()
                     addPoint(tp)
                     engine.beginStroke(tp.x, tp.y, normalizePressure(tp.pressure))
-                    // Annuler les timers d'affichage — on écrit, pas de refresh
                     onStrokeBegin?.invoke()
+                    // Longer le long-press en parallèle (si le stylet reste immobile sur un blob)
+                    armLongPress(tp.x, tp.y)
                 }
 
                 override fun onRawDrawingTouchPointMoveReceived(tp: com.onyx.android.sdk.data.note.TouchPoint?) {
                     keepRawDrawingActive()
-                    if (!isStylusDown || tp == null) return
-                    // Déduplication : on utilise aussi ListReceived, donc on ignore Move
+                    cancelPenStillTimer()  // le stylet bouge → pas un long-press
                 }
 
                 override fun onRawDrawingTouchPointListReceived(list: com.onyx.android.sdk.pen.data.TouchPointList?) {
                     keepRawDrawingActive()
                     if (!isStylusDown || list == null) return
+                    // Dès qu'il y a des points, annuler le long-press
+                    if (list.size() > 0) cancelPenStillTimer()
                     for (i in 0 until list.size()) {
                         val pt = list.get(i) ?: continue
                         if (addPoint(pt)) {
@@ -110,6 +113,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                 }
 
                 override fun onEndRawDrawing(eraser: Boolean, tp: com.onyx.android.sdk.data.note.TouchPoint) {
+                    cancelPenStillTimer()
                     if (!isStylusDown) return
                     isStylusDown = false
                     val ptCount = engine.currentStrokeRecord?.activePoints ?: 0
@@ -205,6 +209,37 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // LONG-PRESS (sélection de groupe)
+    // ═══════════════════════════════════════════════════════════════════
+
+    private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private fun armLongPress(x: Float, y: Float) {
+        cancelPenStillTimer()
+        penStillTimer = java.lang.Runnable {
+            // Après 500ms immobile → chercher un blob sous le stylet
+            val gm = engine.groupManager ?: return@Runnable
+            for ((gid, blob) in engine.groupBlobs) {
+                if (x >= blob.bounds.left && x <= blob.bounds.right &&
+                    y >= blob.bounds.top && y <= blob.bounds.bottom) {
+                    gm.selectGroup(gid)
+                    modeInteraction = true
+                    Log.i(TAG, "Long-press: groupe ${gid.take(8)} SELECTED")
+                    // Notifier CaptureSurfaceView pour l'affichage
+                    post { invalidate() }
+                    return@Runnable
+                }
+            }
+        }
+        uiHandler.postDelayed(penStillTimer!!, 500L)
+    }
+
+    private fun cancelPenStillTimer() {
+        penStillTimer?.let { uiHandler.removeCallbacks(it) }
+        penStillTimer = null
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // POINTS
     // ═══════════════════════════════════════════════════════════════════
 
@@ -232,12 +267,11 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
         Log.d(TAG, "Fontaine désactivée")
     }
 
-    /** Réactive — rapide : juste openRawDrawing, pas de reconfiguration complète. */
+    /** Réactive — rapide : juste openRawDrawing + essentiel. */
     fun activer() {
         try {
             val th = touchHelper ?: return
             th.openRawDrawing()
-            // Réappliquer juste l'essentiel (openRawDrawing() reset tout)
             th.setStrokeStyle(com.onyx.android.sdk.pen.TouchHelper.STROKE_STYLE_FOUNTAIN)
             val density = resources.displayMetrics.density
             th.setStrokeWidth(strokeWidthDp * density)
@@ -252,7 +286,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     // EFFACEMENT
     // ═══════════════════════════════════════════════════════════════════
 
-    private fun effacerSurface() {
+    fun effacerSurface() {
         if (!surfaceReady) return
         var canvas: Canvas? = null
         try {

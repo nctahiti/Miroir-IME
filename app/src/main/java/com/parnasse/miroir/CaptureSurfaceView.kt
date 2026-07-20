@@ -145,6 +145,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
+        // Si la fontaine est en train d'écrire, ignorer les taps
+        if (fontaineOverlay?.isStylusDown == true) return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 tapStartX = event.x; tapStartY = event.y
