@@ -59,6 +59,11 @@ class CaptureActivity : Activity() {
         Thread(r, "miroir-capture-infer").apply { priority = Thread.NORM_PRIORITY - 1 }
     }
 
+    // ── Timer d'inference par groupe ────────────────────────────────────
+    private val inferenceRunnable = Runnable { runGroupInference() }
+    private var inferenceTimerArmed = false
+    private var lastGroupId: String? = null
+
     // ── Contexte d'invocation ──────────────────────────────────────────
     private var invocBlockId: String? = null
     private var invocPageN: Int = 0
@@ -87,14 +92,57 @@ class CaptureActivity : Activity() {
         engine.initGroupManager(this)
         engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
 
-        // Charger la page demandée
+        // Charger la page demandee
         if (isContextual && invocPageN > 0 && engine.countPages() > invocPageN) {
-            engine.goToPage(invocPageN)
+            engine.goToPageFull(invocPageN)
+        } else if (engine.countPages() > 0) {
+            engine.loadPageFull()
         }
 
         // ═══ Construire l'interface selon le mode ═══
         when (invocMode) {
             else -> buildBlockView()  // toujours le mode capture pour l'Activity standalone
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // INFERENCE PAR GROUPE (timer)
+    // ═══════════════════════════════════════════════════════════════════
+
+    private fun runGroupInference() {
+        inferenceTimerArmed = false
+        val eng = engine
+        val gm = eng.groupManager ?: return
+        val groups = gm.allGroupsFull()
+        if (groups.isEmpty()) return
+
+        // Prendre le dernier groupe (ou celui qui a declenche le timer)
+        val targetGroup = if (lastGroupId != null) {
+            groups.find { it.id == lastGroupId } ?: groups.last()
+        } else {
+            groups.last()
+        }
+        val indices = targetGroup.strokeIds.mapNotNull { eng.inkStrokeIdToRegistryIndex[it] }
+        if (indices.isEmpty()) return
+
+        val rec = recognizer ?: return
+        if (!rec.isLoaded) return
+
+        inferExecutor.submit {
+            val result = rec.recognize(eng.strokeRegistry.toList(), indices)
+            if (!result.isNullOrBlank()) {
+                uiHandler.post {
+                    val firstIdx = indices.firstOrNull() ?: return@post
+                    eng.groupLabels[firstIdx] = result
+                    // Ancre du groupe
+                    val anchor = eng.strokeRegistry.getOrNull(firstIdx)?.points?.firstOrNull()
+                    if (anchor != null) {
+                        eng.groupAnchor[firstIdx] = anchor
+                    }
+                    Log.i(TAG, "Reconnu: '$result' (groupe ${targetGroup.id.take(8)})")
+                    captureView?.invalidate()
+                }
+            }
         }
     }
 
@@ -130,16 +178,14 @@ class CaptureActivity : Activity() {
         toolbar.addView(makeBtn("⬅", Color.argb(200, 80, 80, 160)) {
             val total = engine.countPages()
             if (total > 0 && engine.currentPageIndex > 0) {
-                engine.savePage()
-                engine.goToPage(engine.currentPageIndex - 1)
+                engine.goToPageFull(engine.currentPageIndex - 1)
                 captureView?.invalidate()
             }
         })
         toolbar.addView(makeBtn("➡", Color.argb(200, 0, 80, 160)) {
             val total = engine.countPages()
             if (total > 0 && engine.currentPageIndex < total - 1) {
-                engine.savePage()
-                engine.goToPage(engine.currentPageIndex + 1)
+                engine.goToPageFull(engine.currentPageIndex + 1)
                 captureView?.invalidate()
             } else if (total == 0 || engine.currentPageIndex >= total - 1) {
                 engine.newPage()
@@ -150,7 +196,7 @@ class CaptureActivity : Activity() {
         // Espace pousseur
         toolbar.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
         toolbar.addView(makeBtn("💾", Color.argb(200, 0, 100, 50)) {
-            engine.savePage()
+            engine.savePageFull()
             Toast.makeText(this, "💾 Page sauvegardée", Toast.LENGTH_SHORT).show()
         })
 
@@ -171,7 +217,7 @@ class CaptureActivity : Activity() {
     }
 
     override fun onDestroy() {
-        engine.savePage(); engine.closeBlock()
+        engine.savePageFull(); engine.closeBlock()
         captureView?.releaseTouchHelper(); recognizer?.close()
         super.onDestroy()
     }
@@ -193,20 +239,21 @@ class CaptureActivity : Activity() {
 
     inner class CaptureSurface(context: android.content.Context) : View(context) {
         var engine: MiroirEngine? = null
-        private val strokePaint = Paint().apply {
-            color = Color.BLACK; strokeWidth = 3f; style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true
-        }
         private val templatePaint = Paint().apply {
             color = Color.argb(60, 180, 180, 200); strokeWidth = 1f; style = Paint.Style.STROKE
         }
-        private var currentPath = Path()
+        private val labelPaint = Paint().apply {
+            color = Color.argb(180, 80, 80, 180); textSize = 28f; isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+        }
         private var isStylusDown = false
         private var touchHelper: com.onyx.android.sdk.pen.TouchHelper? = null
-        private var bitmap: Bitmap? = null
-        private var bitmapCanvas: Canvas? = null
 
-        fun clearCanvas() { bitmap?.eraseColor(Color.WHITE); invalidate() }
+        fun clearCanvas() {
+            engine?.bitmap?.eraseColor(Color.WHITE)
+            engine?.bitmapCanvas?.drawColor(Color.WHITE)
+            invalidate()
+        }
 
         fun initTouchHelper() {
             if (touchHelper != null) return
@@ -249,74 +296,88 @@ class CaptureActivity : Activity() {
         override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
             super.onSizeChanged(w, h, oldw, oldh)
             if (w > 0 && h > 0) {
-                bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                bitmapCanvas = Canvas(bitmap!!)
-                bitmap?.eraseColor(Color.WHITE)
+                engine?.bitmap?.recycle()
+                engine?.bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                engine?.bitmapCanvas = Canvas(engine?.bitmap!!)
+                engine?.bitmap?.eraseColor(Color.WHITE)
                 engine?.updateTemplateSpacing(context, h)
             }
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
             if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
+            val eng = engine ?: return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    isStylusDown = true; currentPath.reset()
-                    currentPath.moveTo(event.x, event.y)
+                    isStylusDown = true
+                    eng.beginStroke(event.x, event.y)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (!isStylusDown) return true
+                    // Capturer tous les points historiques + le point courant
                     for (i in 0 until event.historySize) {
-                        currentPath.lineTo(event.getHistoricalX(i), event.getHistoricalY(i))
+                        eng.addStrokePoint(event.getHistoricalX(i), event.getHistoricalY(i),
+                            event.getHistoricalPressure(i))
                     }
-                    currentPath.lineTo(event.x, event.y)
+                    eng.addStrokePoint(event.x, event.y, event.pressure)
                     invalidate()
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!isStylusDown) return true
                     isStylusDown = false
-                    bitmapCanvas?.drawPath(currentPath, strokePaint)
-                    val sr = StrokeRecord()
-                    sr.points.add(Pair(event.x, event.y))
-                    engine?.strokeRegistry?.add(sr)
-                    scheduleInference()
-                    currentPath.reset()
+                    // Dernier point
+                    for (i in 0 until event.historySize) {
+                        eng.addStrokePoint(event.getHistoricalX(i), event.getHistoricalY(i),
+                            event.getHistoricalPressure(i))
+                    }
+                    eng.addStrokePoint(event.x, event.y, event.pressure)
+                    val ri = eng.endStroke()
+                    if (ri >= 0) {
+                        scheduleInference(ri)
+                    }
                     invalidate()
                 }
             }
             return true
         }
 
-        private fun scheduleInference() {
+        private fun scheduleInference(strokeRegistryIndex: Int) {
             val eng = engine ?: return
             val gm = eng.groupManager ?: return
             val groups = gm.allGroupsFull()
             if (groups.isEmpty()) return
             val lastGroup = groups.last()
-            val indices = lastGroup.strokeIds.mapNotNull { eng.inkStrokeIdToRegistryIndex[it] }
-            if (indices.isEmpty()) return
-            inferExecutor.submit {
-                val rec = recognizer ?: return@submit
-                if (!rec.isLoaded) return@submit
-                val result = rec.recognize(eng.strokeRegistry.toList(), indices)
-                if (!result.isNullOrBlank()) {
-                    uiHandler.post {
-                        val firstIdx = indices.firstOrNull() ?: return@post
-                        eng.groupLabels[firstIdx] = result
-                        Log.i(TAG, "Reconnu: '$result'")
-                    }
-                }
-            }
+
+            // Rearmer le timer : annuler l'ancien, programmer le nouveau
+            uiHandler.removeCallbacks(inferenceRunnable)
+            inferenceTimerArmed = true
+            lastGroupId = lastGroup.id
+            uiHandler.postDelayed(inferenceRunnable, 1500L)  // 1.5s apres le dernier stroke
         }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
             val eng = engine ?: return
+            // Fond
+            canvas.drawColor(Color.WHITE)
+            // Bitmap rasterise
+            eng.bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+            // Template
             for (ly in eng.cachedTemplateLines) {
                 canvas.drawLine(0f, ly, width.toFloat(), ly, templatePaint)
             }
-            if (isStylusDown) {
-                canvas.drawPath(currentPath, strokePaint)
+            // Labels
+            for ((firstIdx, label) in eng.groupLabels) {
+                val anchor = eng.groupAnchor[firstIdx] ?: continue
+                canvas.drawText(label, anchor.first, anchor.second - 12f, labelPaint)
+            }
+            // Stroke en cours
+            if (isStylusDown && eng.currentStrokeRecord != null) {
+                val paint = Paint().apply {
+                    color = Color.BLACK; strokeWidth = 3f; style = Paint.Style.STROKE
+                    strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true
+                }
+                canvas.drawPath(eng.currentPath, paint)
             }
         }
     }
