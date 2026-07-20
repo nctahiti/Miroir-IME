@@ -7,6 +7,7 @@ import android.graphics.PixelFormat
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import kotlin.math.abs
 
 /**
  * FontaineOverlay — SurfaceView transparente pour la capture en mode FONTAINE.
@@ -25,6 +26,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     companion object {
         private const val TAG = "Miroir/Fontaine"
         private const val STROKE_WIDTH_DP = 2f
+        private const val SWIPE_THRESHOLD = 30f
     }
 
     private var touchHelper: com.onyx.android.sdk.pen.TouchHelper? = null
@@ -39,12 +41,28 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     // Déduplication des points (Move vs List peuvent envoyer les mêmes points)
     private val processedPoints = mutableSetOf<String>()
 
+    // ── Gesture tracking (post long-press) ──────────────────────────
+    private var gestureStartX = 0f
+    private var gestureStartY = 0f
+    private var gestureMode: String? = null  // null, "erase", "move"
+    private var lastGestureX = 0f
+    private var lastGestureY = 0f
+
     var onStrokeFinished: ((registryIndex: Int) -> Unit)? = null
     /** Appelé au début de chaque stroke — pour annuler les timers d'affichage. */
     var onStrokeBegin: (() -> Unit)? = null
     /** Appelé quand un long-press est détecté (500ms immobile). */
     var onLongPressDetected: ((x: Float, y: Float) -> Unit)? = null
+    /** Appelé quand un geste (swipe après long-press) est détecté. */
+    var onGestureDetected: ((mode: String, x: Float, y: Float) -> Unit)? = null
+    /** Appelé à chaque mouvement pendant un geste d'édition. */
+    var onGestureMove: ((x: Float, y: Float, dx: Float, dy: Float, mode: String) -> Unit)? = null
+    /** Appelé à la fin du geste (stylet levé). */
+    var onGestureEnd: (() -> Unit)? = null
     var modeInteraction: Boolean = false
+
+    /** Cible de forward des événements tactiles en mode interaction. */
+    var touchForwardTarget: android.view.View? = null
 
     private var strokeColor = Color.BLACK
     private var strokeWidthDp = STROKE_WIDTH_DP
@@ -97,13 +115,21 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                     engine.beginStroke(tp.x, tp.y, normalizePressure(tp.pressure))
                     onStrokeBegin?.invoke()
                     armLongPressTimer(tp.x, tp.y)
+                    // Initialiser le tracking de geste (sera utilisé si long-press détecté)
+                    gestureStartX = tp.x; gestureStartY = tp.y
+                    lastGestureX = tp.x; lastGestureY = tp.y
+                    gestureMode = null
                 }
 
                 override fun onRawDrawingTouchPointMoveReceived(tp: com.onyx.android.sdk.data.note.TouchPoint?) {
                     keepRawDrawingActive()
                     if (tp != null) {
-                        lpTotalDist += Math.hypot((tp.x - lastLPX).toDouble(), (tp.y - lastLPY).toDouble()).toFloat()
-                        lastLPX = tp.x; lastLPY = tp.y
+                        if (modeInteraction) {
+                            handleGestureMove(tp.x, tp.y)
+                        } else {
+                            lpTotalDist += Math.hypot((tp.x - lastLPX).toDouble(), (tp.y - lastLPY).toDouble()).toFloat()
+                            lastLPX = tp.x; lastLPY = tp.y
+                        }
                     }
                 }
 
@@ -112,10 +138,14 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                     if (!isStylusDown || list == null) return
                     for (i in 0 until list.size()) {
                         val pt = list.get(i) ?: continue
-                        lpTotalDist += Math.hypot((pt.x - lastLPX).toDouble(), (pt.y - lastLPY).toDouble()).toFloat()
-                        lastLPX = pt.x; lastLPY = pt.y
-                        if (addPoint(pt)) {
-                            engine.addStrokePoint(pt.x, pt.y, normalizePressure(pt.pressure))
+                        if (modeInteraction) {
+                            handleGestureMove(pt.x, pt.y)
+                        } else {
+                            lpTotalDist += Math.hypot((pt.x - lastLPX).toDouble(), (pt.y - lastLPY).toDouble()).toFloat()
+                            lastLPX = pt.x; lastLPY = pt.y
+                            if (addPoint(pt)) {
+                                engine.addStrokePoint(pt.x, pt.y, normalizePressure(pt.pressure))
+                            }
                         }
                     }
                 }
@@ -124,14 +154,21 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                     cancelLongPressTimer()
                     if (!isStylusDown) return
                     isStylusDown = false
-                    val ptCount = engine.currentStrokeRecord?.activePoints ?: 0
-                    Log.i(TAG, "🖊️ END   #$strokeCount pts=$ptCount")
-                    val ri = engine.endStroke()
-                    processedPoints.clear()
-                    if (ri >= 0 && ptCount >= 10) {
-                        onStrokeFinished?.invoke(ri)
-                    } else if (ri >= 0) {
-                        Log.d(TAG, "Stroke ignoré (${ptCount} pts)")
+                    if (modeInteraction) {
+                        // Fin du geste d'édition
+                        onGestureEnd?.invoke()
+                        gestureMode = null
+                        Log.i(TAG, "🖊️ END   (geste) mode=$gestureMode")
+                    } else {
+                        val ptCount = engine.currentStrokeRecord?.activePoints ?: 0
+                        Log.i(TAG, "🖊️ END   #$strokeCount pts=$ptCount")
+                        val ri = engine.endStroke()
+                        processedPoints.clear()
+                        if (ri >= 0 && ptCount >= 10) {
+                            onStrokeFinished?.invoke(ri)
+                        } else if (ri >= 0) {
+                            Log.d(TAG, "Stroke ignoré (${ptCount} pts)")
+                        }
                     }
                 }
 
@@ -241,6 +278,36 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // GESTURE DETECTION (post long-press)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /** Appelé depuis les Move callbacks quand modeInteraction=true. */
+    private fun handleGestureMove(x: Float, y: Float) {
+        if (gestureMode == null) {
+            // Détecter la direction du geste
+            val dx = x - gestureStartX
+            val dy = y - gestureStartY
+            if (dx < -SWIPE_THRESHOLD) {
+                gestureMode = "erase"
+                Log.i(TAG, "→ Geste EFFACEMENT (←) dx=$dx")
+                onGestureDetected?.invoke("erase", x, y)
+            } else if (dy > SWIPE_THRESHOLD) {
+                gestureMode = "move"
+                Log.i(TAG, "→ Geste DÉPLACEMENT (↓) dy=$dy")
+                onGestureDetected?.invoke("move", x, y)
+            }
+        } else {
+            // Mouvement continu pendant le geste
+            val dx = x - lastGestureX
+            val dy = y - lastGestureY
+            if (abs(dx) > 0.5f || abs(dy) > 0.5f) {
+                onGestureMove?.invoke(x, y, dx, dy, gestureMode!!)
+            }
+        }
+        lastGestureX = x; lastGestureY = y
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // POINTS
     // ═══════════════════════════════════════════════════════════════════
 
@@ -305,8 +372,13 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     // ═══════════════════════════════════════════════════════════════════
 
     override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
-        // En mode interaction, laisser passer. Sinon, consommer pour éviter les taps parasites.
-        return !modeInteraction
+        if (modeInteraction) {
+            // Bascule franche : forwarder à la View standard pour les gestes d'édition
+            touchForwardTarget?.dispatchTouchEvent(event)
+            return true
+        }
+        // En mode écriture, consommer pour éviter les taps parasites.
+        return true
     }
 
     override fun onHoverEvent(event: android.view.MotionEvent): Boolean {

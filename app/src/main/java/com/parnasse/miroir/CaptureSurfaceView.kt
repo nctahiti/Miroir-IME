@@ -2,6 +2,7 @@ package com.parnasse.miroir
 
 import android.content.Context
 import android.graphics.*
+import android.graphics.RectF
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
@@ -25,10 +26,11 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         private const val TAG = "Miroir/CaptureView"
         private const val TAP_THRESHOLD_PX = 30f
         private const val HIT_RADIUS = 70f
+        private const val SWIPE_THRESHOLD = 30f
     }
 
     // ── Modes ──────────────────────────────────────────────────────────
-    enum class EditMode { NONE, CORRECT_TRANSCRIPTION }
+    enum class EditMode { NONE, CORRECT_TRANSCRIPTION, ERASE, MOVE }
     private var editMode = EditMode.NONE
 
     // ── Pinceaux ──────────────────────────────────────────────────────
@@ -66,6 +68,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     private var tapMoved = false
     private var selectedGroupId: String? = null
     private var selectedGroupLabel: String? = null
+    private var longPressArmed = false  // true après un long-press → en attente de swipe
 
     // ── Correction ────────────────────────────────────────────────────
     private var correctionGroupId: String? = null
@@ -145,12 +148,17 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
         // Si la fontaine est en train d'écrire, ignorer les taps
-        if (fontaineOverlay?.isStylusDown == true) return false
+        if (fontaineOverlay?.isStylusDown == true && !longPressArmed) return false
+
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 tapStartX = event.x; tapStartY = event.y
                 tapStartTime = System.currentTimeMillis()
                 tapMoved = false
+                if (longPressArmed) {
+                    // Déjà en mode long-press, le DOWN est le début du geste
+                    return true
+                }
                 if (editMode == EditMode.CORRECT_TRANSCRIPTION) {
                     val minusIdx = hitTestMinus(event.x, event.y)
                     if (minusIdx >= 0 && minusIdx < correctionLabel.length) {
@@ -174,11 +182,19 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 }
             }
             MotionEvent.ACTION_MOVE -> {
+                if (longPressArmed) {
+                    handleLongPressMove(event.x, event.y)
+                    return true
+                }
                 val dx = abs(event.x - tapStartX)
                 val dy = abs(event.y - tapStartY)
                 if (dx > TAP_THRESHOLD_PX || dy > TAP_THRESHOLD_PX) tapMoved = true
             }
             MotionEvent.ACTION_UP -> {
+                if (longPressArmed) {
+                    handleLongPressUp()
+                    return true
+                }
                 if (!tapMoved) {
                     handleTap(event.x, event.y)
                 }
@@ -279,6 +295,34 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     // GESTES
     // ═══════════════════════════════════════════════════════════════════
 
+    /** MOVE pendant un long-press armé → détecter la direction ou continuer le geste. */
+    private fun handleLongPressMove(x: Float, y: Float) {
+        if (editMode == EditMode.NONE) {
+            // Détecter la direction
+            val dx = x - gestureStartX
+            val dy = y - gestureStartY
+            if (dx < -SWIPE_THRESHOLD) {
+                enterEraseMode(x)
+                Log.i(TAG, "→ Mode EFFACEMENT (←)")
+            } else if (dy > SWIPE_THRESHOLD) {
+                enterMoveMode(x, y)
+                Log.i(TAG, "→ Mode DÉPLACEMENT (↓)")
+            }
+        } else if (editMode == EditMode.ERASE) {
+            scrubGroup(x)
+        } else if (editMode == EditMode.MOVE) {
+            moveGroup(x - gestureStartX, y - gestureStartY)
+            gestureStartX = x; gestureStartY = y
+        }
+    }
+
+    /** UP après un long-press → sortir du mode édition. */
+    private fun handleLongPressUp() {
+        exitGestureMode()
+        longPressArmed = false
+        invalidate()
+    }
+
     private fun handleTap(x: Float, y: Float) {
         // 1. Hit-test blob
         val blobGid = hitTestBlob(x, y)
@@ -314,8 +358,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         selectedGroupId?.let { gm.deselectGroup(it) }
         selectedGroupId = gid
         gm.selectGroup(gid)
-        // Mode interaction : désactiver la fontaine pour voir le blob
-        fontaineOverlay?.let { it.modeInteraction = true; it.desactiver() }
+        // ⚠️ Ne pas désactiver la fontaine ici — les appelants gèrent
 
         val group = gm.allGroupsFull().find { it.id == gid }
         val firstSid = group?.strokeIds?.firstOrNull()
@@ -330,6 +373,16 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     internal fun selectGroupAt(x: Float, y: Float) {
         val blobGid = hitTestBlob(x, y)
         if (blobGid != null) selectGroup(blobGid)
+    }
+
+    /** Appelé après un long-press → arme la détection de swipe dans onTouchEvent. */
+    fun armLongPressGesture(startX: Float, startY: Float) {
+        longPressArmed = true
+        gestureStartX = startX
+        gestureStartY = startY
+        tapStartX = startX
+        tapStartY = startY
+        tapMoved = false
     }
 
     fun deselectGroup() {
@@ -378,6 +431,143 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     }
 
     fun isCorrecting() = editMode == EditMode.CORRECT_TRANSCRIPTION
+
+    // ═══════════════════════════════════════════════════════════════════
+    // EFFACEMENT & DÉPLACEMENT (importés de l'IME)
+    // ═══════════════════════════════════════════════════════════════════
+
+    private val erasedStrokes = mutableSetOf<Int>()
+    private var scrubBaseX = 0f
+    private var gestureStartX = 0f
+    private var gestureStartY = 0f
+
+    /** Active le mode effacement. Appelé par CaptureActivity après détection du geste. */
+    fun enterEraseMode(startX: Float) {
+        editMode = EditMode.ERASE
+        scrubBaseX = startX
+        gestureStartX = startX
+        Log.i(TAG, "→ Mode EFFACEMENT")
+    }
+
+    /** Active le mode déplacement. */
+    fun enterMoveMode(startX: Float, startY: Float) {
+        editMode = EditMode.MOVE
+        gestureStartX = startX
+        gestureStartY = startY
+        Log.i(TAG, "→ Mode DÉPLACEMENT")
+    }
+
+    /** Effacement proportionnel (scrub) — efface les strokes du groupe sélectionné. */
+    fun scrubGroup(currentX: Float) {
+        val gid = selectedGroupId ?: return
+        val gm = engine.groupManager ?: return
+        val group = gm.allGroupsFull().find { it.id == gid } ?: return
+        if (group.strokeIds.isEmpty()) return
+        val dx = scrubBaseX - currentX
+        if (dx < 3f) return
+        scrubBaseX = currentX
+
+        val strokes = group.strokeIds.mapNotNull { sid ->
+            val idx = engine.inkStrokeIdToRegistryIndex[sid]
+            if (idx != null && idx < engine.strokeRegistry.size) idx to engine.strokeRegistry[idx] else null
+        }.filter { (idx, sr) -> idx !in erasedStrokes && sr.points.size >= 2 }
+
+        var remaining = dx.toDouble()
+        for ((idx, sr) in strokes.reversed()) {
+            if (remaining <= 0.0) break
+            if (idx in erasedStrokes) continue
+            val pts = sr.points
+            var strokeLen = 0.0
+            for (i in 1 until pts.size)
+                strokeLen += Math.hypot((pts[i].first - pts[i-1].first).toDouble(), (pts[i].second - pts[i-1].second).toDouble())
+            if (strokeLen <= remaining) {
+                sr.points.clear(); sr.timestamps.clear(); sr.pressures.clear()
+                sr.isDeleted = true
+                erasedStrokes.add(idx)
+                remaining -= strokeLen
+            } else {
+                var accum = 0.0; var cutIdx = pts.size
+                for (i in pts.size - 1 downTo 1) {
+                    accum += Math.hypot((pts[i].first - pts[i-1].first).toDouble(), (pts[i].second - pts[i-1].second).toDouble())
+                    if (accum >= remaining) { cutIdx = i; break }
+                }
+                if (cutIdx > 0) {
+                    val kept = pts.take(cutIdx)
+                    val keptTs = sr.timestamps.take(cutIdx)
+                    val keptPr = sr.pressures.take(cutIdx)
+                    sr.points.clear(); sr.points.addAll(kept)
+                    sr.timestamps.clear(); sr.timestamps.addAll(keptTs)
+                    sr.pressures.clear(); sr.pressures.addAll(keptPr)
+                }
+                remaining = 0.0
+            }
+        }
+        // Recalculer le blob après effacement
+        val refreshedGroup: InkGroup? = gm.allGroupsFull().find { it.id == gid }
+        if (refreshedGroup != null) {
+            val newBlob: BlobData? = engine.computeBlobPath(refreshedGroup)
+            if (newBlob != null) {
+                engine.groupBlobs[gid] = newBlob
+                val nb = newBlob.bounds
+                refreshedGroup.bounds.set(nb.left, nb.top, nb.right, nb.bottom)
+            }
+        }
+        redrawBitmapOnly()
+        invalidate()
+    }
+
+    /** Déplace le groupe sélectionné du delta (dx, dy). */
+    fun moveGroup(dx: Float, dy: Float) {
+        val gid = selectedGroupId ?: return
+        val gm = engine.groupManager ?: return
+        val group = gm.allGroupsFull().find { it.id == gid } ?: return
+        for (sid in group.strokeIds) {
+            val idx = engine.inkStrokeIdToRegistryIndex[sid] ?: continue
+            if (idx < engine.strokeRegistry.size) {
+                engine.strokeRegistry[idx].points.replaceAll { p: Pair<Float, Float> -> Pair(p.first + dx, p.second + dy) }
+            }
+        }
+        // Déplacer l'ancre du label
+        val firstSid = group.strokeIds.firstOrNull()
+        val firstIdx = firstSid?.let { sid -> engine.inkStrokeIdToRegistryIndex[sid] }
+        if (firstIdx != null) {
+            val anchor = engine.groupAnchor[firstIdx]
+            if (anchor != null) {
+                engine.groupAnchor[firstIdx] = Pair(anchor.first + dx, anchor.second + dy)
+            }
+        }
+        val gb: android.graphics.RectF = group.bounds
+        gb.offset(dx, dy)
+        // Recalculer le blob après déplacement (bounds + path)
+        engine.computeBlobPath(group)?.let { newBlob ->
+            engine.groupBlobs[gid] = newBlob
+        }
+        redrawBitmapOnly()
+        invalidate()
+    }
+
+    /** Redessine tous les strokes dans le bitmap (hors strokes effacés/supprimés). */
+    private fun redrawBitmapOnly() {
+        val canvas = engine.bitmapCanvas ?: return
+        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+        for ((idx, sr) in engine.strokeRegistry.withIndex()) {
+            if (idx in erasedStrokes) continue
+            if (sr.isDeleted) continue
+            if (sr.points.size < 2) continue
+            val path = Path()
+            path.moveTo(sr.points[0].first, sr.points[0].second)
+            for (i in 1 until sr.points.size) {
+                path.lineTo(sr.points[i].first, sr.points[i].second)
+            }
+            canvas.drawPath(path, strokePaint.apply { style = Paint.Style.STROKE })
+        }
+    }
+
+    /** Sortir du mode édition (effacement/déplacement). */
+    fun exitGestureMode() {
+        editMode = EditMode.NONE
+        Log.i(TAG, "Sortie mode édition")
+    }
 
     // ═══════════════════════════════════════════════════════════════════
     // RENDU

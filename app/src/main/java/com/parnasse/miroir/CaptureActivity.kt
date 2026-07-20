@@ -150,6 +150,7 @@ class CaptureActivity : Activity() {
             fo.onStrokeFinished = { _ -> scheduleInference() }
             fo.onStrokeBegin = { cancelTimers() }
             fo.onLongPressDetected = { x, y -> handleLongPress(x, y) }
+            // Les gestes sont maintenant gérés par CaptureSurfaceView.onTouchEvent (bascule franche)
             root.addView(fo, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT))
@@ -252,12 +253,14 @@ class CaptureActivity : Activity() {
         uiHandler.removeCallbacks(displayRefreshRunnable)
     }
 
-    /** Long-press détecté par la fontaine → passer en mode interaction. */
+    /** Long-press détecté par la fontaine → bascule franche : désactiver fontaine, sélectionner, forwarder les événements. */
     private fun handleLongPress(x: Float, y: Float) {
-        // 1. Passer en mode interaction (selectGroup fera le desactiver())
         fontaineOverlay?.modeInteraction = true
-        // 2. Chercher un blob sous le stylet et le sélectionner
+        fontaineOverlay?.desactiver()  // bascule franche : closeRawDrawing + effacerSurface → blob visible
         captureView?.selectGroupAt(x, y)
-        Log.d(TAG, "Long-press → mode interaction à ($x, $y)")
+        captureView?.armLongPressGesture(x, y)  // préparer la View standard à recevoir les gestes
+        // Forwarder les événements tactiles de la fontaine vers la View standard
+        fontaineOverlay?.touchForwardTarget = captureView
+        Log.d(TAG, "Long-press → bascule franche, blob visible, attente geste")
     }
 }
