@@ -29,7 +29,7 @@ class MiroirEngine {
 
     // ── Blocs & Pages ──────────────────────────────────────────────────
     var blockDir: File? = null; private set
-    var currentPageIndex = 0; private set
+    var currentPageIndex = 0
     private var appContext: android.content.Context? = null
 
     // ── Strokes ────────────────────────────────────────────────────────
@@ -219,6 +219,37 @@ class MiroirEngine {
         return BlobData(path, RectF(minX, minY, maxX, maxY))
     }
 
+    /** Reconstruit tous les blobs visuels (après chargement). */
+    fun rebuildAllBlobs() {
+        val gm = groupManager ?: return
+        for (g in gm.allGroupsFull()) {
+            computeBlobPath(g)?.let { groupBlobs[g.id] = it }
+        }
+        Log.i(TAG, "rebuildAllBlobs: ${groupBlobs.size} blobs reconstruits")
+    }
+
+    /** Redessine tous les strokes dans le bitmap interne. */
+    fun redrawBitmapInternal() {
+        val canvas = bitmapCanvas ?: return
+        canvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+        val paint = android.graphics.Paint().apply {
+            color = android.graphics.Color.BLACK; strokeWidth = 3f
+            style = android.graphics.Paint.Style.STROKE
+            strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
+            isAntiAlias = true
+        }
+        for ((idx, sr) in strokeRegistry.withIndex()) {
+            if (sr.isDeleted) continue
+            if (sr.points.size < 2) continue
+            val path = android.graphics.Path()
+            path.moveTo(sr.points[0].first, sr.points[0].second)
+            for (i in 1 until sr.points.size) {
+                path.lineTo(sr.points[i].first, sr.points[i].second)
+            }
+            canvas.drawPath(path, paint)
+        }
+    }
+
     private fun strokeRecordToInkStroke(sr: StrokeRecord, id: Long): InkStroke {
         val inkStroke = InkStroke(id = id, sessionId = 0L)
         val t0 = sr.timestamps.firstOrNull() ?: System.currentTimeMillis()
@@ -266,7 +297,7 @@ class MiroirEngine {
     }
 
     fun closeBlock() {
-        savePage()
+        savePageFull()  // sauvegarde complète, pas la version minimale
         groupManager?.clearAll()
         groupBlobs.clear()
         strokeRegistry.clear()
@@ -285,7 +316,7 @@ class MiroirEngine {
     // ═══════════════════════════════════════════════════════════════════
 
     fun newPage() {
-        savePage()
+        savePageFull()  // sauvegarde complète avant de changer de page
         val bd = blockDir ?: return
         val total = countPages()
         for (i in total - 1 downTo currentPageIndex) {
@@ -427,6 +458,7 @@ class MiroirEngine {
         }
 
         // ── Bitmap PNG ──
+        redrawBitmapInternal()  // synchroniser avant sauvegarde
         bitmap?.let {
             FileOutputStream(File(dir, "bitmap.png")).use { out ->
                 it.compress(Bitmap.CompressFormat.PNG, 90, out)
@@ -455,33 +487,57 @@ class MiroirEngine {
             groupLabels.clear()
             groupAnchor.clear()
 
-            // ── Bitmap PNG ──
-            val bmpFile = File(dir, "bitmap.png")
-            if (bmpFile.exists()) {
-                val loaded = android.graphics.BitmapFactory.decodeFile(bmpFile.absolutePath)
-                if (loaded != null) {
-                    bitmap?.recycle()
-                    bitmap = loaded.copy(Bitmap.Config.ARGB_8888, true)
-                    bitmapCanvas = Canvas(bitmap!!)
-                }
-            }
+            // ── Bitmap : toujours reconstruit depuis les strokes (pas de PNG) ──
+            // Le bitmap sera redessiné par redrawBitmapOnly() après le chargement
 
-            // ── V★ → strokes ──
+            // ── V★ → strokes (format V2, 16 bytes/token, scaleFactor=8) ──
             val vstarFile = File(dir, "page.vstar")
             val ciToRi = mutableMapOf<Short, Int>()
             if (vstarFile.exists() && vstarFile.length() > 0) {
-                val decoder = VStarDecoder(vstarFile)
-                val result = decoder.decode()
-                if (result != null) {
-                    for ((ci, ri) in result.captureIndexToRegistry) {
-                        ciToRi[ci.toShort()] = ri
+                val region = VStarDataRegion(vstarFile)
+                val tokens = region.readAll()
+                val scaleFactor = 8f  // doit correspondre à strokeRecordToTokensV2
+                if (tokens.isNotEmpty()) {
+                    var currentSR: StrokeRecord? = null
+                    var currentCI: Short = -1
+                    var rx = 0f; var ry = 0f  // position reconstruite
+                    for (t in tokens) {
+                        val isPenDown = (t.flags.toInt() and VStarTokenV2.FLAG_PEN_DOWN.toInt()) != 0
+                        val isPenUp = (t.flags.toInt() and VStarTokenV2.FLAG_PEN_UP.toInt()) != 0
+                        if (isPenDown) {
+                            // Nouveau stroke : dx/dy = position absolue × scaleFactor
+                            currentSR = StrokeRecord(id = java.util.UUID.randomUUID().toString())
+                            rx = t.dx / scaleFactor; ry = t.dy / scaleFactor
+                            currentSR.points.add(Pair(rx, ry))
+                            currentSR.timestamps.add(0L)
+                            currentSR.pressures.add(t.p / 255f)
+                            currentCI = t.captureIndex
+                            if (isPenUp) {
+                                // Stroke d'un seul point
+                                val ri = strokeRegistry.size
+                                strokeRegistry.add(currentSR!!)
+                                ciToRi[currentCI] = ri
+                                val inkId = (currentCI + 1).toLong()
+                                inkStrokeIdToRegistryIndex[inkId] = ri
+                                currentSR = null
+                            }
+                        } else if (currentSR != null) {
+                            // Move ou PenUp : dx/dy = delta × scaleFactor
+                            rx += t.dx / scaleFactor; ry += t.dy / scaleFactor
+                            currentSR.points.add(Pair(rx, ry))
+                            currentSR.timestamps.add(0L)
+                            currentSR.pressures.add(t.p / 255f)
+                            if (isPenUp) {
+                                val ri = strokeRegistry.size
+                                strokeRegistry.add(currentSR!!)
+                                ciToRi[currentCI] = ri
+                                val inkId = (currentCI + 1).toLong()
+                                inkStrokeIdToRegistryIndex[inkId] = ri
+                                currentSR = null
+                            }
+                        }
                     }
-                    strokeRegistry.addAll(result.strokes)
-                    for ((ci, ri) in result.captureIndexToRegistry) {
-                        val inkId = (ci + 1).toLong()
-                        inkStrokeIdToRegistryIndex[inkId] = ri
-                    }
-                    Log.i(TAG, "loadPageFull: ${result.strokes.size} strokes depuis V★")
+                    Log.i(TAG, "loadPageFull: ${strokeRegistry.size} strokes depuis V★ (${tokens.size} tokens)")
                 }
             }
 
@@ -490,6 +546,9 @@ class MiroirEngine {
 
             // ── MDM ──
             loadPageMdm(dir)
+
+            // Reconstruire les blobs visuels
+            rebuildAllBlobs()
 
             Log.i(TAG, "loadPageFull page=$currentPageIndex: ${strokeRegistry.size} strokes, ${groupLabels.size} labels")
             return true

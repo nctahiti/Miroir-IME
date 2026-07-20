@@ -576,20 +576,14 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     }
 
     /** Redessine tous les strokes dans le bitmap (hors strokes effacés/supprimés). */
-    private fun redrawBitmapOnly() {
-        val canvas = engine.bitmapCanvas ?: return
-        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-        for ((idx, sr) in engine.strokeRegistry.withIndex()) {
-            if (idx in erasedStrokes) continue
-            if (sr.isDeleted) continue
-            if (sr.points.size < 2) continue
-            val path = Path()
-            path.moveTo(sr.points[0].first, sr.points[0].second)
-            for (i in 1 until sr.points.size) {
-                path.lineTo(sr.points[i].first, sr.points[i].second)
-            }
-            canvas.drawPath(path, strokePaint.apply { style = Paint.Style.STROKE })
+    fun redrawBitmapOnly() {
+        val canvas = engine.bitmapCanvas
+        if (canvas == null) {
+            Log.w(TAG, "redrawBitmapOnly: bitmapCanvas est null — impossible de redessiner")
+            return
         }
+        Log.d(TAG, "redrawBitmapOnly: ${engine.strokeRegistry.size} strokes → bitmap")
+        engine.redrawBitmapInternal()
     }
 
     /** Sortir du mode édition (effacement/déplacement). */

@@ -45,6 +45,7 @@ class CaptureActivity : Activity() {
     private var recognizer: DigitalInkWrapper? = null
     private var captureView: CaptureSurfaceView? = null
     private var fontaineOverlay: FontaineOverlay? = null
+    private var pageCounter: TextView? = null
     private val uiHandler = Handler(Looper.getMainLooper())
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "miroir-capture-infer").apply { priority = Thread.NORM_PRIORITY - 1 }
@@ -75,20 +76,29 @@ class CaptureActivity : Activity() {
         if (isContextual) {
             engine.openBlockDir(this, invocBlockId!!)
         } else {
-            engine.ensureBlockDir(this, "capture", System.currentTimeMillis())
+            // Standalone : utiliser un bloc fixe pour persister entre sessions
+            engine.openBlockDir(this, "standalone")
         }
         engine.initGroupManager(this)
         engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
 
-        // Charger la page demandee
+        // Créer la vue d'abord (onSizeChanged initialise le bitmap aux bonnes dimensions)
+        when (invocMode) {
+            else -> buildBlockView()
+        }
+
+        // Puis charger la page (écrase le bitmap vide avec le bitmap sauvegardé)
         if (isContextual && invocPageN > 0 && engine.countPages() > invocPageN) {
             engine.goToPageFull(invocPageN)
         } else if (engine.countPages() > 0) {
+            engine.currentPageIndex = engine.countPages() - 1
             engine.loadPageFull()
         }
-
-        when (invocMode) {
-            else -> buildBlockView()
+        updatePageCounter()
+        // Postposer le redraw après le premier layout (onSizeChanged crée le bitmap)
+        captureView?.post {
+            captureView?.redrawBitmapOnly()
+            captureView?.invalidate()
         }
     }
 
@@ -176,17 +186,29 @@ class CaptureActivity : Activity() {
             val total = engine.countPages()
             if (total > 0 && engine.currentPageIndex > 0) {
                 engine.goToPageFull(engine.currentPageIndex - 1)
+                captureView?.redrawBitmapOnly()
                 captureView?.invalidate()
+                updatePageCounter()
             }
         })
+        // Compteur de page
+        pageCounter = TextView(this).apply {
+            text = pageLabel()
+            textSize = 28f; setTextColor(Color.DKGRAY)
+            gravity = Gravity.CENTER; setPadding(12, 0, 12, 0)
+        }
+        toolbar.addView(pageCounter)
         toolbar.addView(makeBtn("\u27A1", Color.argb(200, 0, 80, 160)) {
             val total = engine.countPages()
             if (total > 0 && engine.currentPageIndex < total - 1) {
                 engine.goToPageFull(engine.currentPageIndex + 1)
+                captureView?.redrawBitmapOnly()
                 captureView?.invalidate()
+                updatePageCounter()
             } else if (total == 0 || engine.currentPageIndex >= total - 1) {
                 engine.newPage()
                 captureView?.clearCanvas()
+                updatePageCounter()
             }
         })
         // Espace pousseur
@@ -225,10 +247,20 @@ class CaptureActivity : Activity() {
 
     private fun makeBtn(text: String, bg: Int, onClick: () -> Unit): TextView =
         TextView(this).apply {
-            this.text = text; textSize = 22f; setTextColor(Color.WHITE)
-            setPadding(16, 8, 16, 8); setBackgroundColor(bg)
+            this.text = text; textSize = 40f; setTextColor(Color.WHITE)
+            setPadding(24, 14, 24, 14); setBackgroundColor(bg)
             gravity = Gravity.CENTER; setOnClickListener { onClick() }
         }
+
+    private fun pageLabel(): String {
+        val total = engine.countPages()
+        val current = if (total > 0) engine.currentPageIndex + 1 else 0
+        return "$current / $total"
+    }
+
+    private fun updatePageCounter() {
+        pageCounter?.text = pageLabel()
+    }
 
     private fun scheduleInference() {
         // Inférence : 350ms après le dernier stroke
@@ -240,10 +272,11 @@ class CaptureActivity : Activity() {
         uiHandler.postDelayed(displayRefreshRunnable, 700L)
     }
 
-    /** Rafraîchit l'affichage : désactive la fontaine, affiche les labels, réactive. */
+    /** Rafraîchit l'affichage : désactive la fontaine, synchronise le bitmap, réactive. */
     private fun refreshDisplay() {
-        if (fontaineOverlay?.modeInteraction == true) return  // ne pas interférer avec le mode édition
+        if (fontaineOverlay?.modeInteraction == true) return
         fontaineOverlay?.desactiver()
+        captureView?.redrawBitmapOnly()  // copier les strokes dans le bitmap avant d'effacer
         captureView?.invalidate()
         fontaineOverlay?.activer()
         Log.d(TAG, "Display refresh")
