@@ -33,6 +33,8 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     internal var isStylusDown = false
     private var surfaceReady = false
     private var strokeCount = 0
+    private var strokeStarted = false  // true après le premier MOVE (différé)
+    private var beginX = 0f; private var beginY = 0f; private var beginPressure = 0f
     private var longPressTimer: java.lang.Runnable? = null
     private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var lastLPX = 0f; private var lastLPY = 0f
@@ -109,13 +111,15 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                     strokeCount++
                     Log.i(TAG, "🖊️ BEGIN #$strokeCount eraser=$eraser x=${tp.x.toInt()} y=${tp.y.toInt()}")
                     isStylusDown = true
+                    strokeStarted = false  // différé — attendre le premier MOVE
+                    beginX = tp.x; beginY = tp.y
+                    beginPressure = normalizePressure(tp.pressure)
                     lastLPX = tp.x; lastLPY = tp.y
                     processedPoints.clear()
                     addPoint(tp)
-                    engine.beginStroke(tp.x, tp.y, normalizePressure(tp.pressure))
+                    // ⚠️ Pas de beginStroke() ici — différé au premier MOVE
                     onStrokeBegin?.invoke()
                     armLongPressTimer(tp.x, tp.y)
-                    // Initialiser le tracking de geste (sera utilisé si long-press détecté)
                     gestureStartX = tp.x; gestureStartY = tp.y
                     lastGestureX = tp.x; lastGestureY = tp.y
                     gestureMode = null
@@ -127,6 +131,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                         if (modeInteraction) {
                             handleGestureMove(tp.x, tp.y)
                         } else {
+                            if (!strokeStarted) startDeferredStroke()
                             lpTotalDist += Math.hypot((tp.x - lastLPX).toDouble(), (tp.y - lastLPY).toDouble()).toFloat()
                             lastLPX = tp.x; lastLPY = tp.y
                         }
@@ -141,6 +146,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                         if (modeInteraction) {
                             handleGestureMove(pt.x, pt.y)
                         } else {
+                            if (!strokeStarted) startDeferredStroke()
                             lpTotalDist += Math.hypot((pt.x - lastLPX).toDouble(), (pt.y - lastLPY).toDouble()).toFloat()
                             lastLPX = pt.x; lastLPY = pt.y
                             if (addPoint(pt)) {
@@ -155,10 +161,13 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                     if (!isStylusDown) return
                     isStylusDown = false
                     if (modeInteraction) {
-                        // Fin du geste d'édition
                         onGestureEnd?.invoke()
                         gestureMode = null
                         Log.i(TAG, "🖊️ END   (geste) mode=$gestureMode")
+                    } else if (!strokeStarted) {
+                        // Tap sans mouvement → pas de stroke créé
+                        Log.d(TAG, "🖊️ END   #$strokeCount (tap, pas de stroke)")
+                        processedPoints.clear()
                     } else {
                         val ptCount = engine.currentStrokeRecord?.activePoints ?: 0
                         Log.i(TAG, "🖊️ END   #$strokeCount pts=$ptCount")
@@ -170,6 +179,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                             Log.d(TAG, "Stroke ignoré (${ptCount} pts)")
                         }
                     }
+                    strokeStarted = false
                 }
 
                 override fun onBeginRawErasing(p0: Boolean, p1: com.onyx.android.sdk.data.note.TouchPoint) {}
@@ -246,6 +256,13 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
         touchHelper = null
     }
 
+    /** Crée le stroke au premier MOVE (différé depuis le BEGIN). */
+    private fun startDeferredStroke() {
+        strokeStarted = true
+        engine.beginStroke(beginX, beginY, beginPressure)
+        Log.v(TAG, "Stroke #$strokeCount commencé (différé)")
+    }
+
     /** Maintient le raw drawing actif — appelé dans chaque callback. */
     private fun keepRawDrawingActive() {
         try {
@@ -263,6 +280,10 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
         longPressTimer = java.lang.Runnable {
             // Après 500ms → si la distance totale < 20px, c'est un long-press
             if (lpTotalDist < 20f) {
+                // Annuler le stroke en cours (s'il n'a pas encore été créé, tant mieux)
+                if (!strokeStarted) {
+                    engine.cancelStroke()  // nettoie currentStrokeRecord/currentPath
+                }
                 Log.i(TAG, "Long-press détecté à ($x, $y) — dist=${lpTotalDist.toInt()}px")
                 onLongPressDetected?.invoke(x, y)
             } else {
@@ -326,10 +347,10 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     // ACTIVATION / DÉSACTIVATION
     // ═══════════════════════════════════════════════════════════════════
 
-    /** Désactive le rendu → ferme le raw drawing + efface la surface. */
+    /** Désactive le rendu → désactive raw drawing (sans fermer le canal) + efface la surface. */
     fun desactiver() {
         try {
-            touchHelper?.closeRawDrawing()
+            touchHelper?.setRawDrawingEnabled(false)
         } catch (_: Exception) {}
         effacerSurface()
         Log.d(TAG, "Fontaine désactivée")
@@ -350,25 +371,19 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
         Log.d(TAG, "Fontaine réactivée")
     }
 
-    /** Réinitialisation complète après closeRawDrawing — comme au démarrage. */
+    /** Réactive — le canal raw drawing n'a jamais été fermé, juste désactivé. */
     fun reactiver() {
         try {
             val th = touchHelper ?: return
-            th.openRawDrawing()
-            val limitRect = android.graphics.Rect()
-            getLocalVisibleRect(limitRect)
-            if (limitRect.width() > 0 && limitRect.height() > 0) {
-                th.setLimitRect(limitRect, emptyList())
-            }
+            // Pas besoin de openRawDrawing() — le canal est resté ouvert
             th.setStrokeStyle(com.onyx.android.sdk.pen.TouchHelper.STROKE_STYLE_FOUNTAIN)
             val density = resources.displayMetrics.density
             th.setStrokeWidth(strokeWidthDp * density)
             th.setStrokeColor(strokeColor)
-            th.enableFingerTouch(true)
             th.setRawDrawingRenderEnabled(true)
             th.setRawDrawingEnabled(true)
         } catch (_: Exception) {}
-        Log.i(TAG, "Fontaine réinitialisée (reactiver)")
+        Log.i(TAG, "Fontaine réactivée (canal préservé)")
     }
 
     // ═══════════════════════════════════════════════════════════════════

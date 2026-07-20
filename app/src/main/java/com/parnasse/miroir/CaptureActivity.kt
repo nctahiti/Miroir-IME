@@ -242,6 +242,7 @@ class CaptureActivity : Activity() {
 
     /** Rafraîchit l'affichage : désactive la fontaine, affiche les labels, réactive. */
     private fun refreshDisplay() {
+        if (fontaineOverlay?.modeInteraction == true) return  // ne pas interférer avec le mode édition
         fontaineOverlay?.desactiver()
         captureView?.invalidate()
         fontaineOverlay?.activer()
@@ -256,22 +257,26 @@ class CaptureActivity : Activity() {
 
     /** Long-press détecté par la fontaine → bascule franche. */
     private fun handleLongPress(x: Float, y: Float) {
+        cancelTimers()
+        // 1. Sélectionner d'abord (la View standard est prête mais masquée)
+        captureView?.selectGroupAt(x, y)
+        // 2. Puis désactiver la fontaine → la View standard apparaît avec le blob déjà sélectionné
         fontaineOverlay?.modeInteraction = true
         fontaineOverlay?.desactiver()
-        captureView?.selectGroupAt(x, y)
         captureView?.armLongPressGesture(x, y)
         fontaineOverlay?.touchForwardTarget = captureView
         Log.d(TAG, "Long-press → bascule franche, blob visible, attente geste")
     }
 
-    /** Retour au mode écriture : garder le blob visible comme phare, réactiver la fontaine. */
+    /** Retour au mode écriture : désélectionner le groupe, rafraîchir la View standard, réactiver la fontaine. */
     private fun returnToWriting() {
+        captureView?.deselectGroup()
         fontaineOverlay?.modeInteraction = false
         fontaineOverlay?.touchForwardTarget = null
-        // Dessiner le blob sélectionné dans la SurfaceView pour qu'il reste visible
-        captureView?.drawSelectedBlobOn(fontaineOverlay)
-        // Réactiver complètement la fontaine (postposé pour éviter le lag)
-        uiHandler.post { fontaineOverlay?.reactiver() }
-        Log.d(TAG, "Retour écriture — fontaine réactivée, blob phare")
+        // Nettoyer la SurfaceView avant de réactiver (lockCanvas + unlockCanvasAndPost)
+        fontaineOverlay?.effacerSurface()
+        captureView?.invalidate()
+        fontaineOverlay?.reactiver()
+        Log.d(TAG, "Retour écriture — groupe libéré, fontaine réactivée")
     }
 }

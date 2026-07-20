@@ -605,6 +605,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.drawColor(Color.WHITE)
+        Log.d(TAG, "onDraw — sel=${selectedGroupId?.take(8) ?: "null"}")
 
         // 1. Bitmap (fond + strokes sauvegardés)
         engine.bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
