@@ -138,7 +138,67 @@ class MiroirEngine {
     fun onStrokeSealed(sr: StrokeRecord, inkId: Long): InkGroup? {
         val gm = groupManager ?: return null
         val inkStroke = strokeRecordToInkStroke(sr, inkId)
-        return gm.onStrokeSealed(inkStroke)
+        val group = gm.onStrokeSealed(inkStroke)
+        // Creer/mettre a jour le blob du groupe
+        if (group != null) {
+            computeBlobPath(group)?.let { groupBlobs[group.id] = it }
+        }
+        return group
+    }
+
+    /** Calcule le blob (zone d'absorption elliptique) d'un groupe. */
+    fun computeBlobPath(group: InkGroup, ctx: android.content.Context? = null): BlobData? {
+        val gm = groupManager ?: return null
+        val rx = gm.params.spatialDistancePx
+        val ry = gm.params.spatialDistanceY
+        if (rx <= 0f && ry <= 0f) return null
+        if (group.strokeIds.isEmpty()) return null
+
+        val pts = mutableListOf<Pair<Float, Float>>()
+        for (sid in group.strokeIds) {
+            val idx = inkStrokeIdToRegistryIndex[sid] ?: continue
+            val sr = strokeRegistry.getOrNull(idx) ?: continue
+            for ((x, y) in sr.points) pts.add(Pair(x, y))
+        }
+        if (pts.size < 2) return null
+
+        var cx = 0f; var cy = 0f
+        for ((px, py) in pts) { cx += px; cy += py }
+        cx /= pts.size; cy /= pts.size
+
+        val context = ctx ?: android.app.Activity()  // fallback
+        val rayCount = CalibrationActivity.getBlobRayCount(context)
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
+        var maxX = Float.MIN_VALUE; var maxY = Float.MIN_VALUE
+        val path = Path()
+        var first = true
+
+        for (i in 0 until rayCount) {
+            val angle = 2.0 * Math.PI * i / rayCount
+            val dx = Math.cos(angle).toFloat()
+            val dy = Math.sin(angle).toFloat()
+            var bestT = 0f
+            for ((px, py) in pts) {
+                val ox = cx - px; val oy = cy - py
+                val a = (dx*dx)/(rx*rx) + (dy*dy)/(ry*ry)
+                val b = dx*ox/(rx*rx) + dy*oy/(ry*ry)
+                val c = (ox*ox)/(rx*rx) + (oy*oy)/(ry*ry) - 1f
+                val disc = b*b - a*c
+                if (disc <= 0f) continue
+                val t = (-b + Math.sqrt(disc.toDouble()).toFloat()) / a
+                if (t > bestT) bestT = t
+            }
+            if (bestT <= 0f) continue
+            val bx = cx + bestT * dx
+            val by = cy + bestT * dy
+            if (first) { path.moveTo(bx, by); first = false }
+            else path.lineTo(bx, by)
+            if (bx < minX) minX = bx; if (bx > maxX) maxX = bx
+            if (by < minY) minY = by; if (by > maxY) maxY = by
+        }
+        if (first) return null
+        path.close()
+        return BlobData(path, RectF(minX, minY, maxX, maxY))
     }
 
     private fun strokeRecordToInkStroke(sr: StrokeRecord, id: Long): InkStroke {

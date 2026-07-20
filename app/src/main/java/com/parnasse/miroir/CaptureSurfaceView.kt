@@ -8,30 +8,29 @@ import android.view.View
 import kotlin.math.abs
 
 /**
- * CaptureSurfaceView — Vue de capture et rendu autonome.
+ * CaptureSurfaceView — Vue de capture avec UxK Miroir (identique IME).
  *
- * Utilisee par le standalone (CaptureActivity).
- * Reference un MiroirEngine pour toutes les donnees.
+ * Modes :
+ *   - Ecriture : strokes normaux, groupement spatial, inference ML Kit
+ *   - Selection : tap sur blob → SELECTED (visuel)
+ *   - Correction : long-press ou tap sur label → cadre + puces +/−/🔒/📌
+ *   - Deplacement : drag du groupe selectionne
+ *   - Effacement : mode gomme (stylet retourne)
  *
- * Rendu (ordre z) :
- *   1. Fond blanc
- *   2. Blobs des groupes (zones d'absorption elliptiques)
- *   3. Bitmap rasterise (strokes scelles)
- *   4. Template (lignes MDM)
- *   5. Labels reconnus (tries par ligne + X)
- *   6. Stroke en cours (currentPath)
- *
- * Edition :
- *   - Tap sur un blob/label → selection du groupe
- *   - Double-tap ou bouton → popup de correction
+ * Reference un MiroirEngine pour les donnees.
  */
 class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(context) {
 
     companion object {
         private const val TAG = "Miroir/CaptureView"
-        private const val TAP_THRESHOLD_PX = 20f  // deplacement max pour un tap
-        private const val HIT_RADIUS = 60f         // rayon de hit-test autour des ancres
+        private const val TAP_THRESHOLD_PX = 30f
+        private const val LONG_PRESS_MS = 500L
+        private const val HIT_RADIUS = 70f
     }
+
+    // ── Modes ──────────────────────────────────────────────────────────
+    enum class EditMode { NONE, CORRECT_TRANSCRIPTION }
+    private var editMode = EditMode.NONE
 
     // ── Pinceaux ──────────────────────────────────────────────────────
     private val strokePaint = Paint().apply {
@@ -56,23 +55,29 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         color = Color.argb(200, 80, 80, 180); textSize = 30f; isAntiAlias = true
         textAlign = Paint.Align.CENTER
     }
-    private val selectedLabelPaint = Paint().apply {
-        color = Color.argb(255, 40, 100, 220); textSize = 30f; isAntiAlias = true
-        textAlign = Paint.Align.CENTER; isFakeBoldText = true
-    }
 
     // ── État ──────────────────────────────────────────────────────────
     private var isStylusDown = false
     private var touchHelper: com.onyx.android.sdk.pen.TouchHelper? = null
     var showLabels: Boolean = true
-    private var tapStartX = 0f
-    private var tapStartY = 0f
+
+    // ── Tap / selection ───────────────────────────────────────────────
+    private var tapStartX = 0f; private var tapStartY = 0f
+    private var tapStartTime = 0L
+    private var tapMoved = false; private var longPressTriggered = false
     private var selectedGroupId: String? = null
+    private var selectedGroupLabel: String? = null
+
+    // ── Correction ────────────────────────────────────────────────────
+    private var correctionGroupId: String? = null
+    private var correctionGroupFirstIdx: Int = -1
+    private var correctionLabel: String = ""
+    private var correctLetterIndex: Int = -1
+    private var insertAtIndex: Int = -1
+    private val correctionPaths = mutableListOf<Path>()
 
     // ── Callbacks ─────────────────────────────────────────────────────
     var onStrokeFinished: ((registryIndex: Int) -> Unit)? = null
-    var onGroupSelected: ((groupId: String, label: String?) -> Unit)? = null
-    var onGroupDeselected: (() -> Unit)? = null
 
     // ═══════════════════════════════════════════════════════════════════
     // TOUCH HELPER ONYX
@@ -132,19 +137,69 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // TOUCH
+    // TOUCH — UxK Miroir
     // ═══════════════════════════════════════════════════════════════════
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                isStylusDown = true
+                engine.currentPath.reset()
                 tapStartX = event.x; tapStartY = event.y
+                tapStartTime = System.currentTimeMillis()
+                tapMoved = false; longPressTriggered = false
+
+                // Si deja en mode correction → hit-test puces ou ecriture
+                if (editMode == EditMode.CORRECT_TRANSCRIPTION) {
+                    // Hit-test sur les puces − (suppression)
+                    val minusIdx = hitTestMinus(event.x, event.y)
+                    if (minusIdx >= 0 && minusIdx < correctionLabel.length) {
+                        correctionLabel = correctionLabel.removeRange(minusIdx, minusIdx + 1)
+                        correctLetterIndex = -1; insertAtIndex = -1
+                        Log.i(TAG, "Correction suppression #$minusIdx")
+                        invalidate(); return true
+                    }
+                    // Hit-test sur les puces + (insertion)
+                    val plusIdx = hitTestPlus(event.x, event.y)
+                    if (plusIdx >= 0 && plusIdx <= correctionLabel.length) {
+                        insertAtIndex = plusIdx; correctLetterIndex = -1
+                        Log.i(TAG, "Correction insertion #$plusIdx")
+                        invalidate(); return true
+                    }
+                    // Hit-test sur une lettre (remplacement)
+                    val letterIdx = hitTestLetter(event.x, event.y)
+                    if (letterIdx >= 0 && letterIdx < correctionLabel.length) {
+                        correctLetterIndex = letterIdx; insertAtIndex = -1
+                        Log.i(TAG, "Correction lettre #$letterIdx")
+                        invalidate(); return true
+                    }
+                    // Si une cible est active → ecrire
+                    if (correctLetterIndex >= 0 || insertAtIndex >= 0) {
+                        isStylusDown = true
+                        engine.beginStroke(event.x, event.y)
+                        return true
+                    }
+                    // Clic dans le vide → sortir du mode correction
+                    exitEditMode()
+                    invalidate()
+                    return true
+                }
+
+                // Mode ecriture normal
+                isStylusDown = true
                 engine.beginStroke(event.x, event.y)
             }
+
             MotionEvent.ACTION_MOVE -> {
                 if (!isStylusDown) return true
+
+                // Détecter si c'est un glissement (pas un tap)
+                val dx = abs(event.x - tapStartX)
+                val dy = abs(event.y - tapStartY)
+                if (dx > TAP_THRESHOLD_PX || dy > TAP_THRESHOLD_PX) {
+                    tapMoved = true
+                }
+
                 for (i in 0 until event.historySize) {
                     engine.addStrokePoint(
                         event.getHistoricalX(i), event.getHistoricalY(i),
@@ -154,9 +209,11 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 engine.addStrokePoint(event.x, event.y, event.pressure)
                 invalidate()
             }
+
             MotionEvent.ACTION_UP -> {
                 if (!isStylusDown) return true
                 isStylusDown = false
+
                 for (i in 0 until event.historySize) {
                     engine.addStrokePoint(
                         event.getHistoricalX(i), event.getHistoricalY(i),
@@ -164,17 +221,34 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                     )
                 }
                 engine.addStrokePoint(event.x, event.y, event.pressure)
+
+                if (editMode == EditMode.CORRECT_TRANSCRIPTION) {
+                    // Ecriture de correction
+                    val ri = engine.endStroke()
+                    if (ri >= 0) {
+                        correctionPaths.add(Path(engine.currentPath))
+                        engine.currentPath.reset()
+                    }
+                    invalidate()
+                    return true
+                }
+
                 val ri = engine.endStroke()
 
                 if (ri >= 0) {
-                    // Vrai stroke (2+ points)
+                    // Vrai stroke → inference
                     onStrokeFinished?.invoke(ri)
                 } else {
-                    // Tap (0-1 point) → hit-test sur les groupes
-                    val dx = abs(event.x - tapStartX)
-                    val dy = abs(event.y - tapStartY)
-                    if (dx < TAP_THRESHOLD_PX && dy < TAP_THRESHOLD_PX) {
-                        handleTap(event.x, event.y)
+                    // Pas de stroke valide → c'etait un tap
+                    if (!tapMoved) {
+                        val elapsed = System.currentTimeMillis() - tapStartTime
+                        if (elapsed >= LONG_PRESS_MS) {
+                            // Long press → correction
+                            handleLongPress(event.x, event.y)
+                        } else {
+                            // Tap court → selection
+                            handleTap(event.x, event.y)
+                        }
                     }
                 }
                 invalidate()
@@ -183,32 +257,119 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         return true
     }
 
-    private fun handleTap(x: Float, y: Float) {
-        val gm = engine.groupManager ?: return
+    // ═══════════════════════════════════════════════════════════════════
+    // HIT-TEST PUCES (correction)
+    // ═══════════════════════════════════════════════════════════════════
 
-        // 1. Hit-test : blob (path)
-        for ((gid, blob) in engine.groupBlobs) {
-            if ((blob.bounds as android.graphics.RectF).contains(x, y)) {
-                selectGroup(gid)
-                return
-            }
+    private fun correctionFrame(): RectF? {
+        val anchor = engine.groupAnchor[correctionGroupFirstIdx] ?: return null
+        if (correctionLabel.isEmpty()) return null
+        val spacing = CalibrationActivity.getTemplateSpacing(context)
+        val letterW = spacing * 0.7f
+        val totalW = letterW * correctionLabel.length
+        val snapY = engine.snapToLine(anchor.second)
+        val startX = anchor.first - totalW / 2f
+        val startY = snapY - spacing * 0.8f
+        return RectF(startX - 20f, startY - 10f, startX + totalW + 20f, startY + letterW + 10f)
+    }
+
+    private fun hitTestMinus(x: Float, y: Float): Int {
+        val anchor = engine.groupAnchor[correctionGroupFirstIdx] ?: return -1
+        if (correctionLabel.isEmpty()) return -1
+        val spacing = CalibrationActivity.getTemplateSpacing(context)
+        val letterW = spacing * 0.7f
+        val totalW = letterW * correctionLabel.length
+        val snapY = engine.snapToLine(anchor.second)
+        val startX = anchor.first - totalW / 2f
+        val startY = snapY - spacing * 0.8f
+        val chipRadius = maxOf(letterW * 0.3f, 14f)
+        for (i in correctionLabel.indices) {
+            val cx = startX + letterW * i + letterW / 2f
+            val cy = startY + letterW + chipRadius + 4f
+            val d = Math.hypot((x - cx).toDouble(), (y - cy).toDouble())
+            if (d < chipRadius + 8f) return i
         }
+        return -1
+    }
 
-        // 2. Hit-test : proximite d'une ancre de label
+    private fun hitTestPlus(x: Float, y: Float): Int {
+        val anchor = engine.groupAnchor[correctionGroupFirstIdx] ?: return -1
+        val spacing = CalibrationActivity.getTemplateSpacing(context)
+        val letterW = spacing * 0.7f
+        val totalW = letterW * correctionLabel.length
+        val snapY = engine.snapToLine(anchor.second)
+        val startX = anchor.first - totalW / 2f
+        val startY = snapY - spacing * 0.8f
+        val chipRadius = maxOf(letterW * 0.3f, 14f)
+        for (i in 0..correctionLabel.length) {
+            val cx = startX + letterW * i
+            val cy = startY - chipRadius - 4f
+            val d = Math.hypot((x - cx).toDouble(), (y - cy).toDouble())
+            if (d < chipRadius + 8f) return i
+        }
+        return -1
+    }
+
+    private fun hitTestLetter(x: Float, y: Float): Int {
+        val frame = correctionFrame() ?: return -1
+        val spacing = CalibrationActivity.getTemplateSpacing(context)
+        val letterW = spacing * 0.7f
+        val startX = frame.left + 20f
+        val startY = frame.top + 10f
+        if (x < startX || x > frame.right - 20f || y < startY || y > frame.bottom - 10f) return -1
+        val idx = ((x - startX) / letterW).toInt()
+        return if (idx in correctionLabel.indices) idx else -1
+    }
+
+    private fun hitTestBlob(x: Float, y: Float): String? {
+        for ((gid, blob) in engine.groupBlobs) {
+            val b = blob.bounds
+            if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) return gid
+        }
+        return null
+    }
+
+    private fun hitTestAnchor(x: Float, y: Float): String? {
         for ((firstIdx, anchor) in engine.groupAnchor) {
             val adx = abs(x - anchor.first)
             val ady = abs(y - anchor.second)
             if (adx < HIT_RADIUS && ady < HIT_RADIUS) {
-                // Trouver le groupe correspondant
-                for (g in gm.allGroupsFull()) {
+                for (g in engine.groupManager?.allGroupsFull() ?: emptyList()) {
                     val firstSid = g.strokeIds.firstOrNull() ?: continue
                     val firstRI = engine.inkStrokeIdToRegistryIndex[firstSid]
-                    if (firstRI == firstIdx) {
-                        selectGroup(g.id)
-                        return
-                    }
+                    if (firstRI == firstIdx) return g.id
                 }
             }
+        }
+        return null
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // GESTES
+    // ═══════════════════════════════════════════════════════════════════
+
+    private fun handleTap(x: Float, y: Float) {
+        // 1. Hit-test blob
+        val blobGid = hitTestBlob(x, y)
+        if (blobGid != null) {
+            if (selectedGroupId == blobGid) {
+                // Double-tap → entrer en mode correction
+                enterCorrectionMode(blobGid)
+            } else {
+                selectGroup(blobGid)
+            }
+            return
+        }
+
+        // 2. Hit-test ancre
+        val anchorGid = hitTestAnchor(x, y)
+        if (anchorGid != null) {
+            if (selectedGroupId == anchorGid) {
+                enterCorrectionMode(anchorGid)
+            } else {
+                selectGroup(anchorGid)
+            }
+            return
         }
 
         // 3. Clic dans le vide → deselect
@@ -217,23 +378,24 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         }
     }
 
+    private fun handleLongPress(x: Float, y: Float) {
+        val gid = hitTestBlob(x, y) ?: hitTestAnchor(x, y) ?: return
+        selectGroup(gid)
+        enterCorrectionMode(gid)
+    }
+
     private fun selectGroup(gid: String) {
         val gm = engine.groupManager ?: return
-        // Deselectionner l'ancien
-        if (selectedGroupId != null) {
-            gm.deselectGroup(selectedGroupId!!)
-        }
+        selectedGroupId?.let { gm.deselectGroup(it) }
         selectedGroupId = gid
         gm.selectGroup(gid)
 
-        // Trouver le label associe
         val group = gm.allGroupsFull().find { it.id == gid }
         val firstSid = group?.strokeIds?.firstOrNull()
         val firstRI = firstSid?.let { engine.inkStrokeIdToRegistryIndex[it] }
-        val label = firstRI?.let { engine.groupLabels[it] }
+        selectedGroupLabel = firstRI?.let { engine.groupLabels[it] }
 
-        Log.i(TAG, "Groupe selectionne: ${gid.take(8)} label='$label'")
-        onGroupSelected?.invoke(gid, label)
+        Log.i(TAG, "Groupe selectionne: ${gid.take(8)} label='$selectedGroupLabel'")
         invalidate()
     }
 
@@ -241,70 +403,61 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         val gm = engine.groupManager
         selectedGroupId?.let { gm?.deselectGroup(it) }
         selectedGroupId = null
-        onGroupDeselected?.invoke()
+        selectedGroupLabel = null
         invalidate()
     }
 
-    /** Corrige le label du groupe selectionne. */
-    fun correctSelectedLabel(newLabel: String) {
-        val gid = selectedGroupId ?: return
+    private fun enterCorrectionMode(gid: String) {
         val gm = engine.groupManager ?: return
         val group = gm.allGroupsFull().find { it.id == gid } ?: return
         val firstSid = group.strokeIds.firstOrNull() ?: return
         val firstRI = engine.inkStrokeIdToRegistryIndex[firstSid] ?: return
-        engine.groupLabels[firstRI] = newLabel
-        Log.i(TAG, "Label corrige: '$newLabel' (groupe ${gid.take(8)})")
+        val label = engine.groupLabels[firstRI] ?: ""
+
+        editMode = EditMode.CORRECT_TRANSCRIPTION
+        correctionGroupId = gid
+        correctionGroupFirstIdx = firstRI
+        correctionLabel = label
+        correctLetterIndex = -1
+        insertAtIndex = -1
+        correctionPaths.clear()
+
+        Log.i(TAG, "Mode correction: '$label' (groupe ${gid.take(8)})")
         invalidate()
     }
 
-    /** Efface le groupe selectionne (marque les strokes comme deleted). */
-    fun deleteSelectedGroup() {
-        val gid = selectedGroupId ?: return
-        val gm = engine.groupManager ?: return
-        val group = gm.allGroupsFull().find { it.id == gid } ?: return
-
-        // Marquer les strokes comme deleted
-        for (sid in group.strokeIds) {
-            val ri = engine.inkStrokeIdToRegistryIndex[sid]
-            if (ri != null && ri < engine.strokeRegistry.size) {
-                engine.strokeRegistry[ri].isDeleted = true
-            }
+    private fun exitEditMode() {
+        // Appliquer le label corrige
+        if (correctionGroupFirstIdx >= 0 && correctionLabel.isNotEmpty()) {
+            engine.groupLabels[correctionGroupFirstIdx] = correctionLabel
+            Log.i(TAG, "Label corrige: '$correctionLabel'")
         }
-
-        // Nettoyer le groupe et les metadonnees
-        gm.removeGroup(gid)
-        engine.groupBlobs.remove(gid)
-        val firstSid = group.strokeIds.firstOrNull()
-        val firstRI = firstSid?.let { engine.inkStrokeIdToRegistryIndex[it] }
-        if (firstRI != null) {
-            engine.groupLabels.remove(firstRI)
-            engine.groupAnchor.remove(firstRI)
-        }
-
-        deselectGroup()
-        Log.i(TAG, "Groupe efface: ${gid.take(8)}")
+        editMode = EditMode.NONE
+        correctionGroupId = null
+        correctionGroupFirstIdx = -1
+        correctionLabel = ""
+        correctLetterIndex = -1
+        insertAtIndex = -1
+        correctionPaths.clear()
     }
+
+    fun isCorrecting() = editMode == EditMode.CORRECT_TRANSCRIPTION
 
     // ═══════════════════════════════════════════════════════════════════
     // RENDU
     // ═══════════════════════════════════════════════════════════════════
 
-    private var drawCount = 0
-
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        drawCount++
-
-        // 1. Fond
         canvas.drawColor(Color.WHITE)
 
-        // 2. Blobs (zones d'absorption des groupes)
+        // 1. Blobs
         val gm = engine.groupManager
         if (gm != null) {
             for (g in gm.allGroupsFull()) {
                 val blob = engine.groupBlobs[g.id] ?: continue
-                val isSelected = g.id == selectedGroupId
-                if (isSelected) {
+                val isSel = g.id == selectedGroupId
+                if (isSel) {
                     canvas.drawPath(blob.path, selectedBlobPaint)
                     canvas.drawPath(blob.path, selectedBlobBorderPaint)
                 } else {
@@ -317,67 +470,139 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             }
         }
 
-        // 3. Bitmap rasterise (strokes scelles)
+        // 2. Bitmap
         engine.bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
 
-        // 4. Template (lignes MDM)
+        // 3. Template
         for (ly in engine.cachedTemplateLines) {
             canvas.drawLine(0f, ly, width.toFloat(), ly, Template.GUIDE_PAINT)
         }
 
-        // 5. Labels reconnus — tries par ligne puis X (ordre de lecture)
-        if (showLabels && engine.groupLabels.isNotEmpty()) {
-            data class LabelEntry(val firstIdx: Int, val label: String, val anchor: Pair<Float, Float>, val snapY: Float, val isSelected: Boolean)
-            val entries = mutableListOf<LabelEntry>()
-            for ((firstIdx, label) in engine.groupLabels) {
-                val anchor = engine.groupAnchor[firstIdx] ?: continue
-                val snapY = engine.snapToLine(anchor.second)
-                // Verifier si ce label appartient au groupe selectionne
-                var isSel = false
-                if (selectedGroupId != null && gm != null) {
-                    val selGroup = gm.allGroupsFull().find { it.id == selectedGroupId }
-                    val selFirstSid = selGroup?.strokeIds?.firstOrNull()
-                    val selFirstRI = selFirstSid?.let { engine.inkStrokeIdToRegistryIndex[it] }
-                    isSel = selFirstRI == firstIdx
-                }
-                entries.add(LabelEntry(firstIdx, label, anchor, snapY, isSel))
-            }
-            entries.sortWith(compareBy<LabelEntry> { it.snapY }.thenBy { it.anchor.first })
+        // 4. Mode correction : cadre + puces
+        if (isCorrecting()) {
+            drawCorrectionFrame(canvas)
+        }
 
-            for (entry in entries) {
-                val (_, label, anchor, snapY, isSel) = entry
-                val textW = labelPaint.measureText(label)
-                val labelY = snapY - 10f
-
-                // Fond semi-transparent
-                val bgRect = android.graphics.RectF(
-                    anchor.first - textW / 2f - 6f,
-                    labelY - 22f,
-                    anchor.first + textW / 2f + 6f,
-                    labelY + 6f
-                )
-                val bgColor = if (isSel) Color.argb(220, 220, 235, 255)
-                              else Color.argb(180, 255, 255, 255)
-                canvas.drawRoundRect(bgRect, 6f, 6f,
-                    Paint().apply { color = bgColor; style = Paint.Style.FILL }
-                )
-                // Ancre
-                canvas.drawCircle(anchor.first, anchor.second, 3f,
-                    Paint().apply {
-                        color = if (isSel) Color.argb(200, 40, 100, 255)
-                                else Color.argb(150, 80, 80, 180)
-                        style = Paint.Style.FILL
-                    }
-                )
-                // Label
-                val lp = if (isSel) selectedLabelPaint else labelPaint
-                canvas.drawText(label, anchor.first, labelY, lp)
-            }
+        // 5. Labels (sauf en mode correction — le cadre les remplace)
+        if (!isCorrecting() && showLabels && engine.groupLabels.isNotEmpty()) {
+            drawLabels(canvas)
         }
 
         // 6. Stroke en cours
         if (isStylusDown && engine.currentStrokeRecord != null) {
             canvas.drawPath(engine.currentPath, strokePaint)
+        }
+    }
+
+    private fun drawCorrectionFrame(canvas: Canvas) {
+        val anchor = engine.groupAnchor[correctionGroupFirstIdx] ?: return
+        if (correctionLabel.isEmpty()) return
+        val spacing = CalibrationActivity.getTemplateSpacing(context)
+        val letterW = spacing * 0.7f
+        val totalW = letterW * correctionLabel.length
+        val snapY = engine.snapToLine(anchor.second)
+        val startX = anchor.first - totalW / 2f
+        val startY = snapY - spacing * 0.8f
+
+        // Fond blanc (tampon)
+        canvas.drawRect(startX - 20f, startY - 10f, startX + totalW + 20f, startY + letterW + 10f,
+            Paint().apply { color = Color.WHITE; style = Paint.Style.FILL })
+        // Bordure
+        canvas.drawRect(startX - 20f, startY - 10f, startX + totalW + 20f, startY + letterW + 10f,
+            Paint().apply { color = Color.DKGRAY; style = Paint.Style.STROKE; strokeWidth = 2f })
+
+        // Lettres
+        for (i in correctionLabel.indices) {
+            val cx = startX + letterW * i + letterW / 2f
+            val cy = startY + letterW * 0.75f
+            val bg = if (i == correctLetterIndex) Color.argb(40, 0, 0, 255) else Color.argb(20, 0, 0, 0)
+            canvas.drawRect(startX + letterW * i, startY, startX + letterW * (i + 1), startY + letterW,
+                Paint().apply { color = bg; style = Paint.Style.FILL })
+            val tp = if (i == correctLetterIndex)
+                Paint().apply { color = Color.BLUE; textSize = letterW * 0.8f; isAntiAlias = true; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
+            else
+                Paint().apply { color = Color.DKGRAY; textSize = letterW * 0.8f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+            canvas.drawText(correctionLabel[i].toString(), cx, cy, tp)
+        }
+
+        // Puces +
+        val chipRadius = maxOf(letterW * 0.3f, 14f)
+        for (i in 0..correctionLabel.length) {
+            val cx = startX + letterW * i
+            val cy = startY - chipRadius - 4f
+            canvas.drawCircle(cx, cy, chipRadius,
+                Paint().apply { color = Color.argb(180, 40, 44, 52); style = Paint.Style.FILL; isAntiAlias = true })
+            val border = if (i == insertAtIndex)
+                Paint().apply { color = Color.argb(255, 40, 200, 60); style = Paint.Style.STROKE; strokeWidth = 2f; isAntiAlias = true }
+            else
+                Paint().apply { color = Color.argb(100, 180, 180, 200); style = Paint.Style.STROKE; strokeWidth = 1.5f; isAntiAlias = true }
+            canvas.drawCircle(cx, cy, chipRadius, border)
+            val tp = if (i == insertAtIndex)
+                Paint().apply { color = Color.argb(255, 80, 240, 80); textSize = chipRadius * 1.2f; isAntiAlias = true; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
+            else
+                Paint().apply { color = Color.argb(220, 140, 200, 140); textSize = chipRadius * 1.2f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+            canvas.drawText("+", cx, cy + chipRadius * 0.4f, tp)
+        }
+
+        // Puces -
+        for (i in correctionLabel.indices) {
+            val cx = startX + letterW * i + letterW / 2f
+            val cy = startY + letterW + chipRadius + 4f
+            canvas.drawCircle(cx, cy, chipRadius,
+                Paint().apply { color = Color.argb(180, 40, 44, 52); style = Paint.Style.FILL; isAntiAlias = true })
+            val border = if (i == correctLetterIndex)
+                Paint().apply { color = Color.RED; style = Paint.Style.STROKE; strokeWidth = 2f; isAntiAlias = true }
+            else
+                Paint().apply { color = Color.argb(100, 200, 100, 100); style = Paint.Style.STROKE; strokeWidth = 1.5f; isAntiAlias = true }
+            canvas.drawCircle(cx, cy, chipRadius, border)
+            val tp = if (i == correctLetterIndex)
+                Paint().apply { color = Color.argb(255, 255, 60, 60); textSize = chipRadius * 1.2f; isAntiAlias = true; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
+            else
+                Paint().apply { color = Color.argb(220, 200, 140, 140); textSize = chipRadius * 1.2f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+            canvas.drawText("\u2212", cx, cy + chipRadius * 0.4f, tp)
+        }
+
+        // Pastille 🔒
+        val lockCX = startX - 20f - chipRadius - 6f
+        val lockCY = startY + letterW / 2f
+        canvas.drawCircle(lockCX, lockCY, chipRadius,
+            Paint().apply { color = Color.argb(180, 40, 44, 52); style = Paint.Style.FILL; isAntiAlias = true })
+        canvas.drawCircle(lockCX, lockCY, chipRadius,
+            Paint().apply { color = Color.argb(100, 200, 160, 100); style = Paint.Style.STROKE; strokeWidth = 1.5f; isAntiAlias = true })
+        val lockText = Paint().apply { color = Color.argb(220, 200, 160, 100); textSize = chipRadius * 1.0f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+        canvas.drawText("\uD83D\uDD12", lockCX, lockCY + chipRadius * 0.35f, lockText)
+    }
+
+    private fun drawLabels(canvas: Canvas) {
+        data class LabelEntry(val firstIdx: Int, val label: String, val anchor: Pair<Float, Float>, val snapY: Float, val isSelected: Boolean)
+        val entries = mutableListOf<LabelEntry>()
+        for ((firstIdx, label) in engine.groupLabels) {
+            val anchor = engine.groupAnchor[firstIdx] ?: continue
+            val snapY = engine.snapToLine(anchor.second)
+            var isSel = false
+            if (selectedGroupId != null) {
+                val gm = engine.groupManager
+                val selGroup = gm?.allGroupsFull()?.find { it.id == selectedGroupId }
+                val selFirstSid = selGroup?.strokeIds?.firstOrNull()
+                val selFirstRI = selFirstSid?.let { engine.inkStrokeIdToRegistryIndex[it] }
+                isSel = selFirstRI == firstIdx
+            }
+            entries.add(LabelEntry(firstIdx, label, anchor, snapY, isSel))
+        }
+        entries.sortWith(compareBy<LabelEntry> { it.snapY }.thenBy { it.anchor.first })
+
+        for ((_, label, anchor, snapY, isSel) in entries) {
+            val textW = labelPaint.measureText(label)
+            val labelY = snapY - 10f
+            val bgRect = android.graphics.RectF(
+                anchor.first - textW / 2f - 6f, labelY - 22f,
+                anchor.first + textW / 2f + 6f, labelY + 6f
+            )
+            val bgColor = if (isSel) Color.argb(220, 220, 235, 255) else Color.argb(180, 255, 255, 255)
+            canvas.drawRoundRect(bgRect, 6f, 6f, Paint().apply { color = bgColor; style = Paint.Style.FILL })
+            canvas.drawCircle(anchor.first, anchor.second, 3f,
+                Paint().apply { color = Color.argb(150, 80, 80, 180); style = Paint.Style.FILL })
+            canvas.drawText(label, anchor.first, labelY, labelPaint)
         }
     }
 
@@ -389,6 +614,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         engine.bitmap?.eraseColor(Color.WHITE)
         engine.bitmapCanvas?.drawColor(Color.WHITE)
         deselectGroup()
+        exitEditMode()
         invalidate()
     }
 }

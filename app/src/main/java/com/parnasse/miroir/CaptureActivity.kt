@@ -1,7 +1,6 @@
 package com.parnasse.miroir
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.graphics.*
 import android.os.Bundle
 import android.os.Handler
@@ -140,8 +139,6 @@ class CaptureActivity : Activity() {
 
         captureView = CaptureSurfaceView(this, engine).also { cv ->
             cv.onStrokeFinished = { _ -> scheduleInference() }
-            cv.onGroupSelected = { gid, label -> onGroupSelected(gid, label) }
-            cv.onGroupDeselected = { onGroupDeselected() }
             root.addView(cv, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT))
@@ -179,15 +176,6 @@ class CaptureActivity : Activity() {
         // Espace pousseur
         toolbar.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
 
-        correctionBtn = makeBtn("\u270E", Color.argb(180, 80, 80, 80)) {
-            showCorrectionPopup()
-        }
-        deleteBtn = makeBtn("\uD83D\uDDD1", Color.argb(180, 180, 60, 40)) {
-            captureView?.deleteSelectedGroup()
-        }
-        toolbar.addView(correctionBtn)
-        toolbar.addView(deleteBtn)
-
         toolbar.addView(makeBtn("\uD83D\uDCBE", Color.argb(200, 0, 100, 50)) {
             engine.savePageFull()
             Toast.makeText(this, "\uD83D\uDCBE Page sauvegardee", Toast.LENGTH_SHORT).show()
@@ -198,41 +186,6 @@ class CaptureActivity : Activity() {
             FrameLayout.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.TOP })
 
         setContentView(root)
-    }
-
-    // ── État d'edition ────────────────────────────────────────────────
-    private var correctionBtn: TextView? = null
-    private var deleteBtn: TextView? = null
-    private var selectedGroupLabel: String? = null
-
-    private fun onGroupSelected(gid: String, label: String?) {
-        selectedGroupLabel = label
-        correctionBtn?.setBackgroundColor(Color.argb(200, 80, 140, 255))
-        deleteBtn?.setBackgroundColor(Color.argb(200, 220, 60, 40))
-    }
-
-    private fun onGroupDeselected() {
-        selectedGroupLabel = null
-        correctionBtn?.setBackgroundColor(Color.argb(180, 80, 80, 80))
-        deleteBtn?.setBackgroundColor(Color.argb(180, 180, 60, 40))
-    }
-
-    private fun showCorrectionPopup() {
-        val currentLabel = selectedGroupLabel ?: ""
-        val input = EditText(this).apply {
-            setText(currentLabel)
-            setSelection(currentLabel.length)
-            textSize = 20f
-            setPadding(32, 24, 32, 24)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Corriger le label")
-            .setView(input)
-            .setPositiveButton("OK") { _, _ ->
-                captureView?.correctSelectedLabel(input.text.toString().trim())
-            }
-            .setNegativeButton("Annuler", null)
-            .show()
     }
 
     // ═══════════════════════════════════════════════════════════════════
