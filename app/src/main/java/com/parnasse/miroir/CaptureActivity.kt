@@ -44,6 +44,7 @@ class CaptureActivity : Activity() {
     private val engine = MiroirEngine()
     private var recognizer: DigitalInkWrapper? = null
     private var captureView: CaptureSurfaceView? = null
+    private var fontaineOverlay: FontaineOverlay? = null
     private val uiHandler = Handler(Looper.getMainLooper())
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "miroir-capture-infer").apply { priority = Thread.NORM_PRIORITY - 1 }
@@ -125,6 +126,8 @@ class CaptureActivity : Activity() {
                     }
                     Log.i(TAG, "Reconnu: '$result' (groupe ${targetGroup.id.take(8)})")
                     captureView?.invalidate()
+                    // Effacer la surface fontaine maintenant que la View standard a le stroke
+                    fontaineOverlay?.effacer()
                 }
             }
         }
@@ -137,9 +140,18 @@ class CaptureActivity : Activity() {
     private fun buildBlockView() {
         val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
 
+        // Couche 1 : View standard — rendu des strokes passés, blobs, labels, template
         captureView = CaptureSurfaceView(this, engine).also { cv ->
-            cv.onStrokeFinished = { _ -> scheduleInference() }
+            // ⚠️ Pas de onStrokeFinished ici — les strokes sont capturés par la FontaineOverlay
             root.addView(cv, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT))
+        }
+
+        // Couche 2 : SurfaceView FONTAINE — capture + rendu plume en temps réel (transparente)
+        fontaineOverlay = FontaineOverlay(this, engine).also { fo ->
+            fo.onStrokeFinished = { _ -> scheduleInference() }
+            root.addView(fo, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT))
         }
