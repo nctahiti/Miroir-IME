@@ -387,7 +387,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         super.onDraw(canvas)
         canvas.drawColor(Color.WHITE)
 
-        // 1. Blobs
+        // 1. Bitmap (fond + strokes sauvegardés)
+        engine.bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+
+        // 2. Blobs (par-dessus le bitmap pour être visibles)
         val gm = engine.groupManager
         if (gm != null) {
             for (g in gm.allGroupsFull()) {
@@ -405,9 +408,6 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 }
             }
         }
-
-        // 2. Bitmap
-        engine.bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
 
         // 3. Template
         for (ly in engine.cachedTemplateLines) {
