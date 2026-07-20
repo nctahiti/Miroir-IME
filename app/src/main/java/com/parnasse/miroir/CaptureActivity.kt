@@ -95,9 +95,8 @@ class CaptureActivity : Activity() {
             engine.loadPageFull()
         }
         updatePageCounter()
-        // Postposer le redraw après le premier layout (onSizeChanged crée le bitmap)
+        // Postposer le redraw après le premier layout
         captureView?.post {
-            captureView?.redrawBitmapOnly()
             captureView?.invalidate()
         }
     }
@@ -186,7 +185,6 @@ class CaptureActivity : Activity() {
             val total = engine.countPages()
             if (total > 0 && engine.currentPageIndex > 0) {
                 engine.goToPageFull(engine.currentPageIndex - 1)
-                captureView?.redrawBitmapOnly()
                 captureView?.invalidate()
                 updatePageCounter()
             }
@@ -202,7 +200,6 @@ class CaptureActivity : Activity() {
             val total = engine.countPages()
             if (total > 0 && engine.currentPageIndex < total - 1) {
                 engine.goToPageFull(engine.currentPageIndex + 1)
-                captureView?.redrawBitmapOnly()
                 captureView?.invalidate()
                 updatePageCounter()
             } else if (total == 0 || engine.currentPageIndex >= total - 1) {

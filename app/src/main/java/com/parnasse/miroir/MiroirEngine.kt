@@ -333,7 +333,8 @@ class MiroirEngine {
         inkStrokeIdToRegistryIndex.clear()
         groupLabels.clear()
         groupAnchor.clear()
-        bitmap?.recycle(); bitmap = null; bitmapCanvas = null
+        // Effacer le bitmap sans le détruire (reste utilisable pour redrawBitmapOnly)
+        bitmap?.eraseColor(android.graphics.Color.WHITE)
     }
 
     fun goToPage(index: Int) {
@@ -351,6 +352,7 @@ class MiroirEngine {
         savePageFull()
         currentPageIndex = index
         loadPageFull()
+        redrawBitmapInternal()  // synchroniser après chargement
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -487,8 +489,16 @@ class MiroirEngine {
             groupLabels.clear()
             groupAnchor.clear()
 
-            // ── Bitmap : toujours reconstruit depuis les strokes (pas de PNG) ──
-            // Le bitmap sera redessiné par redrawBitmapOnly() après le chargement
+            // ── Bitmap PNG (vraie épaisseur fontaine) ──
+            val bmpFile = File(dir, "bitmap.png")
+            if (bmpFile.exists()) {
+                val loaded = android.graphics.BitmapFactory.decodeFile(bmpFile.absolutePath)
+                if (loaded != null) {
+                    bitmap?.recycle()
+                    bitmap = loaded.copy(Bitmap.Config.ARGB_8888, true)
+                    bitmapCanvas = Canvas(bitmap!!)
+                }
+            }
 
             // ── V★ → strokes (format V2, 16 bytes/token, scaleFactor=8) ──
             val vstarFile = File(dir, "page.vstar")
@@ -503,24 +513,16 @@ class MiroirEngine {
                     var rx = 0f; var ry = 0f  // position reconstruite
                     for (t in tokens) {
                         val isPenDown = (t.flags.toInt() and VStarTokenV2.FLAG_PEN_DOWN.toInt()) != 0
-                        val isPenUp = (t.flags.toInt() and VStarTokenV2.FLAG_PEN_UP.toInt()) != 0
+                        val isPenUp   = (t.flags.toInt() and VStarTokenV2.FLAG_PEN_UP.toInt()) != 0
                         if (isPenDown) {
-                            // Nouveau stroke : dx/dy = position absolue × scaleFactor
+                            // Début de stroke : dx/dy = position absolue × scaleFactor
+                            // FLAG_PEN_UP sur un PEN_DOWN n'est PAS une fin (juste le premier point)
                             currentSR = StrokeRecord(id = java.util.UUID.randomUUID().toString())
                             rx = t.dx / scaleFactor; ry = t.dy / scaleFactor
                             currentSR.points.add(Pair(rx, ry))
                             currentSR.timestamps.add(0L)
                             currentSR.pressures.add(t.p / 255f)
                             currentCI = t.captureIndex
-                            if (isPenUp) {
-                                // Stroke d'un seul point
-                                val ri = strokeRegistry.size
-                                strokeRegistry.add(currentSR!!)
-                                ciToRi[currentCI] = ri
-                                val inkId = (currentCI + 1).toLong()
-                                inkStrokeIdToRegistryIndex[inkId] = ri
-                                currentSR = null
-                            }
                         } else if (currentSR != null) {
                             // Move ou PenUp : dx/dy = delta × scaleFactor
                             rx += t.dx / scaleFactor; ry += t.dy / scaleFactor
@@ -528,6 +530,7 @@ class MiroirEngine {
                             currentSR.timestamps.add(0L)
                             currentSR.pressures.add(t.p / 255f)
                             if (isPenUp) {
+                                // Fin de stroke (PEN_UP sans PEN_DOWN)
                                 val ri = strokeRegistry.size
                                 strokeRegistry.add(currentSR!!)
                                 ciToRi[currentCI] = ri
@@ -549,6 +552,23 @@ class MiroirEngine {
 
             // Reconstruire les blobs visuels
             rebuildAllBlobs()
+
+            // Diagnostic : bounding box des strokes
+            var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
+            var maxX = Float.MIN_VALUE; var maxY = Float.MIN_VALUE
+            var totalPts = 0
+            for (sr in strokeRegistry) {
+                for ((x, y) in sr.points) {
+                    if (x < minX) minX = x; if (y < minY) minY = y
+                    if (x > maxX) maxX = x; if (y > maxY) maxY = y
+                }
+                totalPts += sr.points.size
+            }
+            // Premier stroke : premiers et derniers points
+            val firstSR = strokeRegistry.firstOrNull()
+            val firstPts = firstSR?.points?.take(3)?.joinToString { "(${it.first.toInt()},${it.second.toInt()})" } ?: "—"
+            val lastPts = firstSR?.points?.takeLast(3)?.joinToString { "(${it.first.toInt()},${it.second.toInt()})" } ?: "—"
+            Log.i(TAG, "loadPageFull geom: bbox=(${minX.toInt()},${minY.toInt()})-(${maxX.toInt()},${maxY.toInt()}) pts=$totalPts first=$firstPts last=$lastPts")
 
             Log.i(TAG, "loadPageFull page=$currentPageIndex: ${strokeRegistry.size} strokes, ${groupLabels.size} labels")
             return true
