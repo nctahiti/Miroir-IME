@@ -30,6 +30,7 @@ class MiroirEngine {
     // ── Blocs & Pages ──────────────────────────────────────────────────
     var blockDir: File? = null; private set
     var currentPageIndex = 0; private set
+    private var appContext: android.content.Context? = null
 
     // ── Strokes ────────────────────────────────────────────────────────
     val strokeRegistry = mutableListOf<StrokeRecord>()
@@ -37,6 +38,12 @@ class MiroirEngine {
     private var inkStrokeIdCounter: Long = 0
     var currentStrokeRecord: StrokeRecord? = null; private set
     var currentPath = Path(); private set
+
+    /** Annule le stroke en cours sans le sauvegarder. */
+    fun cancelStroke() {
+        currentStrokeRecord = null
+        currentPath.reset()
+    }
 
     // ── Groupes ────────────────────────────────────────────────────────
     var groupManager: GroupManager? = null; private set
@@ -64,6 +71,7 @@ class MiroirEngine {
     // ═══════════════════════════════════════════════════════════════════
 
     fun initGroupManager(context: Context) {
+        appContext = context.applicationContext
         groupManager = GroupManager({}).also {
             it.params = it.params.copy(transcriptionTimeoutMs = Long.MAX_VALUE)
             it.pointProvider = { strokeId ->
@@ -141,7 +149,13 @@ class MiroirEngine {
         val group = gm.onStrokeSealed(inkStroke)
         // Creer/mettre a jour le blob du groupe
         if (group != null) {
-            computeBlobPath(group)?.let { groupBlobs[group.id] = it }
+            val blob = computeBlobPath(group)
+            if (blob != null) {
+                groupBlobs[group.id] = blob
+                Log.d(TAG, "Blob cree pour groupe ${group.id.take(8)} — ${group.strokeIds.size} strokes")
+            } else {
+                Log.w(TAG, "Blob NULL pour groupe ${group.id.take(8)} — strokes=${group.strokeIds.size} pts verifices")
+            }
         }
         return group
     }
@@ -166,8 +180,12 @@ class MiroirEngine {
         for ((px, py) in pts) { cx += px; cy += py }
         cx /= pts.size; cy /= pts.size
 
-        val context = ctx ?: android.app.Activity()  // fallback
-        val rayCount = CalibrationActivity.getBlobRayCount(context)
+        val context = ctx ?: appContext
+        val rayCount = if (context != null) {
+            try { CalibrationActivity.getBlobRayCount(context) } catch (_: Exception) { 16 }
+        } else {
+            16  // valeur par defaut (16 rayons)
+        }
         var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
         var maxX = Float.MIN_VALUE; var maxY = Float.MIN_VALUE
         val path = Path()
