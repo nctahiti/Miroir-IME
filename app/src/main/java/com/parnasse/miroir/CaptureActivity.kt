@@ -126,8 +126,9 @@ class CaptureActivity : Activity() {
                     }
                     Log.i(TAG, "Reconnu: '$result' (groupe ${targetGroup.id.take(8)})")
                     captureView?.invalidate()
-                    // Effacer la surface fontaine maintenant que la View standard a le stroke
-                    fontaineOverlay?.effacer()
+                    // Désactiver → View standard visible → réactiver pour le prochain stroke
+                    fontaineOverlay?.desactiver()
+                    fontaineOverlay?.activer()
                 }
             }
         }
@@ -140,15 +141,15 @@ class CaptureActivity : Activity() {
     private fun buildBlockView() {
         val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
 
-        // Couche 1 : View standard — rendu des strokes passés, blobs, labels, template
+        // Couche 1 : View standard — blobs, labels, template, strokes
         captureView = CaptureSurfaceView(this, engine).also { cv ->
-            // ⚠️ Pas de onStrokeFinished ici — les strokes sont capturés par la FontaineOverlay
+            cv.onStrokeFinished = { _ -> scheduleInference() }
             root.addView(cv, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT))
         }
 
-        // Couche 2 : SurfaceView FONTAINE — capture + rendu plume en temps réel (transparente)
+        // Couche 2 : SurfaceView FONTAINE — capture + rendu plume (MediaOverlay)
         fontaineOverlay = FontaineOverlay(this, engine).also { fo ->
             fo.onStrokeFinished = { _ -> scheduleInference() }
             root.addView(fo, FrameLayout.LayoutParams(
@@ -206,12 +207,12 @@ class CaptureActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        captureView?.initTouchHelper()
+        // TouchHelper de CaptureSurfaceView désactivé — la FontaineOverlay capture tout
     }
 
     override fun onDestroy() {
         engine.savePageFull(); engine.closeBlock()
-        captureView?.releaseTouchHelper(); recognizer?.close()
+        recognizer?.close()
         super.onDestroy()
     }
 

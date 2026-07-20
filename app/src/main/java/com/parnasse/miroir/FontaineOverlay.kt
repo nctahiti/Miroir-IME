@@ -1,25 +1,19 @@
 package com.parnasse.miroir
 
 import android.content.Context
-import android.graphics.*
+import android.graphics.Canvas
+import android.graphics.PixelFormat
+import android.graphics.PorterDuff
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 
 /**
- * FontaineOverlay — SurfaceView transparente superposée pour la capture en mode FONTAINE.
+ * FontaineOverlay — SurfaceView transparente pour la capture en mode FONTAINE.
  *
- * Le hardware Onyx rend les strokes en style plume directement sur cette surface.
- * Les callbacks TouchHelper capturent les points pour MiroirEngine (groupes, inférence).
- *
- * Cette vue est transparente et positionnée AU-DESSUS de la View standard
- * qui gère tout le reste (blobs, labels, template, strokes passés).
- *
- * Cycle :
- *   1. Écriture → fontaine rend le trait en temps réel + capture les points
- *   2. Stroke terminé → callback onStrokeFinished → inférence
- *   3. Après rafraîchissement de la View standard → effacer cette surface
- *   4. Prêt pour le prochain stroke
+ * Placée entre la View standard et les overlays (setZOrderMediaOverlay).
+ * Le hardware Onyx rend les strokes en style plume sur cette surface.
+ * Quand la surface est effacée (transparent), la View standard en dessous est visible.
  */
 class FontaineOverlay(context: Context, private val engine: MiroirEngine) : SurfaceView(context), SurfaceHolder.Callback {
 
@@ -30,19 +24,15 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     private var touchHelper: com.onyx.android.sdk.pen.TouchHelper? = null
     private var isStylusDown = false
     private var surfaceReady = false
+    private var strokeCount = 0  // compteur pour tracer les strokes
 
-    /** Appelé quand un stroke est terminé (pour lancer l'inférence). */
     var onStrokeFinished: ((registryIndex: Int) -> Unit)? = null
 
     init {
         holder.addCallback(this)
-        setZOrderOnTop(true)                    // au-dessus de la View standard
-        holder.setFormat(PixelFormat.TRANSLUCENT) // fond transparent
+        setZOrderOnTop(true)                     // au-dessus de tout
+        holder.setFormat(PixelFormat.TRANSLUCENT) // transparent → laisse voir dessous
     }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // SURFACE HOLDER
-    // ═══════════════════════════════════════════════════════════════════
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         surfaceReady = true
@@ -60,22 +50,19 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
         Log.i(TAG, "Surface fontaine détruite")
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // TOUCH HELPER — MODE FONTAINE
-    // ═══════════════════════════════════════════════════════════════════
-
     private fun initTouchHelper() {
         if (touchHelper != null) return
         try {
             touchHelper = com.onyx.android.sdk.pen.TouchHelper.create(this,
                 object : com.onyx.android.sdk.pen.RawInputCallback() {
                     override fun onBeginRawDrawing(eraser: Boolean, tp: com.onyx.android.sdk.data.note.TouchPoint) {
+                        strokeCount++
+                        Log.i(TAG, "🖊️ BEGIN #$strokeCount eraser=$eraser x=${tp.x.toInt()} y=${tp.y.toInt()}")
                         isStylusDown = true
                         engine.beginStroke(tp.x, tp.y)
                     }
                     override fun onRawDrawingTouchPointMoveReceived(tp: com.onyx.android.sdk.data.note.TouchPoint?) {
-                        if (!isStylusDown || tp == null) return
-                        engine.addStrokePoint(tp.x, tp.y, tp.pressure.coerceIn(0f, 1f))
+                        // ⚠️ Ignoré — on utilise onRawDrawingTouchPointListReceived pour éviter les doublons
                     }
                     override fun onRawDrawingTouchPointListReceived(list: com.onyx.android.sdk.pen.data.TouchPointList?) {
                         if (!isStylusDown || list == null) return
@@ -86,14 +73,20 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                         }
                     }
                     override fun onEndRawDrawing(eraser: Boolean, tp: com.onyx.android.sdk.data.note.TouchPoint) {
-                        if (!isStylusDown) return
-                        isStylusDown = false
-                        engine.addStrokePoint(tp.x, tp.y, tp.pressure.coerceIn(0f, 1f))
-                        val ri = engine.endStroke()
-                        if (ri >= 0) {
-                            onStrokeFinished?.invoke(ri)
+                        Log.i(TAG, "🖊️ END   #$strokeCount eraser=$eraser pts=${engine.currentStrokeRecord?.activePoints ?: 0}")
+                        if (!isStylusDown) {
+                            Log.w(TAG, "⚠️ END sans BEGIN (isStylusDown=false)")
+                            return
                         }
-                        // L'effacement sera fait par CaptureActivity après l'inférence
+                        isStylusDown = false
+                        val ptCount = engine.currentStrokeRecord?.activePoints ?: 0
+                        val ri = engine.endStroke()
+                        // Filtre anti-bruit : stroke trop court → ignoré
+                        if (ri >= 0 && ptCount >= 10) {
+                            onStrokeFinished?.invoke(ri)
+                        } else if (ri >= 0) {
+                            Log.d(TAG, "Stroke ignoré (${ptCount} pts)")
+                        }
                     }
                     override fun onBeginRawErasing(p0: Boolean, p1: com.onyx.android.sdk.data.note.TouchPoint) {}
                     override fun onEndRawErasing(p0: Boolean, p1: com.onyx.android.sdk.data.note.TouchPoint) {}
@@ -120,21 +113,34 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // EFFACEMENT
+    // ACTIVATION / DÉSACTIVATION
     // ═══════════════════════════════════════════════════════════════════
 
-    /**
-     * Efface le contenu de la surface fontaine.
-     * Appelé après que la View standard a rafraîchi son rendu,
-     * pour éviter le double affichage du stroke.
-     */
-    fun effacer() {
+    /** Désactive le rendu → surface effacée → View standard visible. */
+    fun desactiver() {
+        try {
+            touchHelper?.closeRawDrawing()
+        } catch (_: Exception) {}
+        effacerSurface()
+        Log.d(TAG, "Fontaine désactivée")
+    }
+
+    /** Réactive le rendu — prêt pour le prochain stroke (zéro latence). */
+    fun activer() {
+        try {
+            touchHelper?.openRawDrawing()
+            touchHelper?.setRawDrawingEnabled(true)
+        } catch (_: Exception) {}
+        Log.d(TAG, "Fontaine réactivée")
+    }
+
+    private fun effacerSurface() {
         if (!surfaceReady) return
         var canvas: Canvas? = null
         try {
             canvas = holder.lockCanvas()
             if (canvas != null) {
-                canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+                canvas.drawColor(android.graphics.Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
             }
         } catch (_: Exception) {} finally {
             try { canvas?.let { holder.unlockCanvasAndPost(it) } } catch (_: Exception) {}

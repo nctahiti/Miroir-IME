@@ -137,119 +137,48 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // TOUCH — UxK Miroir
+    // TOUCH — UxK Miroir (taps/sélections UNIQUEMENT, strokes → FontaineOverlay)
     // ═══════════════════════════════════════════════════════════════════
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                engine.currentPath.reset()
                 tapStartX = event.x; tapStartY = event.y
                 tapStartTime = System.currentTimeMillis()
                 tapMoved = false; longPressTriggered = false
-
-                // Si deja en mode correction → hit-test puces ou ecriture
                 if (editMode == EditMode.CORRECT_TRANSCRIPTION) {
-                    // Hit-test sur les puces − (suppression)
                     val minusIdx = hitTestMinus(event.x, event.y)
                     if (minusIdx >= 0 && minusIdx < correctionLabel.length) {
                         correctionLabel = correctionLabel.removeRange(minusIdx, minusIdx + 1)
                         correctLetterIndex = -1; insertAtIndex = -1
-                        Log.i(TAG, "Correction suppression #$minusIdx")
                         invalidate(); return true
                     }
-                    // Hit-test sur les puces + (insertion)
                     val plusIdx = hitTestPlus(event.x, event.y)
                     if (plusIdx >= 0 && plusIdx <= correctionLabel.length) {
                         insertAtIndex = plusIdx; correctLetterIndex = -1
-                        Log.i(TAG, "Correction insertion #$plusIdx")
                         invalidate(); return true
                     }
-                    // Hit-test sur une lettre (remplacement)
                     val letterIdx = hitTestLetter(event.x, event.y)
                     if (letterIdx >= 0 && letterIdx < correctionLabel.length) {
                         correctLetterIndex = letterIdx; insertAtIndex = -1
-                        Log.i(TAG, "Correction lettre #$letterIdx")
                         invalidate(); return true
                     }
-                    // Si une cible est active → ecrire
-                    if (correctLetterIndex >= 0 || insertAtIndex >= 0) {
-                        isStylusDown = true
-                        engine.beginStroke(event.x, event.y)
-                        return true
-                    }
-                    // Clic dans le vide → sortir du mode correction
                     exitEditMode()
                     invalidate()
                     return true
                 }
-
-                // Mode ecriture normal
-                isStylusDown = true
-                engine.beginStroke(event.x, event.y)
             }
-
             MotionEvent.ACTION_MOVE -> {
-                if (!isStylusDown) return true
-
-                // Détecter si c'est un glissement (pas un tap)
                 val dx = abs(event.x - tapStartX)
                 val dy = abs(event.y - tapStartY)
-                if (dx > TAP_THRESHOLD_PX || dy > TAP_THRESHOLD_PX) {
-                    tapMoved = true
-                }
-
-                for (i in 0 until event.historySize) {
-                    engine.addStrokePoint(
-                        event.getHistoricalX(i), event.getHistoricalY(i),
-                        event.getHistoricalPressure(i)
-                    )
-                }
-                engine.addStrokePoint(event.x, event.y, event.pressure)
-                invalidate()
+                if (dx > TAP_THRESHOLD_PX || dy > TAP_THRESHOLD_PX) tapMoved = true
             }
-
             MotionEvent.ACTION_UP -> {
-                if (!isStylusDown) return true
-                isStylusDown = false
-
-                for (i in 0 until event.historySize) {
-                    engine.addStrokePoint(
-                        event.getHistoricalX(i), event.getHistoricalY(i),
-                        event.getHistoricalPressure(i)
-                    )
-                }
-                engine.addStrokePoint(event.x, event.y, event.pressure)
-
-                if (editMode == EditMode.CORRECT_TRANSCRIPTION) {
-                    // Ecriture de correction
-                    val ri = engine.endStroke()
-                    if (ri >= 0) {
-                        correctionPaths.add(Path(engine.currentPath))
-                        engine.currentPath.reset()
-                    }
-                    invalidate()
-                    return true
-                }
-
-                val ri = engine.endStroke()
-
-                if (ri >= 0) {
-                    // Vrai stroke → inference
-                    onStrokeFinished?.invoke(ri)
-                } else {
-                    // Pas de stroke valide → c'etait un tap
-                    if (!tapMoved) {
-                        val elapsed = System.currentTimeMillis() - tapStartTime
-                        if (elapsed >= LONG_PRESS_MS) {
-                            // Long press → correction
-                            handleLongPress(event.x, event.y)
-                        } else {
-                            // Tap court → selection
-                            handleTap(event.x, event.y)
-                        }
-                    }
+                if (!tapMoved) {
+                    val elapsed = System.currentTimeMillis() - tapStartTime
+                    if (elapsed >= LONG_PRESS_MS) handleLongPress(event.x, event.y)
+                    else handleTap(event.x, event.y)
                 }
                 invalidate()
             }
