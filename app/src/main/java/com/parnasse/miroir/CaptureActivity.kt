@@ -254,9 +254,8 @@ class CaptureActivity : Activity() {
 
     /** Long-press détecté par la fontaine → passer en mode interaction. */
     private fun handleLongPress(x: Float, y: Float) {
-        // 1. Passer en mode interaction
+        // 1. Passer en mode interaction (selectGroup fera le desactiver())
         fontaineOverlay?.modeInteraction = true
-        fontaineOverlay?.desactiver()
         // 2. Chercher un blob sous le stylet et le sélectionner
         captureView?.selectGroupAt(x, y)
         Log.d(TAG, "Long-press → mode interaction à ($x, $y)")

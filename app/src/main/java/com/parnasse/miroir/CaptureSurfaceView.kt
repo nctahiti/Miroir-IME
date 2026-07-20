@@ -24,7 +24,6 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     companion object {
         private const val TAG = "Miroir/CaptureView"
         private const val TAP_THRESHOLD_PX = 30f
-        private const val LONG_PRESS_MS = 500L
         private const val HIT_RADIUS = 70f
     }
 
@@ -64,7 +63,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     // ── Tap / selection ───────────────────────────────────────────────
     private var tapStartX = 0f; private var tapStartY = 0f
     private var tapStartTime = 0L
-    private var tapMoved = false; private var longPressTriggered = false
+    private var tapMoved = false
     private var selectedGroupId: String? = null
     private var selectedGroupLabel: String? = null
 
@@ -151,7 +150,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             MotionEvent.ACTION_DOWN -> {
                 tapStartX = event.x; tapStartY = event.y
                 tapStartTime = System.currentTimeMillis()
-                tapMoved = false; longPressTriggered = false
+                tapMoved = false
                 if (editMode == EditMode.CORRECT_TRANSCRIPTION) {
                     val minusIdx = hitTestMinus(event.x, event.y)
                     if (minusIdx >= 0 && minusIdx < correctionLabel.length) {
@@ -181,9 +180,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             }
             MotionEvent.ACTION_UP -> {
                 if (!tapMoved) {
-                    val elapsed = System.currentTimeMillis() - tapStartTime
-                    if (elapsed >= LONG_PRESS_MS) handleLongPress(event.x, event.y)
-                    else handleTap(event.x, event.y)
+                    handleTap(event.x, event.y)
                 }
                 invalidate()
             }
@@ -312,12 +309,6 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         }
     }
 
-    private fun handleLongPress(x: Float, y: Float) {
-        val gid = hitTestBlob(x, y) ?: hitTestAnchor(x, y) ?: return
-        selectGroup(gid)
-        enterCorrectionMode(gid)
-    }
-
     private fun selectGroup(gid: String) {
         val gm = engine.groupManager ?: return
         selectedGroupId?.let { gm.deselectGroup(it) }
@@ -346,8 +337,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         selectedGroupId?.let { gm?.deselectGroup(it) }
         selectedGroupId = null
         selectedGroupLabel = null
-        // Sortir du mode interaction → la fontaine peut capturer à nouveau
+        // Sortir du mode interaction → réactiver la fontaine
         fontaineOverlay?.modeInteraction = false
+        fontaineOverlay?.activer()
         invalidate()
     }
 
