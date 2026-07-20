@@ -78,8 +78,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     private var insertAtIndex: Int = -1
     private val correctionPaths = mutableListOf<Path>()
 
-    // ── Callbacks ─────────────────────────────────────────────────────
+    /** Callbacks */
     var onStrokeFinished: ((registryIndex: Int) -> Unit)? = null
+    /** Appelé quand le mode édition se termine → la fontaine doit se réactiver. */
+    var onReturnToWriting: (() -> Unit)? = null
 
     /** Référence à la FontaineOverlay — pour activer/désactiver le mode interaction. */
     var fontaineOverlay: FontaineOverlay? = null
@@ -298,7 +300,6 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     /** MOVE pendant un long-press armé → détecter la direction ou continuer le geste. */
     private fun handleLongPressMove(x: Float, y: Float) {
         if (editMode == EditMode.NONE) {
-            // Détecter la direction
             val dx = x - gestureStartX
             val dy = y - gestureStartY
             if (dx < -SWIPE_THRESHOLD) {
@@ -307,6 +308,15 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             } else if (dy > SWIPE_THRESHOLD) {
                 enterMoveMode(x, y)
                 Log.i(TAG, "→ Mode DÉPLACEMENT (↓)")
+            } else if (dx > SWIPE_THRESHOLD) {
+                // → absorption : annuler le long-press, réactiver la fontaine
+                exitGestureMode()
+                longPressArmed = false
+                onReturnToWriting?.invoke()
+                Log.i(TAG, "→ Absorption (→) — retour écriture")
+            } else if (dy < -SWIPE_THRESHOLD) {
+                enterCorrectionMode()
+                Log.i(TAG, "→ Mode CORRECTION (↑)")
             }
         } else if (editMode == EditMode.ERASE) {
             scrubGroup(x)
@@ -316,10 +326,16 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         }
     }
 
-    /** UP après un long-press → sortir du mode édition. */
+    /** UP après un long-press → sortir du mode édition, réactiver la fontaine (sauf correction). */
     private fun handleLongPressUp() {
+        val wasCorrecting = editMode == EditMode.CORRECT_TRANSCRIPTION
         exitGestureMode()
         longPressArmed = false
+        if (!wasCorrecting) {
+            // ←/↓/→ : retour à l'écriture
+            onReturnToWriting?.invoke()
+        }
+        // ↑ correction : rester en mode interaction (clic sur les lettres)
         invalidate()
     }
 
@@ -347,9 +363,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             return
         }
 
-        // 3. Clic dans le vide → deselect
+        // 3. Clic dans le vide → deselect + retour écriture
         if (selectedGroupId != null) {
             deselectGroup()
+            onReturnToWriting?.invoke()
         }
     }
 
@@ -390,10 +407,16 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         selectedGroupId?.let { gm?.deselectGroup(it) }
         selectedGroupId = null
         selectedGroupLabel = null
-        // Sortir du mode interaction → réactiver la fontaine
+        // Sortir du mode interaction (la réactivation est gérée par l'appelant)
         fontaineOverlay?.modeInteraction = false
-        fontaineOverlay?.activer()
         invalidate()
+    }
+
+    /** Dessine le blob sélectionné dans la SurfaceView (pour le garder visible pendant l'écriture). */
+    fun drawSelectedBlobOn(fontaine: FontaineOverlay?) {
+        val gid = selectedGroupId ?: return
+        val blob = engine.groupBlobs[gid] ?: return
+        fontaine?.dessinerBlob(blob.path, blob.bounds, selectedBlobPaint, selectedBlobBorderPaint)
     }
 
     private fun enterCorrectionMode(gid: String) {
@@ -413,6 +436,12 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
         Log.i(TAG, "Mode correction: '$label' (groupe ${gid.take(8)})")
         invalidate()
+    }
+
+    /** Entre en mode correction pour le groupe sélectionné (appelé par swipe ↑). */
+    private fun enterCorrectionMode() {
+        val gid = selectedGroupId ?: return
+        enterCorrectionMode(gid)
     }
 
     private fun exitEditMode() {

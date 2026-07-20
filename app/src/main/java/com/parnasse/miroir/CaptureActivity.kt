@@ -140,6 +140,7 @@ class CaptureActivity : Activity() {
 
         // Couche 1 : View standard — blobs, labels, template, strokes
         captureView = CaptureSurfaceView(this, engine).also { cv ->
+            cv.onReturnToWriting = { returnToWriting() }
             root.addView(cv, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT))
@@ -253,14 +254,24 @@ class CaptureActivity : Activity() {
         uiHandler.removeCallbacks(displayRefreshRunnable)
     }
 
-    /** Long-press détecté par la fontaine → bascule franche : désactiver fontaine, sélectionner, forwarder les événements. */
+    /** Long-press détecté par la fontaine → bascule franche. */
     private fun handleLongPress(x: Float, y: Float) {
         fontaineOverlay?.modeInteraction = true
-        fontaineOverlay?.desactiver()  // bascule franche : closeRawDrawing + effacerSurface → blob visible
+        fontaineOverlay?.desactiver()
         captureView?.selectGroupAt(x, y)
-        captureView?.armLongPressGesture(x, y)  // préparer la View standard à recevoir les gestes
-        // Forwarder les événements tactiles de la fontaine vers la View standard
+        captureView?.armLongPressGesture(x, y)
         fontaineOverlay?.touchForwardTarget = captureView
         Log.d(TAG, "Long-press → bascule franche, blob visible, attente geste")
+    }
+
+    /** Retour au mode écriture : garder le blob visible comme phare, réactiver la fontaine. */
+    private fun returnToWriting() {
+        fontaineOverlay?.modeInteraction = false
+        fontaineOverlay?.touchForwardTarget = null
+        // Dessiner le blob sélectionné dans la SurfaceView pour qu'il reste visible
+        captureView?.drawSelectedBlobOn(fontaineOverlay)
+        // Réactiver complètement la fontaine (postposé pour éviter le lag)
+        uiHandler.post { fontaineOverlay?.reactiver() }
+        Log.d(TAG, "Retour écriture — fontaine réactivée, blob phare")
     }
 }

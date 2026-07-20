@@ -350,6 +350,27 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
         Log.d(TAG, "Fontaine réactivée")
     }
 
+    /** Réinitialisation complète après closeRawDrawing — comme au démarrage. */
+    fun reactiver() {
+        try {
+            val th = touchHelper ?: return
+            th.openRawDrawing()
+            val limitRect = android.graphics.Rect()
+            getLocalVisibleRect(limitRect)
+            if (limitRect.width() > 0 && limitRect.height() > 0) {
+                th.setLimitRect(limitRect, emptyList())
+            }
+            th.setStrokeStyle(com.onyx.android.sdk.pen.TouchHelper.STROKE_STYLE_FOUNTAIN)
+            val density = resources.displayMetrics.density
+            th.setStrokeWidth(strokeWidthDp * density)
+            th.setStrokeColor(strokeColor)
+            th.enableFingerTouch(true)
+            th.setRawDrawingRenderEnabled(true)
+            th.setRawDrawingEnabled(true)
+        } catch (_: Exception) {}
+        Log.i(TAG, "Fontaine réinitialisée (reactiver)")
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // EFFACEMENT
     // ═══════════════════════════════════════════════════════════════════
@@ -361,6 +382,36 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
             canvas = holder.lockCanvas()
             if (canvas != null) {
                 canvas.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+            }
+        } catch (_: Exception) {} finally {
+            try { canvas?.let { holder.unlockCanvasAndPost(it) } } catch (_: Exception) {}
+        }
+    }
+
+    /** Remplit la SurfaceView en blanc opaque (pour le retour écriture). */
+    fun remplirBlanc() {
+        if (!surfaceReady) return
+        var canvas: Canvas? = null
+        try {
+            canvas = holder.lockCanvas()
+            if (canvas != null) {
+                canvas.drawColor(Color.WHITE)
+            }
+        } catch (_: Exception) {} finally {
+            try { canvas?.let { holder.unlockCanvasAndPost(it) } } catch (_: Exception) {}
+        }
+    }
+
+    /** Dessine un blob dans la SurfaceView (phare pendant l'écriture). */
+    fun dessinerBlob(path: android.graphics.Path, bounds: RectF, fillPaint: android.graphics.Paint, borderPaint: android.graphics.Paint) {
+        if (!surfaceReady) return
+        var canvas: Canvas? = null
+        try {
+            canvas = holder.lockCanvas()
+            if (canvas != null) {
+                canvas.drawColor(Color.WHITE)  // fond blanc
+                canvas.drawPath(path, fillPaint)
+                canvas.drawPath(path, borderPaint)
             }
         } catch (_: Exception) {} finally {
             try { canvas?.let { holder.unlockCanvasAndPost(it) } } catch (_: Exception) {}
