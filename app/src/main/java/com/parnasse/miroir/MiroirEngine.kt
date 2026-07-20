@@ -88,13 +88,13 @@ class MiroirEngine {
     // CAPTURE DE STROKE (utilise par CaptureSurface)
     // ═══════════════════════════════════════════════════════════════════
 
-    fun beginStroke(x: Float, y: Float) {
+    fun beginStroke(x: Float, y: Float, pressure: Float = 1.0f) {
         currentPath.reset()
         currentPath.moveTo(x, y)
         currentStrokeRecord = StrokeRecord(id = java.util.UUID.randomUUID().toString()).also { sr ->
             sr.points.add(Pair(x, y))
             sr.timestamps.add(System.currentTimeMillis())
-            sr.pressures.add(1.0f)
+            sr.pressures.add(pressure.coerceIn(0f, 1f))
         }
     }
 

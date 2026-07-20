@@ -321,8 +321,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         selectedGroupId?.let { gm.deselectGroup(it) }
         selectedGroupId = gid
         gm.selectGroup(gid)
-        // Mode interaction : la fontaine laisse passer les événements
-        fontaineOverlay?.let { it.modeInteraction = true; it.desactiver() }
+        // Mode interaction : la fontaine ignore les strokes mais ne se désactive pas
+        // (le displayRefresh fera le desactiver/activer au bon moment)
+        fontaineOverlay?.modeInteraction = true
 
         val group = gm.allGroupsFull().find { it.id == gid }
         val firstSid = group?.strokeIds?.firstOrNull()
@@ -338,8 +339,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         selectedGroupId?.let { gm?.deselectGroup(it) }
         selectedGroupId = null
         selectedGroupLabel = null
-        // Sortir du mode interaction → réactiver la fontaine
-        fontaineOverlay?.let { it.modeInteraction = false; it.activer() }
+        // Sortir du mode interaction → la fontaine peut capturer à nouveau
+        fontaineOverlay?.modeInteraction = false
         invalidate()
     }
 

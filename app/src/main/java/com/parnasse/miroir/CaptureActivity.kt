@@ -52,7 +52,9 @@ class CaptureActivity : Activity() {
 
     // ── Timer d'inference par groupe ────────────────────────────────────
     private val inferenceRunnable = Runnable { runGroupInference() }
+    private val displayRefreshRunnable = Runnable { refreshDisplay() }
     private var inferenceTimerArmed = false
+    private var displayTimerArmed = false
     private var lastGroupId: String? = null
 
     // ── Contexte d'invocation ──────────────────────────────────────────
@@ -102,33 +104,31 @@ class CaptureActivity : Activity() {
         val gm = engine.groupManager ?: return
         val groups = gm.allGroupsFull()
         if (groups.isEmpty()) return
-
-        val targetGroup = if (lastGroupId != null) {
-            groups.find { it.id == lastGroupId } ?: groups.last()
-        } else {
-            groups.last()
-        }
-        val indices = targetGroup.strokeIds.mapNotNull { engine.inkStrokeIdToRegistryIndex[it] }
-        if (indices.isEmpty()) return
-
         val rec = recognizer ?: return
         if (!rec.isLoaded) return
 
-        inferExecutor.submit {
-            val result = rec.recognize(engine.strokeRegistry.toList(), indices)
-            if (!result.isNullOrBlank()) {
-                uiHandler.post {
-                    val firstIdx = indices.firstOrNull() ?: return@post
-                    engine.groupLabels[firstIdx] = result
-                    val anchor = engine.strokeRegistry.getOrNull(firstIdx)?.points?.firstOrNull()
-                    if (anchor != null) {
-                        engine.groupAnchor[firstIdx] = anchor
+        // Inférer tous les groupes sans label (clôturés OU actif)
+        for (group in groups) {
+            val firstIdx = group.strokeIds.firstOrNull()
+                ?.let { engine.inkStrokeIdToRegistryIndex[it] } ?: continue
+            // Déjà un label ? On saute
+            if (engine.groupLabels.containsKey(firstIdx)) continue
+
+            val indices = group.strokeIds.mapNotNull { engine.inkStrokeIdToRegistryIndex[it] }
+            if (indices.isEmpty()) continue
+
+            inferExecutor.submit {
+                val result = rec.recognize(engine.strokeRegistry.toList(), indices)
+                if (!result.isNullOrBlank()) {
+                    uiHandler.post {
+                        // Revérifier — un label a pu être posé entre-temps
+                        if (!engine.groupLabels.containsKey(firstIdx)) {
+                            engine.groupLabels[firstIdx] = result
+                            val anchor = engine.strokeRegistry.getOrNull(firstIdx)?.points?.firstOrNull()
+                            if (anchor != null) engine.groupAnchor[firstIdx] = anchor
+                            Log.i(TAG, "Reconnu: '$result' (groupe ${group.id.take(8)}, ${indices.size} strokes)")
+                        }
                     }
-                    Log.i(TAG, "Reconnu: '$result' (groupe ${targetGroup.id.take(8)})")
-                    captureView?.invalidate()
-                    // Désactiver → View standard visible → réactiver pour le prochain stroke
-                    fontaineOverlay?.desactiver()
-                    fontaineOverlay?.activer()
                 }
             }
         }
@@ -152,6 +152,7 @@ class CaptureActivity : Activity() {
         // Couche 2 : SurfaceView FONTAINE — capture + rendu plume
         fontaineOverlay = FontaineOverlay(this, engine).also { fo ->
             fo.onStrokeFinished = { _ -> scheduleInference() }
+            fo.onStrokeBegin = { cancelTimers() }
             root.addView(fo, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT))
@@ -236,9 +237,34 @@ class CaptureActivity : Activity() {
         if (groups.isEmpty()) return
         val lastGroup = groups.last()
 
+        Log.d(TAG, "scheduleInference: dernier groupe=${lastGroup.id.take(8)} (${lastGroup.strokeCount} strokes), ${groups.size} groupes")
+
+        // Inference : 350ms après le dernier stroke
         uiHandler.removeCallbacks(inferenceRunnable)
         inferenceTimerArmed = true
         lastGroupId = lastGroup.id
-        uiHandler.postDelayed(inferenceRunnable, 1500L)
+        uiHandler.postDelayed(inferenceRunnable, 350L)
+
+        // Affichage : 700ms après le dernier stroke
+        uiHandler.removeCallbacks(displayRefreshRunnable)
+        displayTimerArmed = true
+        uiHandler.postDelayed(displayRefreshRunnable, 700L)
+    }
+
+    /** Rafraîchit l'affichage : désactive la fontaine, affiche les labels, réactive. */
+    private fun refreshDisplay() {
+        displayTimerArmed = false
+        fontaineOverlay?.desactiver()
+        captureView?.invalidate()
+        fontaineOverlay?.activer()
+        Log.d(TAG, "Display refresh: labels affichés, fontaine recyclée")
+    }
+
+    /** Annule les timers d'inférence et d'affichage (appelé au début d'un stroke). */
+    private fun cancelTimers() {
+        uiHandler.removeCallbacks(inferenceRunnable)
+        uiHandler.removeCallbacks(displayRefreshRunnable)
+        inferenceTimerArmed = false
+        displayTimerArmed = false
     }
 }
