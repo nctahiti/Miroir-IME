@@ -149,6 +149,7 @@ class CaptureActivity : Activity() {
         fontaineOverlay = FontaineOverlay(this, engine).also { fo ->
             fo.onStrokeFinished = { _ -> scheduleInference() }
             fo.onStrokeBegin = { cancelTimers() }
+            fo.onLongPressDetected = { x, y -> handleLongPress(x, y) }
             root.addView(fo, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT))
@@ -249,5 +250,15 @@ class CaptureActivity : Activity() {
     private fun cancelTimers() {
         uiHandler.removeCallbacks(inferenceRunnable)
         uiHandler.removeCallbacks(displayRefreshRunnable)
+    }
+
+    /** Long-press détecté par la fontaine → passer en mode interaction. */
+    private fun handleLongPress(x: Float, y: Float) {
+        // 1. Passer en mode interaction
+        fontaineOverlay?.modeInteraction = true
+        fontaineOverlay?.desactiver()
+        // 2. Chercher un blob sous le stylet et le sélectionner
+        captureView?.selectGroupAt(x, y)
+        Log.d(TAG, "Long-press → mode interaction à ($x, $y)")
     }
 }

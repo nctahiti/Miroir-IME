@@ -29,8 +29,8 @@ data class BlobParams(
 ) {
     companion object {
         // Valeurs par défaut — calibrées pour écriture latine standard
-        const val DEFAULT_SPATIAL_DISTANCE_PX    = 20f  // écart entre lettres ~20px, entre mots >40px
-        const val DEFAULT_SPATIAL_DISTANCE_Y    = 40f  // écart vertical entre lignes
+        const val DEFAULT_SPATIAL_DISTANCE_PX    = 40f  // écart entre lettres (était 20)
+        const val DEFAULT_SPATIAL_DISTANCE_Y    = 60f  // écart vertical entre lignes (était 40)
         const val DEFAULT_MIN_OVERLAP_PERCENT     = 30
         const val DEFAULT_TEMPORAL_DISTANCE_MS    = 800L
         const val DEFAULT_TRANSCRIPTION_TIMEOUT_MS = 2000L

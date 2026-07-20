@@ -31,7 +31,10 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     internal var isStylusDown = false
     private var surfaceReady = false
     private var strokeCount = 0
-    private var penStillTimer: java.lang.Runnable? = null  // long-press sur blob
+    private var longPressTimer: java.lang.Runnable? = null
+    private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var lastLPX = 0f; private var lastLPY = 0f
+    private var lpTotalDist = 0f  // distance totale depuis BEGIN
 
     // Déduplication des points (Move vs List peuvent envoyer les mêmes points)
     private val processedPoints = mutableSetOf<String>()
@@ -39,6 +42,8 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     var onStrokeFinished: ((registryIndex: Int) -> Unit)? = null
     /** Appelé au début de chaque stroke — pour annuler les timers d'affichage. */
     var onStrokeBegin: (() -> Unit)? = null
+    /** Appelé quand un long-press est détecté (500ms immobile). */
+    var onLongPressDetected: ((x: Float, y: Float) -> Unit)? = null
     var modeInteraction: Boolean = false
 
     private var strokeColor = Color.BLACK
@@ -86,26 +91,29 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                     strokeCount++
                     Log.i(TAG, "🖊️ BEGIN #$strokeCount eraser=$eraser x=${tp.x.toInt()} y=${tp.y.toInt()}")
                     isStylusDown = true
+                    lastLPX = tp.x; lastLPY = tp.y
                     processedPoints.clear()
                     addPoint(tp)
                     engine.beginStroke(tp.x, tp.y, normalizePressure(tp.pressure))
                     onStrokeBegin?.invoke()
-                    // Longer le long-press en parallèle (si le stylet reste immobile sur un blob)
-                    armLongPress(tp.x, tp.y)
+                    armLongPressTimer(tp.x, tp.y)
                 }
 
                 override fun onRawDrawingTouchPointMoveReceived(tp: com.onyx.android.sdk.data.note.TouchPoint?) {
                     keepRawDrawingActive()
-                    cancelPenStillTimer()  // le stylet bouge → pas un long-press
+                    if (tp != null) {
+                        lpTotalDist += Math.hypot((tp.x - lastLPX).toDouble(), (tp.y - lastLPY).toDouble()).toFloat()
+                        lastLPX = tp.x; lastLPY = tp.y
+                    }
                 }
 
                 override fun onRawDrawingTouchPointListReceived(list: com.onyx.android.sdk.pen.data.TouchPointList?) {
                     keepRawDrawingActive()
                     if (!isStylusDown || list == null) return
-                    // Dès qu'il y a des points, annuler le long-press
-                    if (list.size() > 0) cancelPenStillTimer()
                     for (i in 0 until list.size()) {
                         val pt = list.get(i) ?: continue
+                        lpTotalDist += Math.hypot((pt.x - lastLPX).toDouble(), (pt.y - lastLPY).toDouble()).toFloat()
+                        lastLPX = pt.x; lastLPY = pt.y
                         if (addPoint(pt)) {
                             engine.addStrokePoint(pt.x, pt.y, normalizePressure(pt.pressure))
                         }
@@ -113,7 +121,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                 }
 
                 override fun onEndRawDrawing(eraser: Boolean, tp: com.onyx.android.sdk.data.note.TouchPoint) {
-                    cancelPenStillTimer()
+                    cancelLongPressTimer()
                     if (!isStylusDown) return
                     isStylusDown = false
                     val ptCount = engine.currentStrokeRecord?.activePoints ?: 0
@@ -209,34 +217,27 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // LONG-PRESS (sélection de groupe)
+    // LONG-PRESS (500ms immobile)
     // ═══════════════════════════════════════════════════════════════════
 
-    private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
-
-    private fun armLongPress(x: Float, y: Float) {
-        cancelPenStillTimer()
-        penStillTimer = java.lang.Runnable {
-            // Après 500ms immobile → chercher un blob sous le stylet
-            val gm = engine.groupManager ?: return@Runnable
-            for ((gid, blob) in engine.groupBlobs) {
-                if (x >= blob.bounds.left && x <= blob.bounds.right &&
-                    y >= blob.bounds.top && y <= blob.bounds.bottom) {
-                    gm.selectGroup(gid)
-                    modeInteraction = true
-                    Log.i(TAG, "Long-press: groupe ${gid.take(8)} SELECTED")
-                    // Notifier CaptureSurfaceView pour l'affichage
-                    post { invalidate() }
-                    return@Runnable
-                }
+    private fun armLongPressTimer(x: Float, y: Float) {
+        cancelLongPressTimer()
+        lpTotalDist = 0f
+        longPressTimer = java.lang.Runnable {
+            // Après 500ms → si la distance totale < 20px, c'est un long-press
+            if (lpTotalDist < 20f) {
+                Log.i(TAG, "Long-press détecté à ($x, $y) — dist=${lpTotalDist.toInt()}px")
+                onLongPressDetected?.invoke(x, y)
+            } else {
+                Log.d(TAG, "Long-press ignoré — dist=${lpTotalDist.toInt()}px (écriture)")
             }
         }
-        uiHandler.postDelayed(penStillTimer!!, 500L)
+        uiHandler.postDelayed(longPressTimer!!, 500L)
     }
 
-    private fun cancelPenStillTimer() {
-        penStillTimer?.let { uiHandler.removeCallbacks(it) }
-        penStillTimer = null
+    private fun cancelLongPressTimer() {
+        longPressTimer?.let { uiHandler.removeCallbacks(it) }
+        longPressTimer = null
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -304,8 +305,8 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     // ═══════════════════════════════════════════════════════════════════
 
     override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
-        if (modeInteraction) return false
-        return super.onTouchEvent(event)
+        // En mode interaction, laisser passer. Sinon, consommer pour éviter les taps parasites.
+        return !modeInteraction
     }
 
     override fun onHoverEvent(event: android.view.MotionEvent): Boolean {

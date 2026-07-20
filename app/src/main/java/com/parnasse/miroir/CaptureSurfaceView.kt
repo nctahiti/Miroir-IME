@@ -323,9 +323,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         selectedGroupId?.let { gm.deselectGroup(it) }
         selectedGroupId = gid
         gm.selectGroup(gid)
-        // Mode interaction : la fontaine ignore les strokes mais ne se désactive pas
-        // (le displayRefresh fera le desactiver/activer au bon moment)
-        fontaineOverlay?.modeInteraction = true
+        // Mode interaction : désactiver la fontaine pour voir le blob
+        fontaineOverlay?.let { it.modeInteraction = true; it.desactiver() }
 
         val group = gm.allGroupsFull().find { it.id == gid }
         val firstSid = group?.strokeIds?.firstOrNull()
@@ -334,6 +333,12 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
         Log.i(TAG, "Groupe selectionne: ${gid.take(8)} label='$selectedGroupLabel'")
         invalidate()
+    }
+
+    /** Long-press → trouver un blob à (x,y) et le sélectionner. */
+    internal fun selectGroupAt(x: Float, y: Float) {
+        val blobGid = hitTestBlob(x, y)
+        if (blobGid != null) selectGroup(blobGid)
     }
 
     fun deselectGroup() {
