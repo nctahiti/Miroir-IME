@@ -624,19 +624,18 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         // 1. Bitmap (fond + strokes sauvegardés)
         engine.bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
 
-        // 2. Blobs visibles :
-        //    - Groupe SELECTED (ouvert pour absorption) → trait épais
-        //    - Groupe ACTIF (nouveau mot en cours) → trait fin
-        val selId = selectedGroupId
-        if (selId != null) {
-            engine.groupBlobs[selId]?.let { blob ->
+        // 2. Blobs visibles (état réel du GroupManager, pas selectedGroupId) :
+        //    - Groupe SELECTED → trait épais
+        //    - Groupe ACTIF (LOADED, non SELECTED) → trait fin
+        val gm = engine.groupManager
+        val realSelectedId = gm?.groupsInState(GroupState.SELECTED)?.firstOrNull()?.id
+        if (realSelectedId != null) {
+            engine.groupBlobs[realSelectedId]?.let { blob ->
                 canvas.drawPath(blob.path, selectedBlobPaint)
             }
         }
-        val activeId = engine.groupManager?.let { gm ->
-            gm.groupsInState(GroupState.LOADED).firstOrNull()?.id
-        }
-        if (activeId != null && activeId != selId) {
+        val activeId = gm?.groupsInState(GroupState.LOADED)?.firstOrNull()?.id
+        if (activeId != null && activeId != realSelectedId) {
             engine.groupBlobs[activeId]?.let { blob ->
                 canvas.drawPath(blob.path, blobPaint)
             }
