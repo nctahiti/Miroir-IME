@@ -17,11 +17,9 @@ Miroir est l'IME (Input Method Editor) et la surface de capture manuscrite du Pa
 
 ## 🙏 Remerciements
 
-Ce projet utilise le **SDK Onyx OpenBridge** (`com.onyx.android.sdk.pen.TouchHelper`) pour la capture stylet en mode `STROKE_STYLE_FOUNTAIN` sur les tablettes Boox.
+Ce projet utilise le **SDK Onyx OpenBridge** (`com.onyx.android.sdk.pen.TouchHelper`) pour la capture stylet sur les tablettes Boox. Le rendu plume direct sur le hardware EPD offre un confort d'écriture remarquable — une expérience fluide et naturelle.
 
-Le TouchHelper et son API RawInputCallback nous ont permis d'offrir un confort d'écriture remarquable sur EPD, avec un rendu plume direct sur le hardware — une expérience fluide et naturelle sans laquelle le Miroir ne serait pas ce qu'il est.
-
-Merci à l'équipe Onyx pour cet outil remarquable.
+Merci à Onyx pour leur matériel exceptionnel, sans lequel le Miroir ne serait pas ce qu'il est.
 
 - Site Onyx : [https://www.boox.com](https://www.boox.com)
 - SDK OpenBridge : [https://github.com/onyx-intl/OnyxAndroidDemo](https://github.com/onyx-intl/OnyxAndroidDemo)
