@@ -547,6 +547,21 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         val gid = selectedGroupId ?: return
         val gm = engine.groupManager ?: return
         val group = gm.allGroupsFull().find { it.id == gid } ?: return
+
+        // ═══ 1. Effacer l'ancien blob du bitmap (anti-traînée) ═══
+        val oldBlob = engine.groupBlobs[gid]
+        val canvas = engine.bitmapCanvas
+        if (oldBlob != null && canvas != null) {
+            val erasePaint = android.graphics.Paint().apply {
+                color = android.graphics.Color.WHITE
+                style = android.graphics.Paint.Style.STROKE; strokeWidth = 5f
+                strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
+                isAntiAlias = true
+            }
+            canvas.drawPath(oldBlob.path, erasePaint)
+        }
+
+        // ═══ 2. Translater les strokes ═══
         for (sid in group.strokeIds) {
             val idx = engine.inkStrokeIdToRegistryIndex[sid] ?: continue
             if (idx < engine.strokeRegistry.size) {
@@ -564,14 +579,30 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         }
         val gb: android.graphics.RectF = group.bounds
         gb.offset(dx, dy)
-        // Recalculer le blob après déplacement (bounds + path)
+
+        // ═══ 3. Redessiner SEULEMENT les strokes du groupe déplacé ═══
+        if (canvas != null) {
+            val paint = android.graphics.Paint().apply {
+                color = android.graphics.Color.BLACK; strokeWidth = 3f
+                style = android.graphics.Paint.Style.STROKE
+                strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
+                isAntiAlias = true
+            }
+            for (sid in group.strokeIds) {
+                val idx = engine.inkStrokeIdToRegistryIndex[sid] ?: continue
+                val sr = engine.strokeRegistry.getOrNull(idx) ?: continue
+                if (sr.isDeleted || sr.points.size < 2) continue
+                val path = android.graphics.Path()
+                path.moveTo(sr.points[0].first, sr.points[0].second)
+                for (i in 1 until sr.points.size) path.lineTo(sr.points[i].first, sr.points[i].second)
+                canvas.drawPath(path, paint)
+            }
+        }
+
+        // ═══ 4. Recalculer le blob après déplacement ═══
         engine.computeBlobPath(group)?.let { newBlob ->
             engine.groupBlobs[gid] = newBlob
         }
-        // ═══ fullRedraw : efface tout et redessine proprement ═══
-        // Le mode incrémental laisse une traînée des anciennes positions.
-        // Le groupe déplacé a peu de strokes (un mot) → fullRedraw est rapide.
-        engine.redrawBitmapInternal(fullRedraw = true)
         invalidate()
     }
 
