@@ -51,7 +51,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     }
     private val labelPaint = Paint().apply {
         color = Color.argb(200, 80, 80, 180); textSize = 40f; isAntiAlias = false
-        textAlign = Paint.Align.CENTER
+        textAlign = Paint.Align.LEFT
     }
 
     // ── État ──────────────────────────────────────────────────────────
@@ -819,35 +819,43 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
     private fun drawLabels(canvas: Canvas) {
         val spacing = CalibrationActivity.getTemplateSpacing(context)
-        data class LabelEntry(val firstIdx: Int, val label: String, val anchor: Pair<Float, Float>, val snapY: Float, val isSelected: Boolean)
+        data class LabelEntry(val firstIdx: Int, val label: String, val groupLeft: Float, val snapY: Float, val isSelected: Boolean)
         val entries = mutableListOf<LabelEntry>()
         for ((firstIdx, label) in engine.groupLabels) {
             val anchor = engine.groupAnchor[firstIdx] ?: continue
             val snapY = engine.snapToLine(anchor.second)
+            // Trouver le groupe pour sa position gauche
+            val gm = engine.groupManager
+            var gLeft = anchor.first  // fallback
+            if (gm != null) {
+                val group = gm.allGroupsFull().find { g ->
+                    val firstSid = g.strokeIds.firstOrNull() ?: return@find false
+                    engine.inkStrokeIdToRegistryIndex[firstSid] == firstIdx
+                }
+                if (group != null) gLeft = group.bounds.left
+            }
             var isSel = false
             if (selectedGroupId != null) {
-                val gm = engine.groupManager
                 val selGroup = gm?.allGroupsFull()?.find { it.id == selectedGroupId }
                 val selFirstSid = selGroup?.strokeIds?.firstOrNull()
                 val selFirstRI = selFirstSid?.let { engine.inkStrokeIdToRegistryIndex[it] }
                 isSel = selFirstRI == firstIdx
             }
-            entries.add(LabelEntry(firstIdx, label, anchor, snapY, isSel))
+            entries.add(LabelEntry(firstIdx, label, gLeft, snapY, isSel))
         }
-        entries.sortWith(compareBy<LabelEntry> { it.snapY }.thenBy { it.anchor.first })
+        entries.sortWith(compareBy<LabelEntry> { it.snapY }.thenBy { it.groupLeft })
 
-        for ((_, label, anchor, snapY, isSel) in entries) {
+        for ((_, label, groupLeft, snapY, isSel) in entries) {
             val textW = labelPaint.measureText(label)
-            val labelY = snapY + 18f  // sous l'interligne
+            val labelX = groupLeft  // aligné au début du groupe
+            val labelY = snapY + 18f
             val bgRect = android.graphics.RectF(
-                anchor.first - textW / 2f - 8f, labelY - 24f,
-                anchor.first + textW / 2f + 8f, labelY + 10f
+                labelX - 4f, labelY - 24f,
+                labelX + textW + 8f, labelY + 10f
             )
             val bgColor = if (isSel) Color.argb(220, 220, 235, 255) else Color.argb(180, 255, 255, 255)
             canvas.drawRoundRect(bgRect, 6f, 6f, Paint().apply { color = bgColor; style = Paint.Style.FILL })
-            canvas.drawCircle(anchor.first, anchor.second, 3f,
-                Paint().apply { color = Color.argb(150, 80, 80, 180); style = Paint.Style.FILL })
-            canvas.drawText(label, anchor.first, labelY, labelPaint)
+            canvas.drawText(label, labelX, labelY, labelPaint)
         }
     }
 
