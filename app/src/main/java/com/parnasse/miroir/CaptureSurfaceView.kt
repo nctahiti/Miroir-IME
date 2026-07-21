@@ -838,7 +838,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
         for ((_, label, anchor, snapY, isSel) in entries) {
             val textW = labelPaint.measureText(label)
-            val labelY = snapY + spacing * 0.6f  // sous l'interligne
+            val labelY = snapY + 8f  // collé sous l'interligne
             val bgRect = android.graphics.RectF(
                 anchor.first - textW / 2f - 8f, labelY - 24f,
                 anchor.first + textW / 2f + 8f, labelY + 10f
