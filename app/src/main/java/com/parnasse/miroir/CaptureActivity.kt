@@ -288,42 +288,21 @@ class CaptureActivity : Activity() {
     private fun showPlusMenu(anchor: View) {
         val popup = PopupMenu(this, anchor)
         popup.menu.add("Nouvelle page (après)").setOnMenuItemClickListener {
-            val total = engine.countPages()
-            if (total == 0 || engine.currentPageIndex >= total - 1) {
-                engine.newPage()
-            } else {
-                // Insérer après la page courante
-                engine.savePageFull()
-                val bd = engine.blockDir ?: return@setOnMenuItemClickListener true
-                val insertAt = engine.currentPageIndex + 1
-                for (i in total - 1 downTo insertAt) {
-                    java.io.File(bd, "page_$i").renameTo(java.io.File(bd, "page_${i + 1}"))
-                }
-                engine.clearPage()
-                engine.currentPageIndex = insertAt
-            }
+            engine.newPage()  // insère après la page courante
             captureView?.clearCanvas()
             updatePageCounter()
             captureView?.invalidate()
             true
         }
         popup.menu.add("Nouvelle page (début)").setOnMenuItemClickListener {
-            engine.savePageFull()
-            val bd = engine.blockDir ?: return@setOnMenuItemClickListener true
-            val total = engine.countPages()
-            for (i in total - 1 downTo 0) {
-                java.io.File(bd, "page_$i").renameTo(java.io.File(bd, "page_${i + 1}"))
-            }
-            engine.clearPage()
-            engine.currentPageIndex = 0
+            engine.newPageAtBeginning()
             captureView?.clearCanvas()
             updatePageCounter()
             captureView?.invalidate()
             true
         }
         popup.menu.add("Nouvelle page (fin)").setOnMenuItemClickListener {
-            engine.savePageFull()
-            engine.newPage()
+            engine.newPageAtEnd()
             captureView?.clearCanvas()
             updatePageCounter()
             captureView?.invalidate()

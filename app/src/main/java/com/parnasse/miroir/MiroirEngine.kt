@@ -359,15 +359,44 @@ class MiroirEngine {
     // PAGES
     // ═══════════════════════════════════════════════════════════════════
 
+    /** Insère une nouvelle page APRÈS la page courante (décale vers la droite).
+     *  Si on est sur la dernière page, ajoute simplement à la fin. */
     fun newPage() {
-        savePageFull()  // sauvegarde complète avant de changer de page
+        savePageFull()
         val bd = blockDir ?: return
         val total = countPages()
-        for (i in total - 1 downTo currentPageIndex) {
+        if (currentPageIndex >= total - 1 || total == 0) {
+            // Dernière page ou bloc vide → ajouter à la fin, pas de décalage
+            clearPage()
+            currentPageIndex = total
+        } else {
+            // Insérer après currentPageIndex → décaler les pages suivantes
+            for (i in total - 1 downTo currentPageIndex + 1) {
+                File(bd, "page_$i").renameTo(File(bd, "page_${i + 1}"))
+            }
+            clearPage()
+            currentPageIndex = currentPageIndex + 1
+        }
+    }
+
+    /** Insère une nouvelle page au DÉBUT du bloc (décale tout vers la droite). */
+    fun newPageAtBeginning() {
+        savePageFull()
+        val bd = blockDir ?: return
+        val total = countPages()
+        for (i in total - 1 downTo 0) {
             File(bd, "page_$i").renameTo(File(bd, "page_${i + 1}"))
         }
         clearPage()
-        currentPageIndex = (currentPageIndex + 1).coerceAtMost(total)
+        currentPageIndex = 0
+    }
+
+    /** Ajoute une nouvelle page à la FIN du bloc (pas de décalage). */
+    fun newPageAtEnd() {
+        savePageFull()
+        val total = countPages()
+        clearPage()
+        currentPageIndex = total
     }
 
     fun clearPage() {
