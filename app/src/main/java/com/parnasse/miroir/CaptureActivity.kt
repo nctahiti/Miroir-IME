@@ -139,31 +139,13 @@ class CaptureActivity : Activity() {
     // ═══════════════════════════════════════════════════════════════════
 
     private fun buildBlockView() {
-        val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
-
-        // Couche 1 : View standard — blobs, labels, template, strokes
-        captureView = CaptureSurfaceView(this, engine).also { cv ->
-            cv.onReturnToWriting = { returnToWriting() }
-            root.addView(cv, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT))
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.WHITE)
         }
 
-        // Couche 2 : SurfaceView FONTAINE — capture + rendu plume
-        fontaineOverlay = FontaineOverlay(this, engine).also { fo ->
-            fo.onStrokeFinished = { _ -> scheduleInference() }
-            fo.onStrokeBegin = { cancelTimers() }
-            fo.onLongPressDetected = { x, y -> handleLongPress(x, y) }
-            root.addView(fo, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT))
-        }
-
-        captureView?.fontaineOverlay = fontaineOverlay
-
-        // ═══ BARRE D'OUTILS ═══
+        // ═══ BARRE D'OUTILS (hauteur fixe, toujours au-dessus) ═══
         // [✕]    [◄ 1/5 ►]    [+]
-        //        [👁 ouvert]
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -219,9 +201,9 @@ class CaptureActivity : Activity() {
             showPlusMenu(view)
         })
 
-        root.addView(toolbar, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.TOP })
+        root.addView(toolbar, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT))
 
         // ═══ LIGNE 2 : Œil de calibration ═══
         val eyeBar = LinearLayout(this).apply {
@@ -241,12 +223,38 @@ class CaptureActivity : Activity() {
             }
         }
         eyeBar.addView(eyeButton)
-        root.addView(eyeBar, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT).apply {
-            gravity = Gravity.CENTER_HORIZONTAL or Gravity.TOP
-            topMargin = 78  // en dessous de la toolbar
+        root.addView(eyeBar, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
         })
+
+        // ═══ ZONE DE CAPTURE (en dessous de l'interface, occupe tout l'espace restant) ═══
+        val captureFrame = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
+
+        // Couche 1 : View standard — blobs, labels, template, strokes
+        captureView = CaptureSurfaceView(this, engine).also { cv ->
+            cv.onReturnToWriting = { returnToWriting() }
+            captureFrame.addView(cv, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT))
+        }
+
+        // Couche 2 : SurfaceView FONTAINE — capture + rendu plume
+        fontaineOverlay = FontaineOverlay(this, engine).also { fo ->
+            fo.onStrokeFinished = { _ -> scheduleInference() }
+            fo.onStrokeBegin = { cancelTimers() }
+            fo.onLongPressDetected = { x, y -> handleLongPress(x, y) }
+            captureFrame.addView(fo, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT))
+        }
+
+        captureView?.fontaineOverlay = fontaineOverlay
+
+        root.addView(captureFrame, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            0, 1f))  // weight=1 → occupe tout l'espace restant
 
         setContentView(root)
     }
