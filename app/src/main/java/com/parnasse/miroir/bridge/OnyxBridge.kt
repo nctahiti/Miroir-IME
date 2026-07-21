@@ -33,7 +33,10 @@ import kotlinx.coroutines.flow.*
 //       }
 //   }
 //
-// Contribution proposée à Onyx — avec nos remerciements pour leur matériel.
+// Contribution à la communauté OpenBridge — pas à Onyx Corporation.
+// Si Onyx voulait un SDK Kotlin, il l'aurait fait. Nous, on le fait
+// pour les développeurs qui écrivent sur EPD, pas pour une entreprise.
+// Ce code est libre — utilisez-le, améliorez-le, partagez-le.
 // Projet Parnasse Numérique — Juillet 2026
 
 /**
