@@ -95,6 +95,11 @@ class GroupManager(
             }
         }
 
+        // ═══ Nettoyer l'ancien groupe avant réassignation ═══
+        val oldGroupId = strokeToGroup[stroke.id]
+        if (oldGroupId != null && oldGroupId != group.id) {
+            groups[oldGroupId]?.strokeIds?.remove(stroke.id)
+        }
         group.strokeIds.add(stroke.id)
         strokeToGroup[stroke.id] = group.id
         expandBounds(group, strokeBounds)
@@ -270,6 +275,11 @@ class GroupManager(
     fun registerLoadedGroup(group: InkGroup) {
         groups[group.id] = group
         for (sid in group.strokeIds) {
+            // ═══ Nettoyer l'ancien groupe avant réassignation ═══
+            val oldGroupId = strokeToGroup[sid]
+            if (oldGroupId != null && oldGroupId != group.id) {
+                groups[oldGroupId]?.strokeIds?.remove(sid)
+            }
             strokeToGroup[sid] = group.id
         }
         machine.transition(group, GroupState.STORED)
@@ -281,10 +291,19 @@ class GroupManager(
      *  Met à jour strokeToGroup, les bounds, et persiste. */
     fun syncStrokeIds(groupId: String, strokeIds: List<Long>) {
         val group = groups[groupId] ?: return
+        // ═══ Nettoyer les anciennes associations strokeToGroup ═══
+        for (sid in group.strokeIds) {
+            if (strokeToGroup[sid] == groupId) strokeToGroup.remove(sid)
+        }
         val oldCount = group.strokeIds.size
         group.strokeIds.clear()
         group.strokeIds.addAll(strokeIds)
         for (sid in strokeIds) {
+            // ═══ Nettoyer l'ancien groupe avant réassignation ═══
+            val oldGroupId = strokeToGroup[sid]
+            if (oldGroupId != null && oldGroupId != groupId) {
+                groups[oldGroupId]?.strokeIds?.remove(sid)
+            }
             strokeToGroup[sid] = groupId
         }
         // ═══ Recalculer les bounds à partir de TOUS les strokeIds ═══
