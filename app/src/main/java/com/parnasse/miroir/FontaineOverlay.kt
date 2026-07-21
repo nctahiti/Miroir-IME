@@ -106,8 +106,8 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
         try {
             val callback = object : com.onyx.android.sdk.pen.RawInputCallback() {
                 override fun onBeginRawDrawing(eraser: Boolean, tp: com.onyx.android.sdk.data.note.TouchPoint) {
+                    if (modeInteraction) return  // pas de keepRawDrawingActive — fontaine désactivée
                     keepRawDrawingActive()
-                    if (modeInteraction) return
                     strokeCount++
                     Log.i(TAG, "🖊️ BEGIN #$strokeCount eraser=$eraser x=${tp.x.toInt()} y=${tp.y.toInt()}")
                     isStylusDown = true
@@ -126,19 +126,26 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                 }
 
                 override fun onRawDrawingTouchPointMoveReceived(tp: com.onyx.android.sdk.data.note.TouchPoint?) {
+                    if (modeInteraction) {
+                        if (tp != null) handleGestureMove(tp.x, tp.y)
+                        return  // pas de keepRawDrawingActive — fontaine désactivée
+                    }
                     keepRawDrawingActive()
                     if (tp != null) {
-                        if (modeInteraction) {
-                            handleGestureMove(tp.x, tp.y)
-                        } else {
-                            if (!strokeStarted) startDeferredStroke()
-                            lpTotalDist += Math.hypot((tp.x - lastLPX).toDouble(), (tp.y - lastLPY).toDouble()).toFloat()
-                            lastLPX = tp.x; lastLPY = tp.y
-                        }
+                        if (!strokeStarted) startDeferredStroke()
+                        lpTotalDist += Math.hypot((tp.x - lastLPX).toDouble(), (tp.y - lastLPY).toDouble()).toFloat()
+                        lastLPX = tp.x; lastLPY = tp.y
                     }
                 }
 
                 override fun onRawDrawingTouchPointListReceived(list: com.onyx.android.sdk.pen.data.TouchPointList?) {
+                    if (modeInteraction) {
+                        for (i in 0 until (list?.size() ?: 0)) {
+                            val pt = list?.get(i) ?: continue
+                            handleGestureMove(pt.x, pt.y)
+                        }
+                        return  // pas de keepRawDrawingActive
+                    }
                     keepRawDrawingActive()
                     if (!isStylusDown || list == null) return
                     for (i in 0 until list.size()) {
@@ -163,6 +170,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                     if (modeInteraction) {
                         onGestureEnd?.invoke()
                         gestureMode = null
+                        return  // pas de traitement écriture
                         Log.i(TAG, "🖊️ END   (geste) mode=$gestureMode")
                     } else if (!strokeStarted) {
                         // Tap sans mouvement → pas de stroke créé
