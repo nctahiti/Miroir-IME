@@ -162,7 +162,9 @@ class GroupManager(
         newGroup.orderIndex = nextOrderIndex++
         groups[newGroup.id] = newGroup
         machine.makeActive(newGroup.id, oldGroup)
-        Log.i(TAG, "Nouveau LOADED: " + newGroup.id + " | seq=${newGroup.orderIndex} | cache=" + groups.size)
+        // ═══ Nouveau groupe automatiquement SELECTED → blob visible ═══
+        machine.transition(newGroup, GroupState.SELECTED)
+        Log.i(TAG, "Nouveau SELECTED: " + newGroup.id + " | seq=${newGroup.orderIndex} | cache=" + groups.size)
         return newGroup
     }
 
