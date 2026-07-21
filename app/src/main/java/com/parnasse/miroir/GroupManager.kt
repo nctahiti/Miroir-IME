@@ -145,15 +145,11 @@ class GroupManager(
     }
     fun getOrCreateActiveGroup(): InkGroup {
         val selectedId = machine.pendingGroupId
-        // ═══ Si un groupe est SELECTED, NE PAS le désélectionner (l'utilisateur l'a choisi) ═══
-        // Le nouveau stroke non-absorbé crée un nouveau groupe, mais le SELECTED reste.
-        if (selectedId != null) {
-            val selectedGroup = groups[selectedId]
-            if (selectedGroup != null && selectedGroup.state == GroupState.SELECTED) {
-                Log.i(TAG, "SELECTED present (${selectedId.take(8)}), deselection automatique — nouveau mot hors zone")
-                deselectGroup(selectedId)
-            }
-        }
+        // ═══ Si un groupe est SELECTED, il reste SELECTED ═══
+        // L'utilisateur l'a choisi pour absorption. Le nouveau stroke
+        // hors zone crée un nouveau groupe LOADED, mais le SELECTED
+        // reste ouvert — il absorbera les prochains strokes dans son blob.
+        // Pas de deselection automatique.
         evictAllStored()
         val currentActiveId = machine.activeGroupId
         val oldGroup = currentActiveId?.let { groups[it] }

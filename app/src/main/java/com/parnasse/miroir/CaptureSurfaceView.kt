@@ -624,13 +624,21 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         // 1. Bitmap (fond + strokes sauvegardés)
         engine.bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
 
-        // 2. Blob du groupe sélectionné uniquement (comme l'IME)
-        // Les blobs des groupes non-sélectionnés ne sont pas affichés —
-        // ils restent cliquables via hitTest mais invisibles.
+        // 2. Blobs visibles :
+        //    - Groupe SELECTED (ouvert pour absorption) → trait épais
+        //    - Groupe ACTIF (nouveau mot en cours) → trait fin
         val selId = selectedGroupId
         if (selId != null) {
             engine.groupBlobs[selId]?.let { blob ->
                 canvas.drawPath(blob.path, selectedBlobPaint)
+            }
+        }
+        val activeId = engine.groupManager?.let { gm ->
+            gm.groupsInState(GroupState.LOADED).firstOrNull()?.id
+        }
+        if (activeId != null && activeId != selId) {
+            engine.groupBlobs[activeId]?.let { blob ->
+                canvas.drawPath(blob.path, blobPaint)
             }
         }
 
