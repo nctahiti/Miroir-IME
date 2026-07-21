@@ -212,13 +212,13 @@ class CaptureActivity : Activity() {
             setPadding(0, 0, 0, 4)
         }
         eyeButton = TextView(this).apply {
-            text = if (captureView?.showLabels != false) "\uD83D\uDC41" else "\uD83D\uDC41\u200D\uD83D\uDDE8"  // 👁 / 👁‍🗨
-            textSize = 24f
+            text = if (captureView?.showLabels != false) "\uD83D\uDC41" else "\u2323"  // 👁 / ⌣ (œil fermé)
+            textSize = 32f
             setPadding(16, 4, 16, 4)
             setOnClickListener {
                 val cv = captureView ?: return@setOnClickListener
                 cv.showLabels = !cv.showLabels
-                text = if (cv.showLabels) "\uD83D\uDC41" else "\uD83D\uDC41\u200D\uD83D\uDDE8"
+                text = if (cv.showLabels) "\uD83D\uDC41" else "\u2323"
                 cv.invalidate()
             }
         }
