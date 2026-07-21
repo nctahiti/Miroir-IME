@@ -819,35 +819,26 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
     private fun drawLabels(canvas: Canvas) {
         val spacing = CalibrationActivity.getTemplateSpacing(context)
-        data class LabelEntry(val firstIdx: Int, val label: String, val groupLeft: Float, val snapY: Float, val isSelected: Boolean)
+        data class LabelEntry(val firstIdx: Int, val label: String, val anchorX: Float, val snapY: Float, val isSelected: Boolean)
         val entries = mutableListOf<LabelEntry>()
         for ((firstIdx, label) in engine.groupLabels) {
             val anchor = engine.groupAnchor[firstIdx] ?: continue
             val snapY = engine.snapToLine(anchor.second)
-            // Trouver le groupe pour sa position gauche
-            val gm = engine.groupManager
-            var gLeft = anchor.first  // fallback
-            if (gm != null) {
-                val group = gm.allGroupsFull().find { g ->
-                    val firstSid = g.strokeIds.firstOrNull() ?: return@find false
-                    engine.inkStrokeIdToRegistryIndex[firstSid] == firstIdx
-                }
-                if (group != null) gLeft = group.bounds.left
-            }
             var isSel = false
             if (selectedGroupId != null) {
+                val gm = engine.groupManager
                 val selGroup = gm?.allGroupsFull()?.find { it.id == selectedGroupId }
                 val selFirstSid = selGroup?.strokeIds?.firstOrNull()
                 val selFirstRI = selFirstSid?.let { engine.inkStrokeIdToRegistryIndex[it] }
                 isSel = selFirstRI == firstIdx
             }
-            entries.add(LabelEntry(firstIdx, label, gLeft, snapY, isSel))
+            entries.add(LabelEntry(firstIdx, label, anchor.first, snapY, isSel))
         }
-        entries.sortWith(compareBy<LabelEntry> { it.snapY }.thenBy { it.groupLeft })
+        entries.sortWith(compareBy<LabelEntry> { it.snapY }.thenBy { it.anchorX })
 
-        for ((_, label, groupLeft, snapY, isSel) in entries) {
+        for ((_, label, anchorX, snapY, isSel) in entries) {
             val textW = labelPaint.measureText(label)
-            val labelX = groupLeft  // aligné au début du groupe
+            val labelX = anchorX  // position de l'encre (premier point du groupe)
             val labelY = snapY + 18f
             val bgRect = android.graphics.RectF(
                 labelX - 4f, labelY - 24f,
