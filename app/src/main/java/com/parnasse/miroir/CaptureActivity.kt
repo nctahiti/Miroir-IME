@@ -289,7 +289,10 @@ class CaptureActivity : Activity() {
         Log.i(TAG, "📊 CACHE refresh: strokes=$strokes/$totalStrokes inkMap=$inkMappings " +
             "blobs=$blobs labels=$labels groupes=cache$cacheGroups/all$allGroups")
         fontaineOverlay?.desactiver()
-        captureView?.redrawBitmapOnly()  // copier les strokes dans le bitmap avant d'effacer
+        // ═══ Pas de redrawBitmapOnly() ici — le bitmap est déjà à jour ═══
+        // endStroke() rasterise chaque stroke immédiatement. Les strokes
+        // archivés restent dans le bitmap (mode incrémental). redrawBitmapOnly()
+        // n'est nécessaire que pour les suppressions (eraseGroup l'appelle déjà).
         captureView?.invalidate()
         fontaineOverlay?.activer()
         Log.d(TAG, "Display refresh — éviction groupes inactifs")
