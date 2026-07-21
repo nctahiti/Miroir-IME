@@ -38,19 +38,16 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         color = Color.BLACK; strokeWidth = 3f; style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true
     }
+    // ── Blob : contour seul (comme l'IME) — pas de FILL, pas d'alpha ──
+    // Le FILL avec alpha est très coûteux sur EPD (fusion alpha pixel par pixel).
+    // STROKE noir → rendu instantané, même sur page pleine.
     private val blobPaint = Paint().apply {
-        color = Color.argb(25, 100, 150, 255); style = Paint.Style.FILL; isAntiAlias = true
-    }
-    private val blobBorderPaint = Paint().apply {
-        color = Color.argb(80, 100, 130, 200); style = Paint.Style.STROKE
-        strokeWidth = 1.5f; isAntiAlias = true
+        color = Color.BLACK; style = Paint.Style.STROKE
+        strokeWidth = 1.5f; isAntiAlias = false
     }
     private val selectedBlobPaint = Paint().apply {
-        color = Color.argb(60, 80, 160, 255); style = Paint.Style.FILL; isAntiAlias = true
-    }
-    private val selectedBlobBorderPaint = Paint().apply {
-        color = Color.argb(200, 60, 140, 255); style = Paint.Style.STROKE
-        strokeWidth = 2.5f; isAntiAlias = true
+        color = Color.BLACK; style = Paint.Style.STROKE
+        strokeWidth = 3.5f; isAntiAlias = false  // plus épais = visuellement sélectionné
     }
     private val labelPaint = Paint().apply {
         color = Color.argb(200, 80, 80, 180); textSize = 30f; isAntiAlias = true
@@ -416,7 +413,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     fun drawSelectedBlobOn(fontaine: FontaineOverlay?) {
         val gid = selectedGroupId ?: return
         val blob = engine.groupBlobs[gid] ?: return
-        fontaine?.dessinerBlob(blob.path, blob.bounds, selectedBlobPaint, selectedBlobBorderPaint)
+        fontaine?.dessinerBlob(blob.path, blob.bounds, selectedBlobPaint, selectedBlobPaint)
     }
 
     private fun enterCorrectionMode(gid: String) {
@@ -607,22 +604,14 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         // 1. Bitmap (fond + strokes sauvegardés)
         engine.bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
 
-        // 2. Blobs (par-dessus le bitmap pour être visibles)
+        // 2. Blobs : contour STROKE seulement (pas de FILL, pas d'alpha)
+        // Un seul drawPath par blob — comme l'IME.
         val gm = engine.groupManager
         if (gm != null) {
             for (g in gm.allGroupsFull()) {
                 val blob = engine.groupBlobs[g.id] ?: continue
-                val isSel = g.id == selectedGroupId
-                if (isSel) {
-                    canvas.drawPath(blob.path, selectedBlobPaint)
-                    canvas.drawPath(blob.path, selectedBlobBorderPaint)
-                } else {
-                    val p = Paint().apply {
-                        color = Color.argb(12, 100, 150, 255)
-                        style = Paint.Style.FILL; isAntiAlias = true
-                    }
-                    canvas.drawPath(blob.path, p)
-                }
+                val paint = if (g.id == selectedGroupId) selectedBlobPaint else blobPaint
+                canvas.drawPath(blob.path, paint)
             }
         }
 
