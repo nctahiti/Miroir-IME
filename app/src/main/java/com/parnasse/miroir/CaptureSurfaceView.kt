@@ -267,10 +267,19 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         return if (idx in correctionLabel.indices) idx else -1
     }
 
+    /** Hit-test blob elliptique (path, pas juste bounding box). */
     private fun hitTestBlob(x: Float, y: Float): String? {
         for ((gid, blob) in engine.groupBlobs) {
+            // Filtre rapide : bounding box rectangulaire
             val b = blob.bounds
-            if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) return gid
+            if (x < b.left || x > b.right || y < b.top || y > b.bottom) continue
+            // Test précis : point dans le path elliptique
+            val r = android.graphics.RectF(b.left, b.top, b.right, b.bottom)
+            val region = android.graphics.Region()
+            region.setPath(blob.path, android.graphics.Region(
+                r.left.toInt(), r.top.toInt(), r.right.toInt(), r.bottom.toInt()
+            ))
+            if (region.contains(x.toInt(), y.toInt())) return gid
         }
         return null
     }
