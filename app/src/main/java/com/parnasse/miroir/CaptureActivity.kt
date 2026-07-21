@@ -317,6 +317,8 @@ class CaptureActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // Recharger les paramètres de calibration (blob, template)
+        engine.applyCalibrationParams(this)
     }
 
     override fun onDestroy() {

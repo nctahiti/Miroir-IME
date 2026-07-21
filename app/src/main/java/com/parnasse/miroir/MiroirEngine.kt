@@ -100,6 +100,17 @@ class MiroirEngine {
         }
     }
 
+    /** Recharge les paramètres de calibration (blob, template) depuis SharedPreferences.
+     *  Appelé dans onResume() pour propager les changements faits dans CalibrationActivity. */
+    fun applyCalibrationParams(context: Context) {
+        val gm = groupManager ?: return
+        val calX = CalibrationActivity.getSpatialDistanceX(context)
+        val calY = CalibrationActivity.getSpatialDistanceY(context)
+        gm.params = gm.params.copy(spatialDistancePx = calX, spatialDistanceY = calY)
+        updateTemplateSpacing(context, context.resources.displayMetrics.heightPixels)
+        Log.d(TAG, "Calibration appliquée: blobRx=$calX blobRy=$calY")
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // CAPTURE DE STROKE (utilise par CaptureSurface)
     // ═══════════════════════════════════════════════════════════════════
