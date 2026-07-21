@@ -1,6 +1,56 @@
 # Changelog — Miroir IME
 
-## 2026-07-17 — Session « Stabilité des groupes »
+## 2026-07-21 — Session « Fontaine & UxK standalone » (38 commits)
+
+### Cache & Performance
+- **Archivage des strokes** (`StrokeRecord.isArchived`) : strokes des groupes STORED ignorés au redraw
+- **`evictInactive()`** appelé dans `refreshDisplay()`, `savePageFull()`, `savePage()` IME
+- **`redrawBitmapInternal(fullRedraw)`** : mode incrémental (préserve bitmap, efface supprimés) vs full (chargement)
+- **`isAntiAlias=false`** sur tous les paints de redraw (EPD)
+- **Garde-fou `modeInteraction`** : callbacks fontaine skippent `keepRawDrawingActive()` pendant le drag
+
+### Blobs & Rendu
+- Blobs STROKE noir sans alpha (aligné IME) — FILL alpha très coûteux sur EPD
+- Seul le blob SELECTED est affiché (`groupsInState(SELECTED)`, source de vérité)
+- `hitTestBlob()` utilise le path elliptique (`Region.setPath()`) — pas la bounding box
+- `loadPageFull()` reconstruit le bitmap depuis les strokes (plus de PNG corrompu)
+
+### Groupes & Absorption
+- **Nettoyage `strokeToGroup`** : `onStrokeSealed()`, `registerLoadedGroup()`, `syncStrokeIds()` retirent le stroke de l'ancien groupe avant réassignation
+- **Nouveau groupe automatiquement SELECTED** → blob visible immédiatement
+- **Désélection automatique** quand un stroke est écrit hors du blob SELECTED
+- **`returnToWriting()`** ne désélectionne plus — le SELECTED persiste au relâchement
+- **Ré-inférence** après effacement (`scrubGroup`) et absorption (`onStrokeSealed`)
+
+### Interface standalone
+- Refonte toolbar : `[✕] [◄ 1/5 ►] [+]` avec menus contextuels (clic long)
+- `✕` → fermer bloc + ouvrir nouveau | menu : Vider, Paramètres, Fermer
+- `+` → nouvelle page | menu : Début, Après, Fin
+- `newPage()`, `newPageAtBeginning()`, `newPageAtEnd()` dans MiroirEngine
+- Zone de capture sous la toolbar (LinearLayout vertical)
+- Œil calibration 👁/⌣ (32f) — toggle labels
+- Labels sous l'interligne, 40f, alignés à gauche (`anchor.first`)
+
+### Scrub (effacement)
+- Position relative du stylet dans la largeur du groupe → ratio de coupe
+- Preview : surbrillance des points conservés (trait 5f)
+- Application au PEN_UP (`applyScrubCut()`)
+
+### Déplacement (moveGroup)
+- Aligné IME : `drawColor(CLEAR)` + `fullRedraw` + `Matrix.translate` blob
+- Effacement ciblé remplacé par redraw complet (plus rapide sur EPD)
+
+### Calibration
+- Menu épuré : Blob X/Y, Délai inférence, Délai affichage, Appui long, Template
+- `applyCalibrationParams()` dans `onResume()` — paramètres propagés en temps réel
+- `scheduleInference()` utilise les délais de calibration
+- `FontaineOverlay` long-press utilise `getLongPressDelay()`
+
+### MDM
+- Regex accepte l'apostrophe et le tiret : `@([\w'\-]+)`
+- Métadonnées strokes/points : `@mot{5s/120p}` — rétrocompatible
+
+---
 
 ### `0073f99` — fix: réécriture V★ propre + captureIndices + flux texte MDM
 
