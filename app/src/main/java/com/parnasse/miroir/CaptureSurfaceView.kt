@@ -727,8 +727,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             drawCorrectionFrame(canvas)
         }
 
-        // 5. Labels (sauf en mode correction — le cadre les remplace)
-        if (!isCorrecting() && showLabels && engine.groupLabels.isNotEmpty()) {
+        // 5. Labels (toujours visibles, même en mode correction)
+        if (showLabels && engine.groupLabels.isNotEmpty()) {
             drawLabels(canvas)
         }
 
