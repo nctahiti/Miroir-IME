@@ -332,16 +332,16 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         }
     }
 
-    /** UP après un long-press → sortir du mode édition, réactiver la fontaine (sauf correction). */
+    /** UP après un long-press → appliquer la coupe scrub, sortir du mode édition. */
     private fun handleLongPressUp() {
+        // Appliquer la coupe scrub si active (PEN_UP en mode ERASE)
+        if (editMode == EditMode.ERASE) applyScrubCut()
         val wasCorrecting = editMode == EditMode.CORRECT_TRANSCRIPTION
         exitGestureMode()
         longPressArmed = false
         if (!wasCorrecting) {
-            // ←/↓/→ : retour à l'écriture
             onReturnToWriting?.invoke()
         }
-        // ↑ correction : rester en mode interaction (clic sur les lettres)
         invalidate()
     }
 
@@ -472,14 +472,12 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     // ═══════════════════════════════════════════════════════════════════
 
     private val erasedStrokes = mutableSetOf<Int>()
-    private var scrubBaseX = 0f
     private var gestureStartX = 0f
     private var gestureStartY = 0f
 
     /** Active le mode effacement. Appelé par CaptureActivity après détection du geste. */
     fun enterEraseMode(startX: Float) {
         editMode = EditMode.ERASE
-        scrubBaseX = startX
         gestureStartX = startX
         Log.i(TAG, "→ Mode EFFACEMENT")
     }
@@ -492,68 +490,107 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         Log.i(TAG, "→ Mode DÉPLACEMENT")
     }
 
-    /** Effacement proportionnel (scrub) — efface les strokes du groupe sélectionné. */
+    /** Position de coupe preview (0.0 à 1.0, -1 si pas de scrub actif). */
+    private var scrubCutRatio: Float = -1f
+    /** Ligne de coupe verticale affichée pendant le scrub. */
+    private var scrubCutX: Float = 0f
+
+    /** Preview du scrub : calcule la position de coupe sans modifier les strokes.
+     *  La coupe est appliquée au PEN_UP via applyScrubCut(). */
     fun scrubGroup(currentX: Float) {
         val gid = selectedGroupId ?: return
         val gm = engine.groupManager ?: return
         val group = gm.allGroupsFull().find { it.id == gid } ?: return
         if (group.strokeIds.isEmpty()) return
-        val dx = scrubBaseX - currentX
-        if (dx < 3f) return
-        scrubBaseX = currentX
+
+        val gb = group.bounds
+        val groupWidth = gb.right - gb.left
+        if (groupWidth <= 0f) return
+
+        // Position relative du stylet dans la largeur du groupe (0.0 = début, 1.0 = fin)
+        val ratio = ((currentX - gb.left) / groupWidth).coerceIn(0f, 1f)
+        scrubCutRatio = ratio
+        scrubCutX = gb.left + groupWidth * ratio
+
+        // Redessiner pour montrer le trait de coupe
+        invalidate()
+    }
+
+    /** Applique la coupe au PEN_UP : garde les points avant scrubCutRatio, supprime après. */
+    fun applyScrubCut() {
+        if (scrubCutRatio < 0f) return
+        val gid = selectedGroupId ?: return
+        val gm = engine.groupManager ?: return
+        val group = gm.allGroupsFull().find { it.id == gid } ?: return
 
         val strokes = group.strokeIds.mapNotNull { sid ->
             val idx = engine.inkStrokeIdToRegistryIndex[sid]
             if (idx != null && idx < engine.strokeRegistry.size) idx to engine.strokeRegistry[idx] else null
-        }.filter { (idx, sr) -> idx !in erasedStrokes && sr.points.size >= 2 }
+        }.filter { (_, sr) -> sr.points.size >= 2 }
 
-        var remaining = dx.toDouble()
-        for ((idx, sr) in strokes.reversed()) {
-            if (remaining <= 0.0) break
-            if (idx in erasedStrokes) continue
+        if (strokes.isEmpty()) { scrubCutRatio = -1f; return }
+
+        // Calculer la longueur totale des strokes pour mapper ratio → position
+        val strokeLengths = strokes.map { (_, sr) ->
+            var len = 0.0
             val pts = sr.points
-            var strokeLen = 0.0
             for (i in 1 until pts.size)
-                strokeLen += Math.hypot((pts[i].first - pts[i-1].first).toDouble(), (pts[i].second - pts[i-1].second).toDouble())
-            if (strokeLen <= remaining) {
+                len += Math.hypot((pts[i].first - pts[i-1].first).toDouble(), (pts[i].second - pts[i-1].second).toDouble())
+            len
+        }
+        val totalLen = strokeLengths.sum()
+        if (totalLen <= 0.0) { scrubCutRatio = -1f; return }
+        val cutLen = totalLen * scrubCutRatio
+
+        // Couper : accumuler la longueur, garder avant, supprimer après
+        var accum = 0.0
+        for (i in strokes.indices) {
+            val (idx, sr) = strokes[i]
+            val sl = strokeLengths[i]
+            if (accum + sl <= cutLen) {
+                // Ce stroke est entièrement avant la coupe → garder
+                accum += sl
+            } else if (accum >= cutLen) {
+                // Ce stroke est entièrement après la coupe → supprimer
                 sr.points.clear(); sr.timestamps.clear(); sr.pressures.clear()
                 sr.isDeleted = true
                 erasedStrokes.add(idx)
-                remaining -= strokeLen
             } else {
-                var accum = 0.0; var cutIdx = pts.size
-                for (i in pts.size - 1 downTo 1) {
-                    accum += Math.hypot((pts[i].first - pts[i-1].first).toDouble(), (pts[i].second - pts[i-1].second).toDouble())
-                    if (accum >= remaining) { cutIdx = i; break }
+                // La coupe tombe dans ce stroke → couper les points
+                val pts = sr.points
+                var ptAccum = 0.0
+                var cutPtIdx = pts.size
+                for (j in 1 until pts.size) {
+                    ptAccum += Math.hypot((pts[j].first - pts[j-1].first).toDouble(), (pts[j].second - pts[j-1].second).toDouble())
+                    if (accum + ptAccum >= cutLen) { cutPtIdx = j; break }
                 }
-                if (cutIdx > 0) {
-                    val kept = pts.take(cutIdx)
-                    val keptTs = sr.timestamps.take(cutIdx)
-                    val keptPr = sr.pressures.take(cutIdx)
+                if (cutPtIdx > 0 && cutPtIdx < pts.size) {
+                    val kept = pts.take(cutPtIdx)
+                    val keptTs = sr.timestamps.take(cutPtIdx)
+                    val keptPr = sr.pressures.take(cutPtIdx)
                     sr.points.clear(); sr.points.addAll(kept)
                     sr.timestamps.clear(); sr.timestamps.addAll(keptTs)
                     sr.pressures.clear(); sr.pressures.addAll(keptPr)
                 }
-                remaining = 0.0
+                accum = cutLen
             }
         }
-        // Recalculer le blob après effacement
-        val refreshedGroup: InkGroup? = gm.allGroupsFull().find { it.id == gid }
+
+        // Recalculer le blob
+        val refreshedGroup = gm.allGroupsFull().find { it.id == gid }
         if (refreshedGroup != null) {
-            val newBlob: BlobData? = engine.computeBlobPath(refreshedGroup)
-            if (newBlob != null) {
+            engine.computeBlobPath(refreshedGroup)?.let { newBlob ->
                 engine.groupBlobs[gid] = newBlob
-                val nb = newBlob.bounds
-                refreshedGroup.bounds.set(nb.left, nb.top, nb.right, nb.bottom)
+                refreshedGroup.bounds.set(newBlob.bounds.left, newBlob.bounds.top, newBlob.bounds.right, newBlob.bounds.bottom)
             }
         }
-        // ═══ Effacement → forcer la ré-inférence ═══
-        val firstIdx = group.strokeIds.firstOrNull()
-            ?.let { engine.inkStrokeIdToRegistryIndex[it] }
+
+        // Forcer la ré-inférence
+        val firstIdx = group.strokeIds.firstOrNull()?.let { engine.inkStrokeIdToRegistryIndex[it] }
         if (firstIdx != null) engine.groupLabels.remove(firstIdx)
-        // ═══ fullRedraw : les strokes vidés ont points.size=0 → l'incrémental
-        // ne peut pas les effacer (condition >= 2). On nettoie tout. ═══
+
         engine.redrawBitmapInternal(fullRedraw = true)
+        scrubCutRatio = -1f
         invalidate()
     }
 
@@ -631,13 +668,21 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         engine.bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
 
         // 2. Blob du groupe SELECTED uniquement (comme l'IME)
-        // Le LOADED absorbe silencieusement en arrière-plan, sans blob visible.
         val gm = engine.groupManager
         val realSelectedId = gm?.groupsInState(GroupState.SELECTED)?.firstOrNull()?.id
         if (realSelectedId != null) {
             engine.groupBlobs[realSelectedId]?.let { blob ->
                 canvas.drawPath(blob.path, selectedBlobPaint)
             }
+        }
+
+        // 2b. Trait de coupe scrub (ligne verticale à la position du stylet)
+        if (scrubCutRatio >= 0f) {
+            val cutPaint = android.graphics.Paint().apply {
+                color = Color.argb(180, 200, 50, 50); strokeWidth = 2f
+                style = android.graphics.Paint.Style.STROKE; isAntiAlias = false
+            }
+            canvas.drawLine(scrubCutX, 0f, scrubCutX, height.toFloat(), cutPaint)
         }
 
         // 3. Template
