@@ -247,13 +247,13 @@ class MiroirEngine {
             color = android.graphics.Color.BLACK; strokeWidth = 3f
             style = android.graphics.Paint.Style.STROKE
             strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
-            isAntiAlias = true
+            isAntiAlias = false  // EPD : pas d'anti-aliasing (coûteux, inutile sur e-ink)
         }
         val erasePaint = android.graphics.Paint().apply {
             color = android.graphics.Color.WHITE
             style = android.graphics.Paint.Style.STROKE; strokeWidth = 4f
             strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
-            isAntiAlias = true
+            isAntiAlias = false
         }
 
         if (fullRedraw) {

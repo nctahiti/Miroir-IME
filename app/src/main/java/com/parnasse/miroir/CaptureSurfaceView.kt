@@ -542,26 +542,14 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         invalidate()
     }
 
-    /** Déplace le groupe sélectionné du delta (dx, dy). */
+    /** Déplace le groupe sélectionné du delta (dx, dy).
+     *  Aligné sur l'IME : drawColor(CLEAR) + redraw complet + blob.path.offset(). */
     fun moveGroup(dx: Float, dy: Float) {
         val gid = selectedGroupId ?: return
         val gm = engine.groupManager ?: return
         val group = gm.allGroupsFull().find { it.id == gid } ?: return
 
-        // ═══ 1. Effacer l'ancien blob du bitmap (anti-traînée) ═══
-        val oldBlob = engine.groupBlobs[gid]
-        val canvas = engine.bitmapCanvas
-        if (oldBlob != null && canvas != null) {
-            val erasePaint = android.graphics.Paint().apply {
-                color = android.graphics.Color.WHITE
-                style = android.graphics.Paint.Style.STROKE; strokeWidth = 5f
-                strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
-                isAntiAlias = true
-            }
-            canvas.drawPath(oldBlob.path, erasePaint)
-        }
-
-        // ═══ 2. Translater les strokes ═══
+        // ═══ 1. Translater les strokes ═══
         for (sid in group.strokeIds) {
             val idx = engine.inkStrokeIdToRegistryIndex[sid] ?: continue
             if (idx < engine.strokeRegistry.size) {
@@ -577,32 +565,24 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 engine.groupAnchor[firstIdx] = Pair(anchor.first + dx, anchor.second + dy)
             }
         }
-        val gb: android.graphics.RectF = group.bounds
-        gb.offset(dx, dy)
+        group.bounds.offset(dx, dy)
 
-        // ═══ 3. Redessiner SEULEMENT les strokes du groupe déplacé ═══
-        if (canvas != null) {
-            val paint = android.graphics.Paint().apply {
-                color = android.graphics.Color.BLACK; strokeWidth = 3f
-                style = android.graphics.Paint.Style.STROKE
-                strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
-                isAntiAlias = true
-            }
-            for (sid in group.strokeIds) {
-                val idx = engine.inkStrokeIdToRegistryIndex[sid] ?: continue
-                val sr = engine.strokeRegistry.getOrNull(idx) ?: continue
-                if (sr.isDeleted || sr.points.size < 2) continue
-                val path = android.graphics.Path()
-                path.moveTo(sr.points[0].first, sr.points[0].second)
-                for (i in 1 until sr.points.size) path.lineTo(sr.points[i].first, sr.points[i].second)
-                canvas.drawPath(path, paint)
-            }
+        // ═══ 2. Déplacer le blob directement (pas de recalcul coûteux) ═══
+        engine.groupBlobs[gid]?.let { blob ->
+            val m = android.graphics.Matrix()
+            m.postTranslate(dx, dy)
+            blob.path.transform(m)
+            val b = blob.bounds
+            engine.groupBlobs[gid] = com.parnasse.miroir.BlobData(
+                blob.path,
+                com.parnasse.miroir.RectF(b.left + dx, b.top + dy, b.right + dx, b.bottom + dy)
+            )
         }
 
-        // ═══ 4. Recalculer le blob après déplacement ═══
-        engine.computeBlobPath(group)?.let { newBlob ->
-            engine.groupBlobs[gid] = newBlob
-        }
+        // ═══ 3. Redraw complet (comme l'IME) ═══
+        // drawColor(CLEAR) est O(1) GPU. Redessiner tous les strokes est
+        // acceptable car isAntiAlias=false sur EPD.
+        engine.redrawBitmapInternal(fullRedraw = true)
         invalidate()
     }
 
