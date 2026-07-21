@@ -547,6 +547,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 refreshedGroup.bounds.set(nb.left, nb.top, nb.right, nb.bottom)
             }
         }
+        // ═══ Effacement → forcer la ré-inférence ═══
+        val firstIdx = group.strokeIds.firstOrNull()
+            ?.let { engine.inkStrokeIdToRegistryIndex[it] }
+        if (firstIdx != null) engine.groupLabels.remove(firstIdx)
         redrawBitmapOnly()
         invalidate()
     }
@@ -592,10 +596,6 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         // drawColor(CLEAR) est O(1) GPU. Redessiner tous les strokes est
         // acceptable car isAntiAlias=false sur EPD.
         engine.redrawBitmapInternal(fullRedraw = true)
-        // ═══ Forcer la ré-inférence : le groupe a été modifié ═══
-        val movedFirstIdx = group.strokeIds.firstOrNull()
-            ?.let { engine.inkStrokeIdToRegistryIndex[it] }
-        if (movedFirstIdx != null) engine.groupLabels.remove(movedFirstIdx)
         invalidate()
     }
 
