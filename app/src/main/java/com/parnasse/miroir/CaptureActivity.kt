@@ -350,10 +350,12 @@ class CaptureActivity : Activity() {
     }
 
     private fun scheduleInference() {
+        val inferDelay = CalibrationActivity.getAutoInferDelay(this)
+        val displayDelay = CalibrationActivity.getDisplayDelay(this)
         uiHandler.removeCallbacks(inferenceRunnable)
-        uiHandler.postDelayed(inferenceRunnable, 350L)
+        uiHandler.postDelayed(inferenceRunnable, inferDelay)
         uiHandler.removeCallbacks(displayRefreshRunnable)
-        uiHandler.postDelayed(displayRefreshRunnable, 700L)
+        uiHandler.postDelayed(displayRefreshRunnable, displayDelay)
     }
 
     /** Rafraîchit l'affichage : désactive la fontaine, synchronise le bitmap, réactive. */

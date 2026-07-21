@@ -298,7 +298,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                 Log.d(TAG, "Long-press ignoré — dist=${lpTotalDist.toInt()}px (écriture)")
             }
         }
-        uiHandler.postDelayed(longPressTimer!!, 500L)
+        uiHandler.postDelayed(longPressTimer!!, CalibrationActivity.getLongPressDelay(context))
     }
 
     private fun cancelLongPressTimer() {
