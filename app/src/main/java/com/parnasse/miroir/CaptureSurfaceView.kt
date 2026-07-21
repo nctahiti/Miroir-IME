@@ -664,14 +664,57 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             }
         }
 
-        // 2b. Preview scrub : trait de coupe uniquement
-        // Gauche = conservé, droite = coupé. Le trait suffit.
-        if (scrubCutRatio >= 0f && scrubCutRatio < 1f) {
-            val linePaint = android.graphics.Paint().apply {
-                color = Color.argb(180, 200, 50, 50); strokeWidth = 2f
-                style = android.graphics.Paint.Style.STROKE; isAntiAlias = false
+        // 2b. Preview scrub : surbrillance des points conservés
+        if (scrubCutRatio >= 0f && scrubCutRatio < 1f && selectedGroupId != null) {
+            val gm = engine.groupManager
+            val group = gm?.allGroupsFull()?.find { it.id == selectedGroupId }
+            if (group != null) {
+                val strokes = group.strokeIds.mapNotNull { sid ->
+                    val idx = engine.inkStrokeIdToRegistryIndex[sid]
+                    if (idx != null && idx < engine.strokeRegistry.size) idx to engine.strokeRegistry[idx] else null
+                }.filter { (_, sr) -> sr.points.size >= 2 }
+                if (strokes.isNotEmpty()) {
+                    val strokeLengths = strokes.map { (_, sr) ->
+                        var len = 0.0; val pts = sr.points
+                        for (i in 1 until pts.size)
+                            len += Math.hypot((pts[i].first - pts[i-1].first).toDouble(), (pts[i].second - pts[i-1].second).toDouble())
+                        len
+                    }
+                    val totalLen = strokeLengths.sum()
+                    if (totalLen > 0) {
+                        val cutLen = totalLen * scrubCutRatio
+                        val keepPaint = android.graphics.Paint().apply {
+                            color = Color.BLACK; strokeWidth = 5f
+                            style = android.graphics.Paint.Style.STROKE
+                            strokeCap = android.graphics.Paint.Cap.ROUND; isAntiAlias = false
+                        }
+                        var accum = 0.0
+                        for (i in strokes.indices) {
+                            val (_, sr) = strokes[i]
+                            val sl = strokeLengths[i]
+                            if (accum + sl <= cutLen) {
+                                drawStrokePath(canvas, sr, keepPaint)
+                                accum += sl
+                            } else if (accum < cutLen) {
+                                val pts = sr.points
+                                var ptAccum = 0.0; var cutPtIdx = pts.size
+                                for (j in 1 until pts.size) {
+                                    ptAccum += Math.hypot((pts[j].first - pts[j-1].first).toDouble(), (pts[j].second - pts[j-1].second).toDouble())
+                                    if (accum + ptAccum >= cutLen) { cutPtIdx = j; break }
+                                }
+                                if (cutPtIdx > 1) {
+                                    val path = android.graphics.Path()
+                                    path.moveTo(pts[0].first, pts[0].second)
+                                    for (j in 1 until cutPtIdx.coerceAtMost(pts.size))
+                                        path.lineTo(pts[j].first, pts[j].second)
+                                    canvas.drawPath(path, keepPaint)
+                                }
+                                accum = cutLen
+                            }
+                        }
+                    }
+                }
             }
-            canvas.drawLine(scrubCutX, 0f, scrubCutX, height.toFloat(), linePaint)
         }
 
         // 3. Template
@@ -817,5 +860,13 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         deselectGroup()
         exitEditMode()
         invalidate()
+    }
+
+    private fun drawStrokePath(canvas: Canvas, sr: StrokeRecord, paint: Paint) {
+        val path = Path()
+        path.moveTo(sr.points[0].first, sr.points[0].second)
+        for (i in 1 until sr.points.size)
+            path.lineTo(sr.points[i].first, sr.points[i].second)
+        canvas.drawPath(path, paint)
     }
 }
