@@ -19,7 +19,10 @@ data class StrokeRecord(
     var isDeleted: Boolean = false,
     /** Source du stroke : "user" (manuscrit), "correction", "llm" (généré).
      *  Les strokes LLM sont exclus du recyclage et de l'inférence ML Kit. */
-    var source: String = "user"
+    var source: String = "user",
+    /** true si le stroke est archivé (groupe STORED, déjà rastérisé dans le bitmap).
+     *  Ignoré par redrawBitmapInternal() — le bitmap contient déjà le rendu. */
+    var isArchived: Boolean = false
 ) {
     /** Nombre de points encore actifs */
     val activePoints: Int get() = points.size

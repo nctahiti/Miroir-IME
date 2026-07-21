@@ -272,11 +272,27 @@ class CaptureActivity : Activity() {
     /** Rafraîchit l'affichage : désactive la fontaine, synchronise le bitmap, réactive. */
     private fun refreshDisplay() {
         if (fontaineOverlay?.modeInteraction == true) return
+        // ═══ ÉVICTION DES GROUPES INACTIFS (LOADED→STORED) ═══
+        // Après 700ms d'inactivité stylet, les groupes qui ne sont plus actifs
+        // sont déchargés du cache vers la persistence. Les blobs, labels et bitmap
+        // restent visibles (déjà calculés dans groupBlobs/groupLabels/bitmap).
+        engine.groupManager?.evictInactive()
+        // 🔬 SÉMATOGRAMME CACHE : mesurer ce qui s'accumule
+        val gm = engine.groupManager
+        val cacheGroups = gm?.cacheSize() ?: 0
+        val allGroups = gm?.allGroupsFull()?.size ?: 0
+        val blobs = engine.groupBlobs.size
+        val labels = engine.groupLabels.size
+        val strokes = engine.strokeRegistry.count { !it.isDeleted && it.points.isNotEmpty() }
+        val totalStrokes = engine.strokeRegistry.size
+        val inkMappings = engine.inkStrokeIdToRegistryIndex.size
+        Log.i(TAG, "📊 CACHE refresh: strokes=$strokes/$totalStrokes inkMap=$inkMappings " +
+            "blobs=$blobs labels=$labels groupes=cache$cacheGroups/all$allGroups")
         fontaineOverlay?.desactiver()
         captureView?.redrawBitmapOnly()  // copier les strokes dans le bitmap avant d'effacer
         captureView?.invalidate()
         fontaineOverlay?.activer()
-        Log.d(TAG, "Display refresh")
+        Log.d(TAG, "Display refresh — éviction groupes inactifs")
     }
 
     /** Annule les timers (appelé au début de chaque stroke). */

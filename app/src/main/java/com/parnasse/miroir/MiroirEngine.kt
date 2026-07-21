@@ -81,6 +81,15 @@ class MiroirEngine {
             }
             val tmpDir = File(context.filesDir, "groups"); tmpDir.mkdirs()
             it.persistence = GroupPersistence(File(tmpDir, "current.groups"))
+            // ═══ Archivage des strokes quand un groupe passe LOADED→STORED ═══
+            // Les strokes sont déjà rastérisés dans le bitmap → on les marque
+            // pour que redrawBitmapInternal() les ignore.
+            it.onGroupEvicted = { group ->
+                for (sid in group.strokeIds) {
+                    val ri = inkStrokeIdToRegistryIndex[sid] ?: continue
+                    strokeRegistry.getOrNull(ri)?.isArchived = true
+                }
+            }
         }
     }
 
@@ -228,25 +237,60 @@ class MiroirEngine {
         Log.i(TAG, "rebuildAllBlobs: ${groupBlobs.size} blobs reconstruits")
     }
 
-    /** Redessine tous les strokes dans le bitmap interne. */
-    fun redrawBitmapInternal() {
+    /** Redessine les strokes dans le bitmap interne.
+     *  @param fullRedraw si true, efface tout et redessine TOUS les strokes (chargement).
+     *                    si false (défaut), préserve les strokes archivés (déjà dans le bitmap),
+     *                    efface seulement les supprimés, et redessine les actifs. */
+    fun redrawBitmapInternal(fullRedraw: Boolean = false) {
         val canvas = bitmapCanvas ?: return
-        canvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
         val paint = android.graphics.Paint().apply {
             color = android.graphics.Color.BLACK; strokeWidth = 3f
             style = android.graphics.Paint.Style.STROKE
             strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
             isAntiAlias = true
         }
-        for ((idx, sr) in strokeRegistry.withIndex()) {
-            if (sr.isDeleted) continue
-            if (sr.points.size < 2) continue
-            val path = android.graphics.Path()
-            path.moveTo(sr.points[0].first, sr.points[0].second)
-            for (i in 1 until sr.points.size) {
-                path.lineTo(sr.points[i].first, sr.points[i].second)
+        val erasePaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.WHITE
+            style = android.graphics.Paint.Style.STROKE; strokeWidth = 4f
+            strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
+            isAntiAlias = true
+        }
+
+        if (fullRedraw) {
+            // Chargement : effacer tout, redessiner tout (archivés inclus)
+            canvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+            var drawn = 0
+            for (sr in strokeRegistry) {
+                if (sr.isDeleted || sr.points.size < 2) continue
+                val path = android.graphics.Path()
+                path.moveTo(sr.points[0].first, sr.points[0].second)
+                for (i in 1 until sr.points.size) path.lineTo(sr.points[i].first, sr.points[i].second)
+                canvas.drawPath(path, paint)
+                drawn++
             }
-            canvas.drawPath(path, paint)
+            Log.d(TAG, "redrawBitmap FULL: $drawn strokes redessinés")
+        } else {
+            // Incrémental : effacer les strokes supprimés, redessiner les actifs
+            // Les strokes archivés restent dans le bitmap (non touchés)
+            var erased = 0; var drawn = 0
+            for (sr in strokeRegistry) {
+                if (sr.isDeleted && sr.points.size >= 2) {
+                    val path = android.graphics.Path()
+                    path.moveTo(sr.points[0].first, sr.points[0].second)
+                    for (i in 1 until sr.points.size) path.lineTo(sr.points[i].first, sr.points[i].second)
+                    canvas.drawPath(path, erasePaint)
+                    erased++
+                }
+            }
+            for (sr in strokeRegistry) {
+                if (sr.isDeleted || sr.isArchived || sr.points.size < 2) continue
+                val path = android.graphics.Path()
+                path.moveTo(sr.points[0].first, sr.points[0].second)
+                for (i in 1 until sr.points.size) path.lineTo(sr.points[i].first, sr.points[i].second)
+                canvas.drawPath(path, paint)
+                drawn++
+            }
+            if (drawn > 0 || erased > 0) Log.d(TAG, "redrawBitmap INCR: $drawn dessinés, $erased effacés — ${strokeRegistry.size} total")
         }
     }
 
@@ -435,17 +479,20 @@ class MiroirEngine {
         val dir = File(bd, "page_$currentPageIndex")
         dir.mkdirs()
         val vstarFile = File(dir, "page.vstar")
-        val liveStrokes = strokeRegistry.count { !it.isDeleted && it.points.isNotEmpty() }
+        // ═══ Inclure TOUS les strokes non-supprimés (vivants + archivés) ═══
+        // Les strokes archivés sont déjà dans le bitmap mais doivent persister
+        // dans le .vstar pour le rechargement futur.
+        val allStrokes = strokeRegistry.count { !it.isDeleted && it.points.isNotEmpty() }
 
-        // ── V★ : reecriture propre avec strokes vivants seulement ──
-        if (liveStrokes > 0) {
+        // ── V★ : reecriture propre avec tous les strokes (archivés inclus) ──
+        if (allStrokes > 0) {
             if (vstarFile.exists()) vstarFile.delete()
             val dataRegion = VStarDataRegion(vstarFile)
             dataRegion.open()
-            val liveIndices = strokeRegistry.indices
+            val allIndices = strokeRegistry.indices
                 .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() }
                 .toList()
-            for (ri in liveIndices) {
+            for (ri in allIndices) {
                 val sr = strokeRegistry[ri]
                 val inkId = inkStrokeIdToRegistryIndex.entries.firstOrNull { it.value == ri }?.key
                 val ci = inkId?.let { (it - 1).toShort() } ?: continue
@@ -453,7 +500,7 @@ class MiroirEngine {
                 for (t in tokens) dataRegion.append(t)
             }
             dataRegion.close()
-            Log.i(TAG, "savePageFull page=$currentPageIndex vstar=${vstarFile.length()}B strokes=$liveStrokes")
+            Log.i(TAG, "savePageFull page=$currentPageIndex vstar=${vstarFile.length()}B strokes=$allStrokes")
         } else {
             if (vstarFile.exists()) { vstarFile.delete() }
             Log.i(TAG, "savePageFull page=$currentPageIndex — page vide")
@@ -468,6 +515,11 @@ class MiroirEngine {
         }
 
         // ── Groupes & labels ──
+        // ═══ ÉVICTION avant sauvegarde : force LOADED→STORED ═══
+        // Les groupes inactifs passent en STORED pour que groups.json
+        // reflète l'état réel (pas tous LOADED). Les blobs, labels et
+        // bitmap restent intacts — l'éviction ne touche qu'au cache RAM.
+        groupManager?.evictInactive()
         saveGroupsJson(dir)
 
         // ── MDM ──

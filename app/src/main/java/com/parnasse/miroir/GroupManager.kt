@@ -9,7 +9,10 @@ import java.util.concurrent.TimeUnit
 
 class GroupManager(
     private val onGroupTranscribed: (InkGroup) -> Unit = {},
-    var onGroupAutoDeselected: (() -> Unit)? = null
+    var onGroupAutoDeselected: (() -> Unit)? = null,
+    /** Appelé quand un groupe est évincé du cache (LOADED→STORED→persistence).
+     *  Permet au MiroirEngine d'archiver les strokes correspondants. */
+    var onGroupEvicted: ((InkGroup) -> Unit)? = null
 ) {
     companion object {
         private const val TAG = "GroupManager"
@@ -336,6 +339,7 @@ class GroupManager(
         if (group.state != GroupState.STORED) return
         persistence?.writeGroup(group)
         groups.remove(groupId)
+        onGroupEvicted?.invoke(group)
         Log.d(TAG, "Evince: " + groupId + " -> .groups | cache=" + groups.size)
     }
 

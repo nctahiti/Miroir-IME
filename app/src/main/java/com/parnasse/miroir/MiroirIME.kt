@@ -558,6 +558,8 @@ class MiroirIME : InputMethodService() {
         }
         // MDM
         savePageMdm(dir)
+        // ═══ ÉVICTION avant sauvegarde : force LOADED→STORED ═══
+        groupManager?.evictInactive()
         // ═══ Groupes & labels : sauvegarde JSON pour rechargement ═══
         saveGroupsJson(dir)
         Log.i(SEMA, "T5|savePage|${System.currentTimeMillis() - semaStart}ms|vstar=${vstarFile.length()}B|strokes=$liveStrokes|page=$currentPageIndex")
