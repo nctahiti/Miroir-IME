@@ -664,15 +664,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             }
         }
 
-        // 2b. Preview scrub : trait de coupe + zone supprimée en rouge
+        // 2b. Preview scrub : trait de coupe uniquement
+        // Gauche = conservé, droite = coupé. Le trait suffit.
         if (scrubCutRatio >= 0f && scrubCutRatio < 1f) {
-            // Zone qui sera supprimée (à droite du trait)
-            val cutPaint = android.graphics.Paint().apply {
-                color = Color.argb(40, 200, 50, 50)
-                style = android.graphics.Paint.Style.FILL; isAntiAlias = false
-            }
-            canvas.drawRect(scrubCutX, 0f, width.toFloat(), height.toFloat(), cutPaint)
-            // Trait de coupe
             val linePaint = android.graphics.Paint().apply {
                 color = Color.argb(180, 200, 50, 50); strokeWidth = 2f
                 style = android.graphics.Paint.Style.STROKE; isAntiAlias = false
