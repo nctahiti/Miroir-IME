@@ -180,8 +180,12 @@ class MiroirEngine {
             if (blob != null) {
                 groupBlobs[group.id] = blob
                 Log.d(TAG, "Blob cree pour groupe ${group.id.take(8)} — ${group.strokeIds.size} strokes")
-            } else {
-                Log.w(TAG, "Blob NULL pour groupe ${group.id.take(8)} — strokes=${group.strokeIds.size} pts verifices")
+            }
+            // ═══ Absorption d'un groupe existant → forcer la ré-inférence ═══
+            if (group.strokeIds.size > 1) {
+                val firstIdx = group.strokeIds.firstOrNull()
+                    ?.let { inkStrokeIdToRegistryIndex[it] }
+                if (firstIdx != null) groupLabels.remove(firstIdx)
             }
         }
         return group
