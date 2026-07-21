@@ -815,8 +815,10 @@ class MiroirEngine {
 
     private fun savePageMdm(dir: File) {
         try {
-            data class LineAnchor(val label: String, val lineIdx: Int, val x: Float)
+            data class LineAnchor(val label: String, val lineIdx: Int, val x: Float,
+                                  val strokeCount: Int = 0, val pointCount: Int = 0)
             val items = mutableListOf<LineAnchor>()
+            val gm = groupManager
             for ((firstIdx, label) in groupLabels) {
                 val anchor = groupAnchor[firstIdx] ?: continue
                 val cleanLabel = cleanLabelForMdm(label)
@@ -829,21 +831,41 @@ class MiroirEngine {
                     }
                     best
                 } else 0
-                items.add(LineAnchor(cleanLabel, lineIdx, anchor.first))
+                // Trouver le groupe correspondant pour les compteurs
+                var sc = 0; var pc = 0
+                if (gm != null) {
+                    val group = gm.allGroupsFull().find { g ->
+                        val firstSid = g.strokeIds.firstOrNull() ?: return@find false
+                        inkStrokeIdToRegistryIndex[firstSid] == firstIdx
+                    }
+                    if (group != null) {
+                        sc = group.strokeIds.size
+                        pc = group.strokeIds.sumOf { sid ->
+                            val ri = inkStrokeIdToRegistryIndex[sid] ?: return@sumOf 0
+                            strokeRegistry.getOrNull(ri)?.points?.size ?: 0
+                        }
+                    }
+                }
+                items.add(LineAnchor(cleanLabel, lineIdx, anchor.first, sc, pc))
             }
             if (items.isEmpty()) return
             items.sortWith(compareBy<LineAnchor> { it.lineIdx }.thenBy { it.x })
             val sb = StringBuilder()
             val totalLines = cachedTemplateLines.size
             if (totalLines <= 0) return
-            val lineToWords = mutableMapOf<Int, MutableList<String>>()
+            val lineToWords = mutableMapOf<Int, MutableList<LineAnchor>>()
             for (item in items) {
-                lineToWords.getOrPut(item.lineIdx) { mutableListOf() }.add(item.label)
+                lineToWords.getOrPut(item.lineIdx) { mutableListOf() }.add(item)
             }
             for (lineIdx in 0 until totalLines) {
                 val words = lineToWords[lineIdx]
                 if (words != null) {
-                    sb.append(words.joinToString(" ") { "@$it" })
+                    sb.append(words.joinToString(" ") { item ->
+                        val base = "@${item.label}"
+                        if (item.strokeCount > 0) {
+                            "$base{${item.strokeCount}s/${item.pointCount}p}"
+                        } else base
+                    })
                 }
                 if (lineIdx < totalLines - 1) sb.append("\n")
             }

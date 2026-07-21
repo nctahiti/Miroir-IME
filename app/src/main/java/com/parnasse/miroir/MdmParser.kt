@@ -16,7 +16,9 @@ data class MdmAnchor(
     val label: String,
     val lineIndex: Int,
     val colIndex: Int,
-    val align: MdmAlign = MdmAlign.START
+    val align: MdmAlign = MdmAlign.START,
+    val strokeCount: Int = 0,
+    val pointCount: Int = 0
 )
 
 enum class MdmAlign { START, CENTER, END }
@@ -80,41 +82,50 @@ object MdmParser {
         colIdx: Int,
         align: MdmAlign
     ) {
-        // Extraire tous les @mot
-        val wordRegex = Regex("@(\\w+)")
+        // Extraire tous les @mot (inclut apostrophe et tiret : l'eau, arc-en-ciel)
+        // Format : @mot ou @mot{Ns/Mp}
+        val wordRegex = Regex("@([\\w'\\-]+)(?:\\{(\\d+)s(?:/(\\d+)p)?\\})?")
         for (match in wordRegex.findAll(text)) {
             val word = match.groupValues[1]
-            anchors.add(MdmAnchor(label = word, lineIndex = lineIdx, colIndex = colIdx, align = align))
+            val sc = match.groupValues.getOrNull(2)?.toIntOrNull() ?: 0
+            val pc = match.groupValues.getOrNull(3)?.toIntOrNull() ?: 0
+            anchors.add(MdmAnchor(label = word, lineIndex = lineIdx, colIndex = colIdx, align = align,
+                strokeCount = sc, pointCount = pc))
         }
     }
     
     /** Génère du MDM depuis une liste d'ancres (pour sauvegarde). */
     fun generate(anchors: List<MdmAnchor>): String {
         if (anchors.isEmpty()) return ""
-        
+
         val sb = StringBuilder()
         var currentLine = -1
         var currentCol = -1
-        
+
         for ((i, a) in anchors.withIndex()) {
             if (a.lineIndex != currentLine) {
                 if (currentLine >= 0) sb.append("\n")
                 currentLine = a.lineIndex
                 currentCol = -1
-                // Alignement de la ligne
                 sb.append(when (a.align) {
                     MdmAlign.CENTER -> "|* "
                     MdmAlign.END -> ">* "
                     else -> "<* "
                 })
             }
-            
+
             if (currentCol >= 0 && a.colIndex != currentCol) {
                 sb.append(" ;* ")
             }
             currentCol = a.colIndex
-            
+
             sb.append("@${a.label}")
+            // Métadonnées : {strokes/points} pour détecter les incohérences
+            if (a.strokeCount > 0) {
+                sb.append("{${a.strokeCount}s")
+                if (a.pointCount > 0) sb.append("/${a.pointCount}p")
+                sb.append("}")
+            }
         }
         
         if (sb.isNotEmpty()) {
