@@ -145,18 +145,20 @@ class GroupManager(
     }
     fun getOrCreateActiveGroup(): InkGroup {
         val selectedId = machine.pendingGroupId
-        // ═══ Si un groupe est SELECTED, il reste SELECTED ═══
-        // L'utilisateur l'a choisi pour absorption. Le nouveau stroke
-        // hors zone crée un nouveau groupe LOADED, mais le SELECTED
-        // reste ouvert — il absorbera les prochains strokes dans son blob.
-        // Pas de deselection automatique.
+        // ═══ Désélectionner le groupe SELECTED quand un nouveau groupe est créé ═══
+        // L'utilisateur écrit hors du blob → il a fini d'absorber dans ce groupe.
+        // Le SELECTED → STORED, son blob disparaîtra au prochain invalidate().
+        if (selectedId != null) {
+            val selectedGroup = groups[selectedId]
+            if (selectedGroup != null && selectedGroup.state == GroupState.SELECTED) {
+                Log.i(TAG, "Déselection automatique: ${selectedId.take(8)} — nouveau groupe créé hors zone")
+                deselectGroup(selectedId)
+            }
+        }
         evictAllStored()
         val currentActiveId = machine.activeGroupId
         val oldGroup = currentActiveId?.let { groups[it] }
         val newGroup = InkGroup.create()
-        // ═══ Assigner orderIndex à la CRÉATION (pas à la fermeture) ═══
-        // Principe : « La permissivité est le meilleur gage de stabilité. »
-        // Un groupe existe dès sa création avec son numéro d'ordre.
         newGroup.orderIndex = nextOrderIndex++
         groups[newGroup.id] = newGroup
         machine.makeActive(newGroup.id, oldGroup)
