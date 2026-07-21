@@ -1,6 +1,7 @@
 package com.parnasse.miroir
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.*
 import android.os.Bundle
 import android.os.Handler
@@ -46,6 +47,7 @@ class CaptureActivity : Activity() {
     private var captureView: CaptureSurfaceView? = null
     private var fontaineOverlay: FontaineOverlay? = null
     private var pageCounter: TextView? = null
+    private var eyeButton: TextView? = null
     private val uiHandler = Handler(Looper.getMainLooper())
     private val inferExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "miroir-capture-infer").apply { priority = Thread.NORM_PRIORITY - 1 }
@@ -76,18 +78,15 @@ class CaptureActivity : Activity() {
         if (isContextual) {
             engine.openBlockDir(this, invocBlockId!!)
         } else {
-            // Standalone : utiliser un bloc fixe pour persister entre sessions
             engine.openBlockDir(this, "standalone")
         }
         engine.initGroupManager(this)
         engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
 
-        // Créer la vue d'abord (onSizeChanged initialise le bitmap aux bonnes dimensions)
         when (invocMode) {
             else -> buildBlockView()
         }
 
-        // Puis charger la page (écrase le bitmap vide avec le bitmap sauvegardé)
         if (isContextual && invocPageN > 0 && engine.countPages() > invocPageN) {
             engine.goToPageFull(invocPageN)
         } else if (engine.countPages() > 0) {
@@ -95,10 +94,7 @@ class CaptureActivity : Activity() {
             engine.loadPageFull()
         }
         updatePageCounter()
-        // Postposer le redraw après le premier layout
-        captureView?.post {
-            captureView?.invalidate()
-        }
+        captureView?.post { captureView?.invalidate() }
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -112,8 +108,6 @@ class CaptureActivity : Activity() {
         val rec = recognizer ?: return
         if (!rec.isLoaded) return
 
-        // Inférer tous les groupes sans label (clôturés OU actif)
-        // Capturer un snapshot sur le thread UI pour éviter les race conditions
         val registrySnapshot = engine.strokeRegistry.toList()
         for (group in groups) {
             val firstIdx = group.strokeIds.firstOrNull()
@@ -160,16 +154,16 @@ class CaptureActivity : Activity() {
             fo.onStrokeFinished = { _ -> scheduleInference() }
             fo.onStrokeBegin = { cancelTimers() }
             fo.onLongPressDetected = { x, y -> handleLongPress(x, y) }
-            // Les gestes sont maintenant gérés par CaptureSurfaceView.onTouchEvent (bascule franche)
             root.addView(fo, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT))
         }
 
-        // Pont : la View standard peut désactiver la fontaine en mode interaction
         captureView?.fontaineOverlay = fontaineOverlay
 
-        // Barre d'outils flottante
+        // ═══ BARRE D'OUTILS ═══
+        // [✕]    [◄ 1/5 ►]    [+]
+        //        [👁 ouvert]
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -177,11 +171,16 @@ class CaptureActivity : Activity() {
             setBackgroundColor(Color.argb(220, 255, 255, 255))
         }
 
-        toolbar.addView(makeBtn("\u2715", Color.argb(200, 150, 0, 0)) { finish() })
-        toolbar.addView(makeBtn("\u21BA", Color.argb(200, 120, 80, 0)) {
-            engine.clearPage(); captureView?.clearCanvas()
+        // ── Bouton ✕ (fermer) ──
+        toolbar.addView(makeToolBtn("\u2715", Color.argb(200, 150, 0, 0)) { view ->
+            showCloseMenu(view)
         })
-        toolbar.addView(makeBtn("\u2B05", Color.argb(200, 80, 80, 160)) {
+
+        // ── Espace pousseur gauche ──
+        toolbar.addView(View(this), LinearLayout.LayoutParams(0, 0, 0.15f))
+
+        // ── ◄ Navigation gauche ──
+        toolbar.addView(makeToolBtn("\u25C0", Color.argb(200, 80, 80, 160)) {
             val total = engine.countPages()
             if (total > 0 && engine.currentPageIndex > 0) {
                 engine.goToPageFull(engine.currentPageIndex - 1)
@@ -189,14 +188,17 @@ class CaptureActivity : Activity() {
                 updatePageCounter()
             }
         })
-        // Compteur de page
+
+        // ── Compteur de page ──
         pageCounter = TextView(this).apply {
             text = pageLabel()
             textSize = 28f; setTextColor(Color.DKGRAY)
-            gravity = Gravity.CENTER; setPadding(12, 0, 12, 0)
+            gravity = Gravity.CENTER; setPadding(8, 0, 8, 0)
         }
         toolbar.addView(pageCounter)
-        toolbar.addView(makeBtn("\u27A1", Color.argb(200, 0, 80, 160)) {
+
+        // ── ► Navigation droite ──
+        toolbar.addView(makeToolBtn("\u25B6", Color.argb(200, 0, 80, 160)) {
             val total = engine.countPages()
             if (total > 0 && engine.currentPageIndex < total - 1) {
                 engine.goToPageFull(engine.currentPageIndex + 1)
@@ -208,19 +210,118 @@ class CaptureActivity : Activity() {
                 updatePageCounter()
             }
         })
-        // Espace pousseur
-        toolbar.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
 
-        toolbar.addView(makeBtn("\uD83D\uDCBE", Color.argb(200, 0, 100, 50)) {
-            engine.savePageFull()
-            Toast.makeText(this, "\uD83D\uDCBE Page sauvegardee", Toast.LENGTH_SHORT).show()
+        // ── Espace pousseur droit ──
+        toolbar.addView(View(this), LinearLayout.LayoutParams(0, 0, 0.15f))
+
+        // ── Bouton + (nouvelle page) ──
+        toolbar.addView(makeToolBtn("+", Color.argb(200, 0, 100, 50)) { view ->
+            showPlusMenu(view)
         })
 
         root.addView(toolbar, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.TOP })
 
+        // ═══ LIGNE 2 : Œil de calibration ═══
+        val eyeBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 4)
+        }
+        eyeButton = TextView(this).apply {
+            text = if (captureView?.showLabels != false) "\uD83D\uDC41" else "\uD83D\uDC41\u200D\uD83D\uDDE8"  // 👁 / 👁‍🗨
+            textSize = 24f
+            setPadding(16, 4, 16, 4)
+            setOnClickListener {
+                val cv = captureView ?: return@setOnClickListener
+                cv.showLabels = !cv.showLabels
+                text = if (cv.showLabels) "\uD83D\uDC41" else "\uD83D\uDC41\u200D\uD83D\uDDE8"
+                cv.invalidate()
+            }
+        }
+        eyeBar.addView(eyeButton)
+        root.addView(eyeBar, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT).apply {
+            gravity = Gravity.CENTER_HORIZONTAL or Gravity.TOP
+            topMargin = 78  // en dessous de la toolbar
+        })
+
         setContentView(root)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // MENUS FLOTTANTS
+    // ═══════════════════════════════════════════════════════════════════
+
+    private fun showCloseMenu(anchor: View) {
+        val popup = PopupMenu(this, anchor)
+        popup.menu.add("Vider page").setOnMenuItemClickListener {
+            engine.clearPage(); captureView?.clearCanvas(); updatePageCounter(); true
+        }
+        popup.menu.add("Paramètres").setOnMenuItemClickListener {
+            startActivity(Intent(this, CalibrationActivity::class.java)); true
+        }
+        popup.menu.add("Fermer le miroir").setOnMenuItemClickListener {
+            engine.savePageFull(); engine.closeBlock()
+            val newBlockId = java.util.UUID.randomUUID().toString()
+            engine.openBlockDir(this, newBlockId)
+            engine.initGroupManager(this)
+            engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
+            captureView?.clearCanvas()
+            updatePageCounter()
+            captureView?.invalidate()
+            true
+        }
+        popup.show()
+    }
+
+    private fun showPlusMenu(anchor: View) {
+        val popup = PopupMenu(this, anchor)
+        popup.menu.add("Nouvelle page (après)").setOnMenuItemClickListener {
+            val total = engine.countPages()
+            if (total == 0 || engine.currentPageIndex >= total - 1) {
+                engine.newPage()
+            } else {
+                // Insérer après la page courante
+                engine.savePageFull()
+                val bd = engine.blockDir ?: return@setOnMenuItemClickListener true
+                val insertAt = engine.currentPageIndex + 1
+                for (i in total - 1 downTo insertAt) {
+                    java.io.File(bd, "page_$i").renameTo(java.io.File(bd, "page_${i + 1}"))
+                }
+                engine.clearPage()
+                engine.currentPageIndex = insertAt
+            }
+            captureView?.clearCanvas()
+            updatePageCounter()
+            captureView?.invalidate()
+            true
+        }
+        popup.menu.add("Nouvelle page (début)").setOnMenuItemClickListener {
+            engine.savePageFull()
+            val bd = engine.blockDir ?: return@setOnMenuItemClickListener true
+            val total = engine.countPages()
+            for (i in total - 1 downTo 0) {
+                java.io.File(bd, "page_$i").renameTo(java.io.File(bd, "page_${i + 1}"))
+            }
+            engine.clearPage()
+            engine.currentPageIndex = 0
+            captureView?.clearCanvas()
+            updatePageCounter()
+            captureView?.invalidate()
+            true
+        }
+        popup.menu.add("Nouvelle page (fin)").setOnMenuItemClickListener {
+            engine.savePageFull()
+            engine.newPage()
+            captureView?.clearCanvas()
+            updatePageCounter()
+            captureView?.invalidate()
+            true
+        }
+        popup.show()
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -229,7 +330,6 @@ class CaptureActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        // TouchHelper de CaptureSurfaceView désactivé — la FontaineOverlay capture tout
     }
 
     override fun onDestroy() {
@@ -242,11 +342,12 @@ class CaptureActivity : Activity() {
     // HELPERS
     // ═══════════════════════════════════════════════════════════════════
 
-    private fun makeBtn(text: String, bg: Int, onClick: () -> Unit): TextView =
+    private fun makeToolBtn(text: String, bg: Int, onClick: (View) -> Unit): TextView =
         TextView(this).apply {
-            this.text = text; textSize = 40f; setTextColor(Color.WHITE)
-            setPadding(24, 14, 24, 14); setBackgroundColor(bg)
-            gravity = Gravity.CENTER; setOnClickListener { onClick() }
+            this.text = text; textSize = 36f; setTextColor(Color.WHITE)
+            setPadding(20, 10, 20, 10); setBackgroundColor(bg)
+            gravity = Gravity.CENTER
+            setOnClickListener { onClick(this) }
         }
 
     private fun pageLabel(): String {
@@ -260,11 +361,8 @@ class CaptureActivity : Activity() {
     }
 
     private fun scheduleInference() {
-        // Inférence : 350ms après le dernier stroke
         uiHandler.removeCallbacks(inferenceRunnable)
         uiHandler.postDelayed(inferenceRunnable, 350L)
-
-        // Affichage : 700ms après le dernier stroke
         uiHandler.removeCallbacks(displayRefreshRunnable)
         uiHandler.postDelayed(displayRefreshRunnable, 700L)
     }
@@ -272,12 +370,8 @@ class CaptureActivity : Activity() {
     /** Rafraîchit l'affichage : désactive la fontaine, synchronise le bitmap, réactive. */
     private fun refreshDisplay() {
         if (fontaineOverlay?.modeInteraction == true) return
-        // ═══ ÉVICTION DES GROUPES INACTIFS (LOADED→STORED) ═══
-        // Après 700ms d'inactivité stylet, les groupes qui ne sont plus actifs
-        // sont déchargés du cache vers la persistence. Les blobs, labels et bitmap
-        // restent visibles (déjà calculés dans groupBlobs/groupLabels/bitmap).
         engine.groupManager?.evictInactive()
-        // 🔬 SÉMATOGRAMME CACHE : mesurer ce qui s'accumule
+        // 🔬 SÉMATOGRAMME CACHE
         val gm = engine.groupManager
         val cacheGroups = gm?.cacheSize() ?: 0
         val allGroups = gm?.allGroupsFull()?.size ?: 0
@@ -289,27 +383,19 @@ class CaptureActivity : Activity() {
         Log.i(TAG, "📊 CACHE refresh: strokes=$strokes/$totalStrokes inkMap=$inkMappings " +
             "blobs=$blobs labels=$labels groupes=cache$cacheGroups/all$allGroups")
         fontaineOverlay?.desactiver()
-        // ═══ Pas de redrawBitmapOnly() ici — le bitmap est déjà à jour ═══
-        // endStroke() rasterise chaque stroke immédiatement. Les strokes
-        // archivés restent dans le bitmap (mode incrémental). redrawBitmapOnly()
-        // n'est nécessaire que pour les suppressions (eraseGroup l'appelle déjà).
         captureView?.invalidate()
         fontaineOverlay?.activer()
         Log.d(TAG, "Display refresh — éviction groupes inactifs")
     }
 
-    /** Annule les timers (appelé au début de chaque stroke). */
     private fun cancelTimers() {
         uiHandler.removeCallbacks(inferenceRunnable)
         uiHandler.removeCallbacks(displayRefreshRunnable)
     }
 
-    /** Long-press détecté par la fontaine → bascule franche. */
     private fun handleLongPress(x: Float, y: Float) {
         cancelTimers()
-        // 1. Sélectionner d'abord (la View standard est prête mais masquée)
         captureView?.selectGroupAt(x, y)
-        // 2. Puis désactiver la fontaine → la View standard apparaît avec le blob déjà sélectionné
         fontaineOverlay?.modeInteraction = true
         fontaineOverlay?.desactiver()
         captureView?.armLongPressGesture(x, y)
@@ -317,12 +403,7 @@ class CaptureActivity : Activity() {
         Log.d(TAG, "Long-press → bascule franche, blob visible, attente geste")
     }
 
-    /** Retour au mode écriture : le groupe SELECTED persiste (il reste ouvert pour absorption).
-     *  On rafraîchit juste la View standard et on réactive la fontaine. */
     private fun returnToWriting() {
-        // ═══ NE PAS désélectionner : le groupe SELECTED doit rester actif ═══
-        // L'utilisateur l'a choisi, il absorbe les strokes dans son blob.
-        // Seul un tap ailleurs ou un nouveau long-press changera la sélection.
         fontaineOverlay?.modeInteraction = false
         fontaineOverlay?.touchForwardTarget = null
         fontaineOverlay?.effacerSurface()
