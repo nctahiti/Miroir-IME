@@ -495,8 +495,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     /** Ligne de coupe verticale affichée pendant le scrub. */
     private var scrubCutX: Float = 0f
 
-    /** Scrub en temps réel : coupe les strokes selon la position du stylet.
-     *  Appliqué à chaque MOVE — les strokes s'effacent et le blob s'ajuste live. */
+    /** Scrub : preview seule — trait rouge + zone qui sera coupée.
+     *  La coupe réelle est appliquée au PEN_UP via applyScrubCut(). */
     fun scrubGroup(currentX: Float) {
         val gid = selectedGroupId ?: return
         val gm = engine.groupManager ?: return
@@ -507,30 +507,26 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         val groupWidth = gb.right - gb.left
         if (groupWidth <= 0f) return
 
-        // Position relative du stylet dans la largeur du groupe
         val ratio = ((currentX - gb.left) / groupWidth).coerceIn(0f, 1f)
         scrubCutRatio = ratio
         scrubCutX = gb.left + groupWidth * ratio
+        invalidate()
+    }
 
-        // ═══ Appliquer la coupe en temps réel ═══
-        // Restaurer d'abord les strokes précédemment coupés (anti-accumulation)
-        for (idx in erasedStrokes.toList()) {
-            val sr = engine.strokeRegistry.getOrNull(idx) ?: continue
-            if (sr.isDeleted && sr.points.isEmpty()) {
-                // Stroke entièrement supprimé — on ne peut pas le restaurer
-                // On le garde dans erasedStrokes, il restera supprimé
-                erasedStrokes.remove(idx)  // mais on le retire de la liste active
-            }
-        }
+    /** Applique la coupe au PEN_UP. */
+    fun applyScrubCut() {
+        if (scrubCutRatio < 0f) return
+        val gid = selectedGroupId ?: return
+        val gm = engine.groupManager ?: return
+        val group = gm.allGroupsFull().find { it.id == gid } ?: return
 
         val strokes = group.strokeIds.mapNotNull { sid ->
             val idx = engine.inkStrokeIdToRegistryIndex[sid]
             if (idx != null && idx < engine.strokeRegistry.size) idx to engine.strokeRegistry[idx] else null
         }.filter { (_, sr) -> sr.points.size >= 2 }
 
-        if (strokes.isEmpty()) { invalidate(); return }
+        if (strokes.isEmpty()) { scrubCutRatio = -1f; return }
 
-        // Calculer la longueur totale
         val strokeLengths = strokes.map { (_, sr) ->
             var len = 0.0; val pts = sr.points
             for (i in 1 until pts.size)
@@ -538,10 +534,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             len
         }
         val totalLen = strokeLengths.sum()
-        if (totalLen <= 0.0) { invalidate(); return }
+        if (totalLen <= 0.0) { scrubCutRatio = -1f; return }
         val cutLen = totalLen * scrubCutRatio
 
-        // Couper
         var accum = 0.0
         for (i in strokes.indices) {
             val (idx, sr) = strokes[i]
@@ -571,7 +566,6 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             }
         }
 
-        // Recalculer le blob
         val refreshedGroup = gm.allGroupsFull().find { it.id == gid }
         if (refreshedGroup != null) {
             engine.computeBlobPath(refreshedGroup)?.let { newBlob ->
@@ -580,19 +574,12 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             }
         }
 
-        engine.redrawBitmapInternal(fullRedraw = true)
-        invalidate()
-    }
-
-    /** Finalise le scrub au PEN_UP : ré-inférence + reset. */
-    fun applyScrubCut() {
-        if (scrubCutRatio < 0f) return
-        val gid = selectedGroupId ?: return
-        val gm = engine.groupManager ?: return
-        val group = gm.allGroupsFull().find { it.id == gid } ?: return
         val firstIdx = group.strokeIds.firstOrNull()?.let { engine.inkStrokeIdToRegistryIndex[it] }
         if (firstIdx != null) engine.groupLabels.remove(firstIdx)
+
+        engine.redrawBitmapInternal(fullRedraw = true)
         scrubCutRatio = -1f
+        invalidate()
     }
 
     /** Déplace le groupe sélectionné du delta (dx, dy).
@@ -677,13 +664,20 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             }
         }
 
-        // 2b. Trait de coupe scrub (ligne verticale à la position du stylet)
-        if (scrubCutRatio >= 0f) {
+        // 2b. Preview scrub : trait de coupe + zone supprimée en rouge
+        if (scrubCutRatio >= 0f && scrubCutRatio < 1f) {
+            // Zone qui sera supprimée (à droite du trait)
             val cutPaint = android.graphics.Paint().apply {
+                color = Color.argb(40, 200, 50, 50)
+                style = android.graphics.Paint.Style.FILL; isAntiAlias = false
+            }
+            canvas.drawRect(scrubCutX, 0f, width.toFloat(), height.toFloat(), cutPaint)
+            // Trait de coupe
+            val linePaint = android.graphics.Paint().apply {
                 color = Color.argb(180, 200, 50, 50); strokeWidth = 2f
                 style = android.graphics.Paint.Style.STROKE; isAntiAlias = false
             }
-            canvas.drawLine(scrubCutX, 0f, scrubCutX, height.toFloat(), cutPaint)
+            canvas.drawLine(scrubCutX, 0f, scrubCutX, height.toFloat(), linePaint)
         }
 
         // 3. Template
