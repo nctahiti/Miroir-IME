@@ -72,8 +72,15 @@ class MiroirEngine {
 
     fun initGroupManager(context: Context) {
         appContext = context.applicationContext
+        // ═══ Charger les paramètres de calibration (blob, espacement) ═══
+        val calX = CalibrationActivity.getSpatialDistanceX(context)
+        val calY = CalibrationActivity.getSpatialDistanceY(context)
         groupManager = GroupManager({}).also {
-            it.params = it.params.copy(transcriptionTimeoutMs = Long.MAX_VALUE)
+            it.params = it.params.copy(
+                spatialDistancePx = calX,
+                spatialDistanceY = calY,
+                transcriptionTimeoutMs = Long.MAX_VALUE
+            )
             it.pointProvider = { strokeId ->
                 inkStrokeIdToRegistryIndex[strokeId]
                     ?.let { strokeRegistry.getOrNull(it)?.points ?: emptyList() }
