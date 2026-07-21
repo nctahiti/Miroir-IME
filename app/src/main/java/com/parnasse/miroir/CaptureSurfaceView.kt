@@ -551,7 +551,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         val firstIdx = group.strokeIds.firstOrNull()
             ?.let { engine.inkStrokeIdToRegistryIndex[it] }
         if (firstIdx != null) engine.groupLabels.remove(firstIdx)
-        redrawBitmapOnly()
+        // ═══ fullRedraw : les strokes vidés ont points.size=0 → l'incrémental
+        // ne peut pas les effacer (condition >= 2). On nettoie tout. ═══
+        engine.redrawBitmapInternal(fullRedraw = true)
         invalidate()
     }
 
