@@ -317,15 +317,17 @@ class CaptureActivity : Activity() {
         Log.d(TAG, "Long-press → bascule franche, blob visible, attente geste")
     }
 
-    /** Retour au mode écriture : désélectionner le groupe, rafraîchir la View standard, réactiver la fontaine. */
+    /** Retour au mode écriture : le groupe SELECTED persiste (il reste ouvert pour absorption).
+     *  On rafraîchit juste la View standard et on réactive la fontaine. */
     private fun returnToWriting() {
-        captureView?.deselectGroup()
+        // ═══ NE PAS désélectionner : le groupe SELECTED doit rester actif ═══
+        // L'utilisateur l'a choisi, il absorbe les strokes dans son blob.
+        // Seul un tap ailleurs ou un nouveau long-press changera la sélection.
         fontaineOverlay?.modeInteraction = false
         fontaineOverlay?.touchForwardTarget = null
-        // Nettoyer la SurfaceView avant de réactiver (lockCanvas + unlockCanvasAndPost)
         fontaineOverlay?.effacerSurface()
         captureView?.invalidate()
         fontaineOverlay?.reactiver()
-        Log.d(TAG, "Retour écriture — groupe libéré, fontaine réactivée")
+        Log.d(TAG, "Retour écriture — groupe SELECTED préservé, fontaine réactivée")
     }
 }
