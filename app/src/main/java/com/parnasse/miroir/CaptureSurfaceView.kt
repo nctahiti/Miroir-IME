@@ -50,7 +50,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         strokeWidth = 3.5f; isAntiAlias = false  // plus épais = visuellement sélectionné
     }
     private val labelPaint = Paint().apply {
-        color = Color.argb(200, 80, 80, 180); textSize = 30f; isAntiAlias = true
+        color = Color.argb(200, 80, 80, 180); textSize = 40f; isAntiAlias = false
         textAlign = Paint.Align.CENTER
     }
 
@@ -818,6 +818,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     }
 
     private fun drawLabels(canvas: Canvas) {
+        val spacing = CalibrationActivity.getTemplateSpacing(context)
         data class LabelEntry(val firstIdx: Int, val label: String, val anchor: Pair<Float, Float>, val snapY: Float, val isSelected: Boolean)
         val entries = mutableListOf<LabelEntry>()
         for ((firstIdx, label) in engine.groupLabels) {
@@ -837,10 +838,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
         for ((_, label, anchor, snapY, isSel) in entries) {
             val textW = labelPaint.measureText(label)
-            val labelY = snapY - 10f
+            val labelY = snapY + spacing * 0.6f  // sous l'interligne
             val bgRect = android.graphics.RectF(
-                anchor.first - textW / 2f - 6f, labelY - 22f,
-                anchor.first + textW / 2f + 6f, labelY + 6f
+                anchor.first - textW / 2f - 8f, labelY - 24f,
+                anchor.first + textW / 2f + 8f, labelY + 10f
             )
             val bgColor = if (isSel) Color.argb(220, 220, 235, 255) else Color.argb(180, 255, 255, 255)
             canvas.drawRoundRect(bgRect, 6f, 6f, Paint().apply { color = bgColor; style = Paint.Style.FILL })
