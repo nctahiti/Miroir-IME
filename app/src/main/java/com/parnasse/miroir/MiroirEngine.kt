@@ -541,16 +541,10 @@ class MiroirEngine {
             groupLabels.clear()
             groupAnchor.clear()
 
-            // ── Bitmap PNG (vraie épaisseur fontaine) ──
-            val bmpFile = File(dir, "bitmap.png")
-            if (bmpFile.exists()) {
-                val loaded = android.graphics.BitmapFactory.decodeFile(bmpFile.absolutePath)
-                if (loaded != null) {
-                    bitmap?.recycle()
-                    bitmap = loaded.copy(Bitmap.Config.ARGB_8888, true)
-                    bitmapCanvas = Canvas(bitmap!!)
-                }
-            }
+            // ── Bitmap : reconstruit depuis les strokes (pas depuis PNG) ──
+            // Le PNG peut contenir des artéfacts (traînées de drag, etc.).
+            // On reconstruit le bitmap proprement depuis les strokes du .vstar.
+            // Le bitmap doit être initialisé avant (onSizeChanged dans la View).
 
             // ── V★ → strokes (format V2, 16 bytes/token, scaleFactor=8) ──
             val vstarFile = File(dir, "page.vstar")
@@ -604,6 +598,11 @@ class MiroirEngine {
 
             // Reconstruire les blobs visuels
             rebuildAllBlobs()
+
+            // ═══ Reconstruire le bitmap depuis les strokes (fullRedraw) ═══
+            // On ne charge plus bitmap.png (peut contenir des artéfacts).
+            // Les strokes viennent d'être chargés depuis .vstar → on les rasterise.
+            redrawBitmapInternal(fullRedraw = true)
 
             // Diagnostic : bounding box des strokes
             var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE

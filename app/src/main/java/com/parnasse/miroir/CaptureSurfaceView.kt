@@ -571,7 +571,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         engine.computeBlobPath(group)?.let { newBlob ->
             engine.groupBlobs[gid] = newBlob
         }
-        redrawBitmapOnly()
+        // ═══ fullRedraw : efface tout et redessine proprement ═══
+        // Le mode incrémental laisse une traînée des anciennes positions.
+        // Le groupe déplacé a peu de strokes (un mot) → fullRedraw est rapide.
+        engine.redrawBitmapInternal(fullRedraw = true)
         invalidate()
     }
 
