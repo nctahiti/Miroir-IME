@@ -193,6 +193,11 @@ class CaptureActivity : Activity() {
             }
         })
 
+        // ── Bouton @ (MDM → Geppetto) ──
+        toolbar.addView(makeToolBtn("@", Color.argb(200, 120, 60, 180)) {
+            onMdmButtonClick()
+        })
+
         // ── Espace pousseur droit ──
         toolbar.addView(View(this), LinearLayout.LayoutParams(0, 0, 0.15f))
 
@@ -347,6 +352,40 @@ class CaptureActivity : Activity() {
 
     private fun updatePageCounter() {
         pageCounter?.text = pageLabel()
+    }
+
+    /** Bouton @ — envoie le MDM à Geppetto et charge la réponse en strokes. */
+    private fun onMdmButtonClick() {
+        val mdmSrc = buildMdmFromPage()
+
+        // ═══ TODO: POST vers Geppetto /api/agent/message ═══
+        // Pour l'instant, on génère directement depuis le MDM de la page
+        // (boucle courte sans Geppetto — vérifie la génération synthétique)
+        val count = engine.loadFromMdm(mdmSrc)
+
+        if (count > 0) {
+            captureView?.invalidate()
+            Toast.makeText(this, "$count groupes générés", Toast.LENGTH_SHORT).show()
+            Log.i(TAG, "@→MDM: $count ancres appliquées depuis la page courante")
+        } else {
+            Toast.makeText(this, "Aucune ancre trouvée", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Construit le MDM depuis les labels de la page courante. */
+    private fun buildMdmFromPage(): String {
+        val sb = StringBuilder()
+        // On utilise les labels déjà reconnus (groupLabels)
+        // Format simple : un mot par ancre sur la première ligne
+        val labels = engine.groupLabels.values.filter { it.isNotBlank() }
+        if (labels.isEmpty()) {
+            // Test : générer "Bonjour le monde" pour vérifier les strokes synthétiques
+            return "@Bonjour @le @monde @test @synthétique"
+        }
+        for (label in labels) {
+            sb.append("@$label ")
+        }
+        return sb.toString().trim()
     }
 
     private fun scheduleInference() {

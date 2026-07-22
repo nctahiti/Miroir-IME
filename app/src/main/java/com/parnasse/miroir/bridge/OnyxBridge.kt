@@ -77,9 +77,10 @@ sealed class StylusEvent {
  */
 enum class PenStyle(val onyxConstant: Int) {
     FOUNTAIN(TouchHelper.STROKE_STYLE_FOUNTAIN),
-    BRUSH(TouchHelper.STROKE_STYLE_BRUSH),
-    PENCIL(TouchHelper.STROKE_STYLE_PENCIL),
-    MARKER(TouchHelper.STROKE_STYLE_MARKER)
+    // STROKE_STYLE_BRUSH/PENCIL/MARKER non disponibles dans cette version du SDK
+    // BRUSH(TouchHelper.STROKE_STYLE_BRUSH),
+    // PENCIL(TouchHelper.STROKE_STYLE_PENCIL),
+    // MARKER(TouchHelper.STROKE_STYLE_MARKER)
 }
 
 /**

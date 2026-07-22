@@ -906,10 +906,169 @@ class MiroirEngine {
             val mdmFile = File(dir, "page.mdm")
             if (!mdmFile.exists()) return
             val src = mdmFile.readText()
-            Log.i(TAG, "MDM charge: ${src.length}B — ${src.take(80)}")
+            val count = loadFromMdm(src)
+            Log.i(TAG, "MDM charge: ${src.length}B — $count ancres appliquées")
         } catch (e: Exception) {
             Log.w(TAG, "MDM load: ${e.message}")
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // MDM → STROKES SYNTHÉTIQUES (Génération + Positionnement)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Charge un MDM (Geppetto ou fichier) en strokes synthétiques.
+     * Pour chaque @mot :
+     *   - Si le groupe existe déjà → repositionne Y seulement
+     *   - Sinon → génère des strokes synthétiques, crée le groupe
+     *
+     * Règles de positionnement :
+     *   - Première interligne (cachedTemplateLines[0])
+     *   - Distance blob entre groupes (spatialDistanceX)
+     *   - Retour à la ligne automatique si le mot dépasse la largeur dispo
+     *
+     * @param mdmSrc  Texte MDM à parser et appliquer
+     * @return Nombre d'ancres appliquées (groupes repositionnés ou créés)
+     */
+    fun loadFromMdm(mdmSrc: String): Int {
+        if (mdmSrc.isBlank()) return 0
+
+        val mdmAnchors = try {
+            MdmParser.parse(mdmSrc)
+        } catch (e: Exception) {
+            Log.w(TAG, "MDM parse: ${e.message}")
+            return 0
+        }
+        if (mdmAnchors.isEmpty()) return 0
+
+        val gm = groupManager ?: return 0
+        val ctx = appContext ?: return 0
+        val canvasW = bitmap?.width ?: ctx.resources.displayMetrics.widthPixels
+        val spacing = CalibrationActivity.getTemplateSpacing(ctx)
+        val calX = CalibrationActivity.getSpatialDistanceX(ctx)
+        val firstLine = cachedTemplateLines.firstOrNull() ?: (spacing * 2f)
+
+        val generator = SyntheticStrokeGenerator(
+            lineHeight = spacing,
+            blobSpacingX = calX,
+            marginX = 60f
+        )
+
+        var applied = 0
+        var generated = 0
+        var lineIndex = 0
+        var cursorX = generator.marginX  // position X courante sur la ligne
+        val rightMargin = 40f
+        val maxX = canvasW - rightMargin
+
+        for (mdmA in mdmAnchors) {
+            val targetLabel = mdmA.label
+
+            // ── Groupe existant ? → repositionner Y seulement ──
+            val existingFirstIdx = groupLabels.entries
+                .find { it.value.equals(targetLabel, ignoreCase = true) }?.key
+            if (existingFirstIdx != null) {
+                val currentAnchor = groupAnchor[existingFirstIdx] ?: continue
+                val newY = firstLine + mdmA.lineIndex * spacing
+                groupAnchor[existingFirstIdx] = Pair(currentAnchor.first, newY)
+                applied++
+                continue
+            }
+
+            // ── Nouveau mot → générer strokes synthétiques ──
+            // Vérifier le cache generatedStrokes d'abord
+            val cachedStrokes = generatedStrokes[targetLabel.lowercase()]
+            val records: List<StrokeRecord>
+
+            if (cachedStrokes != null) {
+                // Strokes pré-générés (du modèle Alex Graves ou cache)
+                records = listOf(buildStrokeRecord(targetLabel, cachedStrokes))
+            } else {
+                // Génération procédurale
+                records = generator.generate(targetLabel, 0f, 0f)
+            }
+
+            if (records.isEmpty()) continue
+
+            // ── Calculer la largeur du mot → retour à la ligne si nécessaire ──
+            val wordWidth = generator.estimateWidth(targetLabel)
+            if (cursorX + wordWidth > maxX && cursorX > generator.marginX) {
+                lineIndex++
+                cursorX = generator.marginX
+            }
+
+            val anchorY = firstLine + lineIndex * spacing
+            val anchorX = cursorX
+
+            // ── Injecter les strokes dans le registre ──
+            val newIndices = mutableListOf<Int>()
+            val newInkIds = mutableListOf<Long>()
+            for (record in records) {
+                val shiftedRecord = shiftRecord(record, anchorX, anchorY)
+                strokeRegistry.add(shiftedRecord)
+                val ri = strokeRegistry.size - 1
+                val inkId = ++inkStrokeIdCounter
+                inkStrokeIdToRegistryIndex[inkId] = ri
+                newIndices.add(ri)
+                newInkIds.add(inkId)
+            }
+
+            if (newIndices.isEmpty()) continue
+
+            // ── Créer le groupe ──
+            val firstIdx = newIndices.first()
+            groupLabels[firstIdx] = targetLabel
+            groupAnchor[firstIdx] = Pair(anchorX, anchorY)
+
+            val group = InkGroup.create()
+            group.strokeIds.addAll(newInkIds)  // inkIds (pas ri+1)
+            gm.registerLoadedGroup(group)
+            computeBlobPath(group, ctx)?.let { groupBlobs[group.id] = it }
+
+            // Avancer le curseur
+            cursorX += wordWidth + calX
+            generated++
+        }
+
+        val total = applied + generated
+        if (total > 0) {
+            Log.i(TAG, "MDM→strokes: $applied repositionnés, $generated générés (${total}/${mdmAnchors.size} ancres)")
+            redrawBitmapInternal(fullRedraw = true)
+        }
+        return total
+    }
+
+    /** Décale tous les points d'un StrokeRecord de (dx, dy). */
+    private fun shiftRecord(record: StrokeRecord, dx: Float, dy: Float): StrokeRecord {
+        return StrokeRecord(
+            id = record.id,
+            points = record.points.map { Pair(it.first + dx, it.second + dy) }.toMutableList(),
+            timestamps = record.timestamps.toMutableList(),
+            pressures = record.pressures.toMutableList(),
+            source = record.source
+        )
+    }
+
+    /** Construit un StrokeRecord depuis des points (x, y, pen). */
+    private fun buildStrokeRecord(label: String, strokes: List<Triple<Float, Float, Int>>): StrokeRecord {
+        val points = mutableListOf<Pair<Float, Float>>()
+        val timestamps = mutableListOf<Long>()
+        val pressures = mutableListOf<Float>()
+        var t = 0L
+        for ((x, y, pen) in strokes) {
+            points.add(Pair(x, y))
+            timestamps.add(t)
+            pressures.add(if (pen > 0) 0.7f else 0f)
+            t += 10L
+        }
+        return StrokeRecord(
+            id = java.util.UUID.randomUUID().toString(),
+            points = points,
+            timestamps = timestamps,
+            pressures = pressures,
+            source = "mdm"
+        )
     }
 
     private fun cleanLabelForMdm(raw: String): String {
