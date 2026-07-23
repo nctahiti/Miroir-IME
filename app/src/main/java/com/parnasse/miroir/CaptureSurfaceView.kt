@@ -68,12 +68,13 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     private var longPressArmed = false  // true après un long-press → en attente de swipe
 
     // ── Correction ────────────────────────────────────────────────────
-    private var correctionGroupId: String? = null
-    private var correctionGroupFirstIdx: Int = -1
-    private var correctionLabel: String = ""
-    private var correctLetterIndex: Int = -1
-    private var insertAtIndex: Int = -1
+    internal var correctionGroupId: String? = null
+    internal var correctionGroupFirstIdx: Int = -1
+    internal var correctionLabel: String = ""
+    internal var correctLetterIndex: Int = -1
+    internal var insertAtIndex: Int = -1
     private val correctionPaths = mutableListOf<Path>()
+    private var correctionTapConsumed = false  // évite handleTap() au UP quand le DOWN a traité une puce/lettre
 
     /** Callbacks */
     var onStrokeFinished: ((registryIndex: Int) -> Unit)? = null
@@ -159,22 +160,35 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                     return true
                 }
                 if (editMode == EditMode.CORRECT_TRANSCRIPTION) {
+                    Log.i(TAG, "Correction tap: (${"%.0f".format(event.x)}, ${"%.0f".format(event.y)}) label='${correctionLabel}' len=${correctionLabel.length}")
                     val minusIdx = hitTestMinus(event.x, event.y)
                     if (minusIdx >= 0 && minusIdx < correctionLabel.length) {
                         correctionLabel = correctionLabel.removeRange(minusIdx, minusIdx + 1)
                         correctLetterIndex = -1; insertAtIndex = -1
+                        correctionTapConsumed = true
+                        Log.i(TAG, "Correction: ─ #$minusIdx → '${correctionLabel}'")
                         invalidate(); return true
                     }
                     val plusIdx = hitTestPlus(event.x, event.y)
                     if (plusIdx >= 0 && plusIdx <= correctionLabel.length) {
-                        insertAtIndex = plusIdx; correctLetterIndex = -1
+                        // Insérer une case vide (·) et la sélectionner pour réécriture
+                        correctionLabel = correctionLabel.substring(0, plusIdx) + "·" + correctionLabel.substring(plusIdx)
+                        correctLetterIndex = plusIdx; insertAtIndex = -1
+                        correctionTapConsumed = true
+                        fontaineOverlay?.correctionWriteActive = true
+                        Log.i(TAG, "Correction: + @$plusIdx → '$correctionLabel' (case #$plusIdx sélectionnée)")
                         invalidate(); return true
                     }
                     val letterIdx = hitTestLetter(event.x, event.y)
                     if (letterIdx >= 0 && letterIdx < correctionLabel.length) {
                         correctLetterIndex = letterIdx; insertAtIndex = -1
+                        correctionTapConsumed = true
+                        fontaineOverlay?.correctionWriteActive = true
+                        fontaineOverlay?.reactiver()
+                        Log.i(TAG, "Correction: lettre #$letterIdx sélectionnée → prêt à écrire")
                         invalidate(); return true
                     }
+                    Log.i(TAG, "Correction: tap hors cadre → sortie")
                     exitEditMode()
                     invalidate()
                     return true
@@ -194,7 +208,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                     handleLongPressUp()
                     return true
                 }
-                if (!tapMoved) {
+                if (correctionTapConsumed) {
+                    correctionTapConsumed = false
+                } else if (!tapMoved) {
                     handleTap(event.x, event.y)
                 }
                 invalidate()
@@ -337,9 +353,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         // Appliquer la coupe scrub si active (PEN_UP en mode ERASE)
         if (editMode == EditMode.ERASE) applyScrubCut()
         val wasCorrecting = editMode == EditMode.CORRECT_TRANSCRIPTION
-        exitGestureMode()
         longPressArmed = false
         if (!wasCorrecting) {
+            exitGestureMode()
             onReturnToWriting?.invoke()
         }
         invalidate()
@@ -450,6 +466,62 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         enterCorrectionMode(gid)
     }
 
+    /** Applique le résultat d'inférence en mode correction (remplacement ou insertion). */
+    fun applyCorrectionResult(result: String, tempGroupFirstIdx: Int) {
+        if (!isCorrecting()) return
+        val origIdx = correctionGroupFirstIdx
+        if (origIdx < 0) return
+        val origLabel = engine.groupLabels[origIdx] ?: return
+        val gm = engine.groupManager ?: return
+
+        if (correctLetterIndex >= 0) {
+            // Remplacer la lettre sélectionnée
+            if (correctLetterIndex < origLabel.length) {
+                val corrected = result.first().toString()
+                val newLabel = origLabel.substring(0, correctLetterIndex) + corrected +
+                               origLabel.substring(correctLetterIndex + 1)
+                engine.groupLabels[origIdx] = newLabel
+                correctionLabel = newLabel
+                Log.i(TAG, "Correction: '$origLabel' → '$newLabel' (lettre #$correctLetterIndex: '$corrected')")
+            }
+        } else if (insertAtIndex >= 0) {
+            // Insérer à la position
+            val newLabel = origLabel.substring(0, insertAtIndex) + result +
+                           origLabel.substring(insertAtIndex)
+            engine.groupLabels[origIdx] = newLabel
+            correctionLabel = newLabel
+            Log.i(TAG, "Insertion: '$origLabel' → '$newLabel' (position #$insertAtIndex: '$result')")
+        }
+        // Nettoyer le groupe temporaire
+        val tempGroup = gm.allGroups().find { g ->
+            g.strokeIds.firstOrNull()?.let { engine.inkStrokeIdToRegistryIndex[it] == tempGroupFirstIdx } == true
+        }
+        if (tempGroup != null) {
+            for (sid in tempGroup.strokeIds) {
+                val idx = engine.inkStrokeIdToRegistryIndex[sid]
+                if (idx != null && idx < engine.strokeRegistry.size) {
+                    engine.strokeRegistry[idx].isDeleted = true
+                }
+            }
+            engine.groupBlobs.remove(tempGroup.id)
+            gm.removeGroup(tempGroup.id)
+        }
+        // Ré-animer le blob du groupe original
+        correctionGroupId?.let { gid ->
+            gm.allGroupsFull().find { it.id == gid }?.let { group ->
+                engine.computeBlobPath(group)?.let { blob ->
+                    engine.groupBlobs[group.id] = blob
+                }
+            }
+        }
+        correctionPaths.clear()
+        correctLetterIndex = -1
+        insertAtIndex = -1
+        fontaineOverlay?.correctionWriteActive = false
+        fontaineOverlay?.desactiver()
+        invalidate()
+    }
+
     private fun exitEditMode() {
         // Appliquer le label corrige
         if (correctionGroupFirstIdx >= 0 && correctionLabel.isNotEmpty()) {
@@ -463,6 +535,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         correctLetterIndex = -1
         insertAtIndex = -1
         correctionPaths.clear()
+        fontaineOverlay?.correctionWriteActive = false
+        fontaineOverlay?.desactiver()
     }
 
     fun isCorrecting() = editMode == EditMode.CORRECT_TRANSCRIPTION

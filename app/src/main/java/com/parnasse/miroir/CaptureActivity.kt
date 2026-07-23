@@ -122,6 +122,13 @@ class CaptureActivity : Activity() {
                 val result = rec.recognize(registrySnapshot, indices)
                 if (!result.isNullOrBlank()) {
                     uiHandler.post {
+                        // ═══ Mode correction → redirect vers CaptureSurfaceView ═══
+                        val cv = captureView
+                        if (cv != null && cv.isCorrecting() && (cv.correctLetterIndex >= 0 || cv.insertAtIndex >= 0) && firstIdx != cv.correctionGroupFirstIdx) {
+                            cv.applyCorrectionResult(result, firstIdx)
+                            Log.i(TAG, "Correction appliquée: '$result' (mode correction, firstIdx=$firstIdx)")
+                            return@post
+                        }
                         if (!engine.groupLabels.containsKey(firstIdx)) {
                             engine.groupLabels[firstIdx] = result
                             val anchor = registrySnapshot.getOrNull(firstIdx)?.points?.firstOrNull()

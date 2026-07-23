@@ -65,6 +65,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
 
     /** Cible de forward des événements tactiles en mode interaction. */
     var touchForwardTarget: android.view.View? = null
+    var correctionWriteActive: Boolean = false  // true → autorise l'écriture même en modeInteraction (correction de label)
 
     private var strokeColor = Color.BLACK
     private var strokeWidthDp = STROKE_WIDTH_DP
@@ -106,7 +107,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
         try {
             val callback = object : com.onyx.android.sdk.pen.RawInputCallback() {
                 override fun onBeginRawDrawing(eraser: Boolean, tp: com.onyx.android.sdk.data.note.TouchPoint) {
-                    if (modeInteraction) return  // pas de keepRawDrawingActive — fontaine désactivée
+                    if (modeInteraction && !correctionWriteActive) return  // sauf correction de label — autorise l'écriture
                     keepRawDrawingActive()
                     strokeCount++
                     Log.i(TAG, "🖊️ BEGIN #$strokeCount eraser=$eraser x=${tp.x.toInt()} y=${tp.y.toInt()}")
@@ -126,9 +127,9 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                 }
 
                 override fun onRawDrawingTouchPointMoveReceived(tp: com.onyx.android.sdk.data.note.TouchPoint?) {
-                    if (modeInteraction) {
+                    if (modeInteraction && !correctionWriteActive) {
                         if (tp != null) handleGestureMove(tp.x, tp.y)
-                        return  // pas de keepRawDrawingActive — fontaine désactivée
+                        return  // sauf correction de label
                     }
                     keepRawDrawingActive()
                     if (tp != null) {
@@ -139,18 +140,18 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                 }
 
                 override fun onRawDrawingTouchPointListReceived(list: com.onyx.android.sdk.pen.data.TouchPointList?) {
-                    if (modeInteraction) {
+                    if (modeInteraction && !correctionWriteActive) {
                         for (i in 0 until (list?.size() ?: 0)) {
                             val pt = list?.get(i) ?: continue
                             handleGestureMove(pt.x, pt.y)
                         }
-                        return  // pas de keepRawDrawingActive
+                        return  // sauf correction de label
                     }
                     keepRawDrawingActive()
                     if (!isStylusDown || list == null) return
                     for (i in 0 until list.size()) {
                         val pt = list.get(i) ?: continue
-                        if (modeInteraction) {
+                        if (modeInteraction && !correctionWriteActive) {
                             handleGestureMove(pt.x, pt.y)
                         } else {
                             if (!strokeStarted) startDeferredStroke()
@@ -167,10 +168,10 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                     cancelLongPressTimer()
                     if (!isStylusDown) return
                     isStylusDown = false
-                    if (modeInteraction) {
+                    if (modeInteraction && !correctionWriteActive) {
                         onGestureEnd?.invoke()
                         gestureMode = null
-                        return  // pas de traitement écriture
+                        return  // sauf correction de label — traitement écriture normal
                         Log.i(TAG, "🖊️ END   (geste) mode=$gestureMode")
                     } else if (!strokeStarted) {
                         // Tap sans mouvement → pas de stroke créé
