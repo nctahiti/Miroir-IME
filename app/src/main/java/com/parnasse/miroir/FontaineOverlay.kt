@@ -67,6 +67,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     var touchForwardTarget: android.view.View? = null
     var correctionWriteActive: Boolean = false  // true → autorise l'écriture même en modeInteraction (correction de label)
     private var ignoreStrokeForCorrection: Boolean = false  // true → stroke hors cadre, à ignorer
+    private var longPressTriggered: Boolean = false  // true → le long-press a annulé ce stroke
 
     private var strokeColor = Color.BLACK
     private var strokeWidthDp = STROKE_WIDTH_DP
@@ -183,6 +184,16 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                         ignoreStrokeForCorrection = false
                         if (!isStylusDown) return
                         isStylusDown = false
+                        return
+                    }
+                    // ═══ Un long-press n'est JAMAIS un stroke ═══
+                    if (longPressTriggered) {
+                        longPressTriggered = false
+                        if (!isStylusDown) return
+                        isStylusDown = false
+                        strokeStarted = false
+                        processedPoints.clear()
+                        Log.d(TAG, "🖊️ END   (long-press, stroke annulé)")
                         return
                     }
                     if (!isStylusDown) return

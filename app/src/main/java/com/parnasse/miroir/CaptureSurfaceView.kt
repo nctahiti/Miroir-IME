@@ -76,8 +76,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     private val correctionPaths = mutableListOf<Path>()
     private var correctionTapConsumed = false  // évite handleTap() au UP quand le DOWN a traité une puce/lettre
     private var correctionExitTimer: java.lang.Runnable? = null  // long-press pour sortir du mode correction
+    private var correctionExitTriggered: Boolean = false  // true → sortie faite, attend PEN_UP pour retour écriture
     internal var correctionOriginalStrokeCount: Int = 0  // strokes du groupe original avant correction
     private var savedSelectedGroupId: String? = null  // groupe à restaurer à la sortie
+    internal var lastCorrectionExitTime: Long = 0  // anti-rebond long-press après sortie
 
     /** Callbacks */
     var onStrokeFinished: ((registryIndex: Int) -> Unit)? = null
@@ -192,12 +194,14 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                     // Tap hors cadre → armer un long-press (500ms) pour sortir
                     Log.i(TAG, "Correction: tap hors cadre → maintien pour sortir")
                     correctionExitTimer = java.lang.Runnable {
-                        Log.i(TAG, "Correction: long-press hors cadre → sortie")
+                        Log.i(TAG, "Correction: long-press 400ms → vue effacée, attente PEN_UP")
+                        engine.cancelStroke()  // annuler le stroke du long-press en cours
                         exitEditMode()
                         fontaineOverlay?.desactiver()
+                        correctionExitTriggered = true
                         invalidate()
                     }
-                    postDelayed(correctionExitTimer!!, 500)
+                    postDelayed(correctionExitTimer!!, 400)
                     correctionTapConsumed = true
                     invalidate()
                     return true
@@ -217,7 +221,16 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                     handleLongPressUp()
                     return true
                 }
-                // Annuler le timer de sortie correction si on relâche avant 500ms
+                // Sortie correction : si le timer a expiré, retour écriture au PEN_UP
+                if (correctionExitTriggered) {
+                    correctionExitTriggered = false
+                    correctionExitTimer?.let { removeCallbacks(it) }
+                    correctionExitTimer = null
+                    onReturnToWriting?.invoke()
+                    Log.i(TAG, "Correction: PEN_UP → retour écriture")
+                    return true
+                }
+                // Annuler le timer si on relâche avant 400ms (tap court = ignoré)
                 correctionExitTimer?.let { removeCallbacks(it) }
                 correctionExitTimer = null
                 if (correctionTapConsumed) {
@@ -591,15 +604,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
         // ═══ Restaurer le groupe désélectionné à l'entrée ═══
         savedSelectedGroupId?.let { gid ->
-            val gm = engine.groupManager
-            val group = gm?.allGroupsFull()?.find { it.id == gid }
-            if (group != null) {
-                val firstSid = group.strokeIds.firstOrNull()
-                if (firstSid != null) gm.reactivateGroup(firstSid)
-                selectedGroupId = gid
-                val firstRI = firstSid?.let { sid -> engine.inkStrokeIdToRegistryIndex[sid] }
-                selectedGroupLabel = firstRI?.let { ri -> engine.groupLabels[ri] }
-            }
+            selectGroup(gid)  // transitionne en SELECTED → prêt pour absorption
         }
         savedSelectedGroupId = null
     }
