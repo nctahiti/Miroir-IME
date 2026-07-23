@@ -75,6 +75,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     internal var insertAtIndex: Int = -1
     private val correctionPaths = mutableListOf<Path>()
     private var correctionTapConsumed = false  // évite handleTap() au UP quand le DOWN a traité une puce/lettre
+    private var correctionExitTimer: java.lang.Runnable? = null  // long-press pour sortir du mode correction
+    internal var correctionOriginalStrokeCount: Int = 0  // strokes du groupe original avant correction
 
     /** Callbacks */
     var onStrokeFinished: ((registryIndex: Int) -> Unit)? = null
@@ -183,13 +185,19 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                     if (letterIdx >= 0 && letterIdx < correctionLabel.length) {
                         correctLetterIndex = letterIdx; insertAtIndex = -1
                         correctionTapConsumed = true
-                        fontaineOverlay?.correctionWriteActive = true
-                        fontaineOverlay?.reactiver()
                         Log.i(TAG, "Correction: lettre #$letterIdx sélectionnée → prêt à écrire")
                         invalidate(); return true
                     }
-                    Log.i(TAG, "Correction: tap hors cadre → sortie")
-                    exitEditMode()
+                    // Tap hors cadre → armer un long-press (500ms) pour sortir
+                    Log.i(TAG, "Correction: tap hors cadre → maintien pour sortir")
+                    correctionExitTimer = java.lang.Runnable {
+                        Log.i(TAG, "Correction: long-press hors cadre → sortie")
+                        exitEditMode()
+                        fontaineOverlay?.desactiver()
+                        invalidate()
+                    }
+                    postDelayed(correctionExitTimer!!, 500)
+                    correctionTapConsumed = true
                     invalidate()
                     return true
                 }
@@ -208,6 +216,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                     handleLongPressUp()
                     return true
                 }
+                // Annuler le timer de sortie correction si on relâche avant 500ms
+                correctionExitTimer?.let { removeCallbacks(it) }
+                correctionExitTimer = null
                 if (correctionTapConsumed) {
                     correctionTapConsumed = false
                 } else if (!tapMoved) {
@@ -357,6 +368,11 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         if (!wasCorrecting) {
             exitGestureMode()
             onReturnToWriting?.invoke()
+        } else {
+            // Mode correction : activer l'écriture pour les strokes de correction
+            fontaineOverlay?.correctionWriteActive = true
+            fontaineOverlay?.reactiver()
+            Log.i(TAG, "Mode correction: écriture activée pour correction")
         }
         invalidate()
     }
@@ -457,6 +473,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         correctionPaths.clear()
 
         Log.i(TAG, "Mode correction: '$label' (groupe ${gid.take(8)})")
+        correctionOriginalStrokeCount = group.strokeIds.size
         invalidate()
     }
 
@@ -517,8 +534,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         correctionPaths.clear()
         correctLetterIndex = -1
         insertAtIndex = -1
-        fontaineOverlay?.correctionWriteActive = false
-        fontaineOverlay?.desactiver()
+        // ⚠️ Ne pas désactiver correctionWriteActive ni la fontaine —
+        // on reste en mode correction, prêt pour la prochaine lettre.
+        // Redessiner le bitmap pour effacer le stroke de correction
+        engine.redrawBitmapInternal(fullRedraw = true)
         invalidate()
     }
 
@@ -536,7 +555,6 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         insertAtIndex = -1
         correctionPaths.clear()
         fontaineOverlay?.correctionWriteActive = false
-        fontaineOverlay?.desactiver()
     }
 
     fun isCorrecting() = editMode == EditMode.CORRECT_TRANSCRIPTION

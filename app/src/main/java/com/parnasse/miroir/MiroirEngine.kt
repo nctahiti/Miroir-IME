@@ -71,6 +71,7 @@ class MiroirEngine {
     // ═══════════════════════════════════════════════════════════════════
 
     fun initGroupManager(context: Context) {
+        Log.i(TAG, "initGroupManager: appelé, blockDir=${blockDir?.absolutePath ?: "NULL"}")
         appContext = context.applicationContext
         // ═══ Charger les paramètres de calibration (blob, espacement) ═══
         val calX = CalibrationActivity.getSpatialDistanceX(context)
@@ -384,6 +385,7 @@ class MiroirEngine {
     /** Insère une nouvelle page APRÈS la page courante (décale vers la droite).
      *  Si on est sur la dernière page, ajoute simplement à la fin. */
     fun newPage() {
+        Log.i(TAG, "newPage: avant save, page=$currentPageIndex, blockDir=${blockDir?.absolutePath ?: "NULL"}")
         savePageFull()
         val bd = blockDir ?: return
         val total = countPages()

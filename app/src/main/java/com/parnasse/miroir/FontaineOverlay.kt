@@ -367,8 +367,12 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
 
     /** Réactive — rapide : juste openRawDrawing + essentiel. */
     fun activer() {
+        Log.i(TAG, "activer() appelé — touchHelper=${touchHelper != null}")
         try {
-            val th = touchHelper ?: return
+            val th = touchHelper ?: run {
+                Log.w(TAG, "activer() échoué: touchHelper est null")
+                return
+            }
             th.openRawDrawing()
             th.setStrokeStyle(com.onyx.android.sdk.pen.TouchHelper.STROKE_STYLE_FOUNTAIN)
             val density = resources.displayMetrics.density
@@ -376,23 +380,31 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
             th.setStrokeColor(strokeColor)
             th.setRawDrawingRenderEnabled(true)
             th.setRawDrawingEnabled(true)
-        } catch (_: Exception) {}
-        Log.d(TAG, "Fontaine réactivée")
+            Log.i(TAG, "Fontaine activée — OK")
+        } catch (e: Exception) {
+            Log.w(TAG, "activer() échoué: ${e.message}")
+        }
     }
 
     /** Réactive — le canal raw drawing n'a jamais été fermé, juste désactivé. */
     fun reactiver() {
+        Log.i(TAG, "reactiver() appelé — touchHelper=${touchHelper != null}")
         try {
-            val th = touchHelper ?: return
-            // Pas besoin de openRawDrawing() — le canal est resté ouvert
+            val th = touchHelper ?: run {
+                Log.w(TAG, "reactiver() échoué: touchHelper est null")
+                return
+            }
+            th.openRawDrawing()  // rouvrir le canal au cas où il aurait été fermé
             th.setStrokeStyle(com.onyx.android.sdk.pen.TouchHelper.STROKE_STYLE_FOUNTAIN)
             val density = resources.displayMetrics.density
             th.setStrokeWidth(strokeWidthDp * density)
             th.setStrokeColor(strokeColor)
             th.setRawDrawingRenderEnabled(true)
             th.setRawDrawingEnabled(true)
-        } catch (_: Exception) {}
-        Log.i(TAG, "Fontaine réactivée (canal préservé)")
+            Log.i(TAG, "Fontaine réactivée — OK")
+        } catch (e: Exception) {
+            Log.w(TAG, "reactiver() échoué: ${e.message}")
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════

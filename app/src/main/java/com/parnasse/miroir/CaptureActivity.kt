@@ -104,6 +104,7 @@ class CaptureActivity : Activity() {
     private fun runGroupInference() {
         val gm = engine.groupManager ?: return
         val groups = gm.allGroupsFull()
+        Log.i(TAG, "runGroupInference: ${groups.size} groupes, isCorrecting=${captureView?.isCorrecting() ?: false}, correctLetterIndex=${captureView?.correctLetterIndex ?: -1}, insertAtIndex=${captureView?.insertAtIndex ?: -1}")
         if (groups.isEmpty()) return
         val rec = recognizer ?: return
         if (!rec.isLoaded) return
@@ -124,10 +125,17 @@ class CaptureActivity : Activity() {
                     uiHandler.post {
                         // ═══ Mode correction → redirect vers CaptureSurfaceView ═══
                         val cv = captureView
-                        if (cv != null && cv.isCorrecting() && (cv.correctLetterIndex >= 0 || cv.insertAtIndex >= 0) && firstIdx != cv.correctionGroupFirstIdx) {
-                            cv.applyCorrectionResult(result, firstIdx)
-                            Log.i(TAG, "Correction appliquée: '$result' (mode correction, firstIdx=$firstIdx)")
-                            return@post
+                        if (cv != null && cv.isCorrecting() && (cv.correctLetterIndex >= 0 || cv.insertAtIndex >= 0)) {
+                            // Détecter si le groupe a absorbé un stroke de correction
+                            val isNewGroup = firstIdx != cv.correctionGroupFirstIdx
+                            val groupGrew = firstIdx == cv.correctionGroupFirstIdx && group.strokeIds.size > cv.correctionOriginalStrokeCount
+                            Log.i(TAG, "Correction check: firstIdx=$firstIdx origFirstIdx=${cv.correctionGroupFirstIdx} strokes=${group.strokeIds.size} origStrokes=${cv.correctionOriginalStrokeCount} isNew=$isNewGroup grew=$groupGrew")
+                            if (isNewGroup || groupGrew) {
+                                cv.applyCorrectionResult(result, firstIdx)
+                                cv.correctionOriginalStrokeCount = group.strokeIds.size
+                                Log.i(TAG, "Correction appliquée: '$result' (mode correction, firstIdx=$firstIdx, grew=$groupGrew)")
+                                return@post
+                            }
                         }
                         if (!engine.groupLabels.containsKey(firstIdx)) {
                             engine.groupLabels[firstIdx] = result
@@ -173,6 +181,7 @@ class CaptureActivity : Activity() {
             val total = engine.countPages()
             if (total > 0 && engine.currentPageIndex > 0) {
                 engine.goToPageFull(engine.currentPageIndex - 1)
+                returnToWriting()
                 captureView?.invalidate()
                 updatePageCounter()
             }
@@ -191,10 +200,14 @@ class CaptureActivity : Activity() {
             val total = engine.countPages()
             if (total > 0 && engine.currentPageIndex < total - 1) {
                 engine.goToPageFull(engine.currentPageIndex + 1)
+                returnToWriting()
                 captureView?.invalidate()
                 updatePageCounter()
             } else if (total == 0 || engine.currentPageIndex >= total - 1) {
                 engine.newPage()
+                engine.initGroupManager(this)
+                engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
+                returnToWriting()
                 captureView?.clearCanvas()
                 updatePageCounter()
             }
@@ -301,6 +314,9 @@ class CaptureActivity : Activity() {
         val popup = PopupMenu(this, anchor)
         popup.menu.add("Nouvelle page (après)").setOnMenuItemClickListener {
             engine.newPage()  // insère après la page courante
+            engine.initGroupManager(this)
+            engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
+            returnToWriting()
             captureView?.clearCanvas()
             updatePageCounter()
             captureView?.invalidate()
@@ -308,6 +324,9 @@ class CaptureActivity : Activity() {
         }
         popup.menu.add("Nouvelle page (début)").setOnMenuItemClickListener {
             engine.newPageAtBeginning()
+            engine.initGroupManager(this)
+            engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
+            returnToWriting()
             captureView?.clearCanvas()
             updatePageCounter()
             captureView?.invalidate()
@@ -315,6 +334,9 @@ class CaptureActivity : Activity() {
         }
         popup.menu.add("Nouvelle page (fin)").setOnMenuItemClickListener {
             engine.newPageAtEnd()
+            engine.initGroupManager(this)
+            engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
+            returnToWriting()
             captureView?.clearCanvas()
             updatePageCounter()
             captureView?.invalidate()
@@ -419,10 +441,12 @@ class CaptureActivity : Activity() {
         val inkMappings = engine.inkStrokeIdToRegistryIndex.size
         Log.i(TAG, "📊 CACHE refresh: strokes=$strokes/$totalStrokes inkMap=$inkMappings " +
             "blobs=$blobs labels=$labels groupes=cache$cacheGroups/all$allGroups")
+        Log.i(TAG, "refreshDisplay: desactiver...")
         fontaineOverlay?.desactiver()
         captureView?.invalidate()
+        Log.i(TAG, "refreshDisplay: activer... fontaineOverlay=${fontaineOverlay != null}")
         fontaineOverlay?.activer()
-        Log.d(TAG, "Display refresh — éviction groupes inactifs")
+        Log.i(TAG, "refreshDisplay: terminé")
     }
 
     private fun cancelTimers() {
@@ -441,11 +465,12 @@ class CaptureActivity : Activity() {
     }
 
     private fun returnToWriting() {
+        Log.i(TAG, "returnToWriting: modeInteraction=${fontaineOverlay?.modeInteraction} correctionWriteActive=${fontaineOverlay?.correctionWriteActive}")
         fontaineOverlay?.modeInteraction = false
         fontaineOverlay?.touchForwardTarget = null
         fontaineOverlay?.effacerSurface()
         captureView?.invalidate()
         fontaineOverlay?.reactiver()
-        Log.d(TAG, "Retour écriture — groupe SELECTED préservé, fontaine réactivée")
+        Log.i(TAG, "Retour écriture — fontaine réactivée")
     }
 }
