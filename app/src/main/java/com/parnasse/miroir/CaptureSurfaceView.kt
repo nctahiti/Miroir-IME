@@ -77,6 +77,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     private var correctionTapConsumed = false  // évite handleTap() au UP quand le DOWN a traité une puce/lettre
     private var correctionExitTimer: java.lang.Runnable? = null  // long-press pour sortir du mode correction
     internal var correctionOriginalStrokeCount: Int = 0  // strokes du groupe original avant correction
+    private var savedSelectedGroupId: String? = null  // groupe à restaurer à la sortie
 
     /** Callbacks */
     var onStrokeFinished: ((registryIndex: Int) -> Unit)? = null
@@ -472,9 +473,21 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         insertAtIndex = -1
         correctionPaths.clear()
 
-        Log.i(TAG, "Mode correction: '$label' (groupe ${gid.take(8)})")
+        // ═══ Désélectionner le groupe pour que les strokes de correction
+        //      créent des groupes SÉPARÉS (pas absorbés) ═══
+        savedSelectedGroupId = selectedGroupId
+        deselectGroupInternal()
+        Log.i(TAG, "Mode correction: '$label' (groupe ${gid.take(8)}) — groupe désélectionné")
         correctionOriginalStrokeCount = group.strokeIds.size
         invalidate()
+    }
+
+    /** Désélectionne sans réactiver la fontaine (usage interne). */
+    private fun deselectGroupInternal() {
+        val gm = engine.groupManager
+        selectedGroupId?.let { gm?.deselectGroup(it) }
+        selectedGroupId = null
+        selectedGroupLabel = null
     }
 
     /** Entre en mode correction pour le groupe sélectionné (appelé par swipe ↑). */
@@ -575,6 +588,20 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         insertAtIndex = -1
         correctionPaths.clear()
         fontaineOverlay?.correctionWriteActive = false
+
+        // ═══ Restaurer le groupe désélectionné à l'entrée ═══
+        savedSelectedGroupId?.let { gid ->
+            val gm = engine.groupManager
+            val group = gm?.allGroupsFull()?.find { it.id == gid }
+            if (group != null) {
+                val firstSid = group.strokeIds.firstOrNull()
+                if (firstSid != null) gm.reactivateGroup(firstSid)
+                selectedGroupId = gid
+                val firstRI = firstSid?.let { sid -> engine.inkStrokeIdToRegistryIndex[sid] }
+                selectedGroupLabel = firstRI?.let { ri -> engine.groupLabels[ri] }
+            }
+        }
+        savedSelectedGroupId = null
     }
 
     /** Hit-test pour le mode correction — appelé depuis les callbacks firmware Onyx.

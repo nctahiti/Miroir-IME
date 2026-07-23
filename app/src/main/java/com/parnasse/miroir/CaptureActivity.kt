@@ -126,14 +126,11 @@ class CaptureActivity : Activity() {
                         // ═══ Mode correction → redirect vers CaptureSurfaceView ═══
                         val cv = captureView
                         if (cv != null && cv.isCorrecting() && (cv.correctLetterIndex >= 0 || cv.insertAtIndex >= 0)) {
-                            // Détecter si le groupe a absorbé un stroke de correction
-                            val isNewGroup = firstIdx != cv.correctionGroupFirstIdx
-                            val groupGrew = firstIdx == cv.correctionGroupFirstIdx && group.strokeIds.size > cv.correctionOriginalStrokeCount
-                            Log.i(TAG, "Correction check: firstIdx=$firstIdx origFirstIdx=${cv.correctionGroupFirstIdx} strokes=${group.strokeIds.size} origStrokes=${cv.correctionOriginalStrokeCount} isNew=$isNewGroup grew=$groupGrew")
-                            if (isNewGroup || groupGrew) {
+                            // Avec la désélection à l'entrée, les strokes de correction
+                            // créent toujours des groupes SÉPARÉS (firstIdx != correctionGroupFirstIdx)
+                            if (firstIdx != cv.correctionGroupFirstIdx) {
                                 cv.applyCorrectionResult(result, firstIdx)
-                                cv.correctionOriginalStrokeCount = group.strokeIds.size
-                                Log.i(TAG, "Correction appliquée: '$result' (mode correction, firstIdx=$firstIdx, grew=$groupGrew)")
+                                Log.i(TAG, "Correction appliquée: '$result' (mode correction, firstIdx=$firstIdx)")
                                 return@post
                             }
                         }

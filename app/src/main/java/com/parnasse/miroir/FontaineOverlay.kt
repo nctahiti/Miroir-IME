@@ -66,6 +66,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
     /** Cible de forward des événements tactiles en mode interaction. */
     var touchForwardTarget: android.view.View? = null
     var correctionWriteActive: Boolean = false  // true → autorise l'écriture même en modeInteraction (correction de label)
+    private var ignoreStrokeForCorrection: Boolean = false  // true → stroke hors cadre, à ignorer
 
     private var strokeColor = Color.BLACK
     private var strokeWidthDp = STROKE_WIDTH_DP
@@ -111,7 +112,13 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                     keepRawDrawingActive()
                     // En mode correction, faire le hit-test de la cible via le firmware
                     if (correctionWriteActive) {
-                        (touchForwardTarget as? CaptureSurfaceView)?.hitTestCorrectionTarget(tp.x, tp.y)
+                        val hit = (touchForwardTarget as? CaptureSurfaceView)?.hitTestCorrectionTarget(tp.x, tp.y) ?: false
+                        if (!hit) {
+                            // Stylet hors du cadre de correction → ignorer ce stroke
+                            ignoreStrokeForCorrection = true
+                            return
+                        }
+                        ignoreStrokeForCorrection = false
                     }
                     strokeCount++
                     Log.i(TAG, "🖊️ BEGIN #$strokeCount eraser=$eraser x=${tp.x.toInt()} y=${tp.y.toInt()}")
@@ -131,6 +138,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                 }
 
                 override fun onRawDrawingTouchPointMoveReceived(tp: com.onyx.android.sdk.data.note.TouchPoint?) {
+                    if (ignoreStrokeForCorrection) return
                     if (modeInteraction && !correctionWriteActive) {
                         if (tp != null) handleGestureMove(tp.x, tp.y)
                         return  // sauf correction de label
@@ -144,6 +152,7 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                 }
 
                 override fun onRawDrawingTouchPointListReceived(list: com.onyx.android.sdk.pen.data.TouchPointList?) {
+                    if (ignoreStrokeForCorrection) return
                     if (modeInteraction && !correctionWriteActive) {
                         for (i in 0 until (list?.size() ?: 0)) {
                             val pt = list?.get(i) ?: continue
@@ -170,6 +179,12 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
 
                 override fun onEndRawDrawing(eraser: Boolean, tp: com.onyx.android.sdk.data.note.TouchPoint) {
                     cancelLongPressTimer()
+                    if (ignoreStrokeForCorrection) {
+                        ignoreStrokeForCorrection = false
+                        if (!isStylusDown) return
+                        isStylusDown = false
+                        return
+                    }
                     if (!isStylusDown) return
                     isStylusDown = false
                     if (modeInteraction && !correctionWriteActive) {
