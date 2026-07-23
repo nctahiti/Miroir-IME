@@ -109,6 +109,10 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                 override fun onBeginRawDrawing(eraser: Boolean, tp: com.onyx.android.sdk.data.note.TouchPoint) {
                     if (modeInteraction && !correctionWriteActive) return  // sauf correction de label — autorise l'écriture
                     keepRawDrawingActive()
+                    // En mode correction, faire le hit-test de la cible via le firmware
+                    if (correctionWriteActive) {
+                        (touchForwardTarget as? CaptureSurfaceView)?.hitTestCorrectionTarget(tp.x, tp.y)
+                    }
                     strokeCount++
                     Log.i(TAG, "🖊️ BEGIN #$strokeCount eraser=$eraser x=${tp.x.toInt()} y=${tp.y.toInt()}")
                     isStylusDown = true

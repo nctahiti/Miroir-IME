@@ -509,11 +509,12 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             correctionLabel = newLabel
             Log.i(TAG, "Insertion: '$origLabel' → '$newLabel' (position #$insertAtIndex: '$result')")
         }
-        // Nettoyer le groupe temporaire
+        // Nettoyer les strokes de correction
         val tempGroup = gm.allGroups().find { g ->
             g.strokeIds.firstOrNull()?.let { engine.inkStrokeIdToRegistryIndex[it] == tempGroupFirstIdx } == true
         }
         if (tempGroup != null) {
+            // Groupe temporaire séparé → nettoyer tout le groupe
             for (sid in tempGroup.strokeIds) {
                 val idx = engine.inkStrokeIdToRegistryIndex[sid]
                 if (idx != null && idx < engine.strokeRegistry.size) {
@@ -522,6 +523,21 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             }
             engine.groupBlobs.remove(tempGroup.id)
             gm.removeGroup(tempGroup.id)
+        } else {
+            // Stroke absorbé par le groupe original → nettoyer les strokes ajoutés
+            val origGroup = gm.allGroupsFull().find { it.id == correctionGroupId }
+            if (origGroup != null && origGroup.strokeIds.size > correctionOriginalStrokeCount) {
+                val addedIds = origGroup.strokeIds.drop(correctionOriginalStrokeCount).toSet()
+                for (sid in addedIds) {
+                    val idx = engine.inkStrokeIdToRegistryIndex[sid]
+                    if (idx != null && idx < engine.strokeRegistry.size) {
+                        engine.strokeRegistry[idx].isDeleted = true
+                    }
+                }
+                origGroup.strokeIds.removeAll(addedIds)
+                correctionOriginalStrokeCount = origGroup.strokeIds.size
+                Log.i(TAG, "Nettoyage absorption: ${addedIds.size} strokes retirés du groupe")
+            }
         }
         // Ré-animer le blob du groupe original
         correctionGroupId?.let { gid ->
@@ -536,8 +552,12 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         insertAtIndex = -1
         // ⚠️ Ne pas désactiver correctionWriteActive ni la fontaine —
         // on reste en mode correction, prêt pour la prochaine lettre.
-        // Redessiner le bitmap pour effacer le stroke de correction
+        // Cycle desactiver/activer pour forcer la fontaine à effacer sa surface
+        fontaineOverlay?.desactiver()
         engine.redrawBitmapInternal(fullRedraw = true)
+        fontaineOverlay?.effacerSurface()
+        fontaineOverlay?.activer()  // réactive la fontaine (raw drawing + rendu)
+        Log.i(TAG, "applyCorrectionResult: correctionLabel='$correctionLabel' → rafraîchi")
         invalidate()
     }
 
@@ -555,6 +575,33 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         insertAtIndex = -1
         correctionPaths.clear()
         fontaineOverlay?.correctionWriteActive = false
+    }
+
+    /** Hit-test pour le mode correction — appelé depuis les callbacks firmware Onyx.
+     *  Sélectionne automatiquement la lettre sous (x,y). */
+    fun hitTestCorrectionTarget(x: Float, y: Float): Boolean {
+        if (!isCorrecting()) return false
+        val minusIdx = hitTestMinus(x, y)
+        if (minusIdx >= 0 && minusIdx < correctionLabel.length) {
+            correctionLabel = correctionLabel.removeRange(minusIdx, minusIdx + 1)
+            correctLetterIndex = -1; insertAtIndex = -1
+            Log.i(TAG, "Correction firmware: ─ #$minusIdx → '$correctionLabel'")
+            invalidate(); return true
+        }
+        val plusIdx = hitTestPlus(x, y)
+        if (plusIdx >= 0 && plusIdx <= correctionLabel.length) {
+            correctionLabel = correctionLabel.substring(0, plusIdx) + "·" + correctionLabel.substring(plusIdx)
+            correctLetterIndex = plusIdx; insertAtIndex = -1
+            Log.i(TAG, "Correction firmware: + @$plusIdx → '$correctionLabel'")
+            invalidate(); return true
+        }
+        val letterIdx = hitTestLetter(x, y)
+        if (letterIdx >= 0 && letterIdx < correctionLabel.length) {
+            correctLetterIndex = letterIdx; insertAtIndex = -1
+            Log.i(TAG, "Correction firmware: lettre #$letterIdx sélectionnée")
+            invalidate(); return true
+        }
+        return false
     }
 
     fun isCorrecting() = editMode == EditMode.CORRECT_TRANSCRIPTION
@@ -741,6 +788,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (isCorrecting()) Log.d(TAG, "onDraw CORRECTION label='$correctionLabel'")
         canvas.drawColor(Color.WHITE)
         Log.d(TAG, "onDraw — sel=${selectedGroupId?.take(8) ?: "null"}")
 
@@ -831,7 +879,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     }
 
     private fun drawCorrectionFrame(canvas: Canvas) {
-        val anchor = engine.groupAnchor[correctionGroupFirstIdx] ?: return
+        val anchor = engine.groupAnchor[correctionGroupFirstIdx] ?: run {
+            Log.w(TAG, "drawCorrectionFrame: anchor null pour firstIdx=$correctionGroupFirstIdx")
+            return
+        }
         if (correctionLabel.isEmpty()) return
         val spacing = CalibrationActivity.getTemplateSpacing(context)
         val letterW = spacing * 0.7f
