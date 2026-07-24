@@ -591,15 +591,26 @@ class MiroirEngine {
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
                 "parnasse/miroir/$blockName/page_$pageN")
             mirrorDir.mkdirs()
-            // Copier page.mdm (texte lisible)
+            // Copier page.mdm (format brut avec ancres)
             val mdmSrc = File(pageDir, "page.mdm")
             if (mdmSrc.exists()) mdmSrc.copyTo(File(mirrorDir, "page.mdm"), overwrite = true)
+            // Générer page.txt (texte épuré, sans balises @mot{…})
+            if (mdmSrc.exists()) {
+                val raw = mdmSrc.readText()
+                val clean = stripMdmTags(raw)
+                File(mirrorDir, "page.txt").writeText(clean)
+            }
             // Copier bitmap.png (rendu visuel)
             val bmpSrc = File(pageDir, "bitmap.png")
             if (bmpSrc.exists()) bmpSrc.copyTo(File(mirrorDir, "bitmap.png"), overwrite = true)
         } catch (e: Exception) {
             Log.w(TAG, "mirrorToSdcard échec: ${e.message}")
         }
+    }
+
+    /** Épure le texte MDM : retire les métadonnées {…} après chaque @mot. */
+    private fun stripMdmTags(mdm: String): String {
+        return mdm.replace(Regex("""\{[^}]*\}"""), "").trim()
     }
 
     /** Chargement complet : V★ + bitmap + groupes + MDM. */
