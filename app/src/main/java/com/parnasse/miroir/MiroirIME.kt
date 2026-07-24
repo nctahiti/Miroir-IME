@@ -556,6 +556,8 @@ class MiroirIME : InputMethodService() {
                 it.compress(Bitmap.CompressFormat.PNG, 90, out)
             }
         }
+        // ═══ Miroir public → /sdcard/Documents/ (accessible à Flutter et au Cœur) ═══
+        mirrorToSdcard(dir, bd.name, currentPageIndex)
         // MDM
         savePageMdm(dir)
         // ═══ ÉVICTION avant sauvegarde : force LOADED→STORED ═══
@@ -563,6 +565,35 @@ class MiroirIME : InputMethodService() {
         // ═══ Groupes & labels : sauvegarde JSON pour rechargement ═══
         saveGroupsJson(dir)
         Log.i(SEMA, "T5|savePage|${System.currentTimeMillis() - semaStart}ms|vstar=${vstarFile.length()}B|strokes=$liveStrokes|page=$currentPageIndex")
+    }
+
+    /** Copie le contenu d'une page vers le stockage public (/sdcard/Documents/parnasse/miroir/)
+     *  pour que le Cœur et Flutter puissent y accéder sans restriction de sandbox. */
+    private fun mirrorToSdcard(pageDir: java.io.File, blockName: String, pageN: Int) {
+        try {
+            val mirrorDir = java.io.File(
+                android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOCUMENTS),
+                "parnasse/miroir/$blockName/page_$pageN")
+            mirrorDir.mkdirs()
+            val mdmSrc = java.io.File(pageDir, "page.mdm")
+            if (mdmSrc.exists()) mdmSrc.copyTo(java.io.File(mirrorDir, "page.mdm"), overwrite = true)
+            if (mdmSrc.exists()) {
+                val clean = stripMdmTags(mdmSrc.readText())
+                java.io.File(mirrorDir, "page.txt").writeText(clean)
+            }
+            val bmpSrc = java.io.File(pageDir, "bitmap.png")
+            if (bmpSrc.exists()) bmpSrc.copyTo(java.io.File(mirrorDir, "bitmap.png"), overwrite = true)
+        } catch (e: Exception) {
+            Log.w(TAG, "mirrorToSdcard échec: ${e.message}")
+        }
+    }
+
+    /** Épure le texte MDM : retire les métadonnées {…} et les @. */
+    private fun stripMdmTags(mdm: String): String {
+        return mdm.replace(Regex("""\{[^}]*\}"""), "")
+                  .replace("@", "")
+                  .trim()
     }
 
     private fun saveGroupsJson(dir: java.io.File) {
@@ -4416,6 +4447,10 @@ class MiroirIME : InputMethodService() {
                 pageNoteId?.let { put("note_id", it) }
                 val tn = ctx.totalNotes
                 if (tn > 0) put("total_notes", tn)
+                // ═══ Chemin public du PNG pour attachement automatique ═══
+                put("png_path", "/sdcard/Documents/parnasse/miroir/$blockId/page_$currentPageIndex/bitmap.png")
+                // ═══ Boîte aux lettres : drapeau levé = nouveau courrier ═══
+                put("flag_up", true)
             }
             Thread {
                 try {
