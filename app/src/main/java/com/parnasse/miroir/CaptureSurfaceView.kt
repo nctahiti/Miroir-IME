@@ -750,6 +750,21 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
         engine.redrawBitmapInternal(fullRedraw = true)
         scrubCutRatio = -1f
+        // ═══ Évincer le groupe s'il n'a plus de strokes vivants ═══
+        val refreshed = gm.allGroupsFull().find { it.id == gid }
+        if (refreshed != null) {
+            val hasAliveStrokes = refreshed.strokeIds.any { sid ->
+                val idx = engine.inkStrokeIdToRegistryIndex[sid]
+                idx != null && idx < engine.strokeRegistry.size && !engine.strokeRegistry[idx].isDeleted && engine.strokeRegistry[idx].points.size >= 2
+            }
+            if (!hasAliveStrokes) {
+                engine.groupBlobs.remove(gid)
+                gm.removeGroup(gid)
+                selectedGroupId = null
+                selectedGroupLabel = null
+                Log.i(TAG, "Groupe ${gid.take(8)} évincé — plus de strokes vivants après scrub")
+            }
+        }
         invalidate()
     }
 

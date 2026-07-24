@@ -17,6 +17,7 @@ package com.parnasse.miroir
 
 import android.content.Context
 import android.graphics.*
+import android.os.Environment
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -577,6 +578,28 @@ class MiroirEngine {
 
         // ── MDM ──
         savePageMdm(dir)
+
+        // ── Miroir sdcard — copie accessible au Scanner/Cœur ──
+        mirrorToSdcard(dir, bd.name, currentPageIndex)
+    }
+
+    /** Copie miroir de la page sauvegardée vers le stockage externe
+     *  pour que le Scanner et le Cœur puissent la lire sans sandboxing. */
+    private fun mirrorToSdcard(pageDir: File, blockName: String, pageN: Int) {
+        try {
+            val mirrorDir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
+                "parnasse/miroir/$blockName/page_$pageN")
+            mirrorDir.mkdirs()
+            // Copier page.mdm (texte lisible)
+            val mdmSrc = File(pageDir, "page.mdm")
+            if (mdmSrc.exists()) mdmSrc.copyTo(File(mirrorDir, "page.mdm"), overwrite = true)
+            // Copier bitmap.png (rendu visuel)
+            val bmpSrc = File(pageDir, "bitmap.png")
+            if (bmpSrc.exists()) bmpSrc.copyTo(File(mirrorDir, "bitmap.png"), overwrite = true)
+        } catch (e: Exception) {
+            Log.w(TAG, "mirrorToSdcard échec: ${e.message}")
+        }
     }
 
     /** Chargement complet : V★ + bitmap + groupes + MDM. */
