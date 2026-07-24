@@ -608,9 +608,11 @@ class MiroirEngine {
         }
     }
 
-    /** Épure le texte MDM : retire les métadonnées {…} après chaque @mot. */
+    /** Épure le texte MDM : retire les métadonnées {…} et les @. */
     private fun stripMdmTags(mdm: String): String {
-        return mdm.replace(Regex("""\{[^}]*\}"""), "").trim()
+        return mdm.replace(Regex("""\{[^}]*\}"""), "")  // retire {…}
+                  .replace("@", "")                      // retire @
+                  .trim()
     }
 
     /** Chargement complet : V★ + bitmap + groupes + MDM. */
