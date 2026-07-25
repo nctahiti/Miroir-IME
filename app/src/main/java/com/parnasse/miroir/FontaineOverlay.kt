@@ -28,11 +28,14 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
         private const val STROKE_WIDTH_DP = 2f
         private const val SWIPE_THRESHOLD = 30f
 
-        /** Vérifie si le SDK Onyx TouchHelper est disponible (tablettes Boox). */
+        /** Vérifie si le hardware EPD Onyx est disponible (tablettes Boox).
+         *  Vérifie le SDK + le fabricant (les JARs Onyx peuvent être présents
+         *  même sur des appareils non-Boox). */
         fun isAvailable(): Boolean {
             return try {
                 Class.forName("com.onyx.android.sdk.pen.TouchHelper")
-                true
+                Class.forName("com.onyx.android.sdk.api.device.epd.EpdController")
+                android.os.Build.MANUFACTURER.equals("ONYX", ignoreCase = true)
             } catch (_: Exception) { false }
         }
     }
