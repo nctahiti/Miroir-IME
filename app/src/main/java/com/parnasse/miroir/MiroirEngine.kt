@@ -1113,7 +1113,8 @@ class MiroirEngine {
         var cleaned = raw.replace(Regex("\\*G\\d+-\\d+S\\s*"), "")
         cleaned = cleaned.replace(Regex("[^\\p{L}\\p{N} '\\-]"), " ")
         cleaned = cleaned.replace(Regex("\\s+"), " ").trim()
-        cleaned = cleaned.replace(Regex("\\b\\p{L}\\b"), "").replace(Regex("\\s+"), " ").trim()
+        // ⚠️ Ne PAS supprimer les lettres isolées : \b\p{L}\b tue le "l" de "l'eau"
+        // car l'apostrophe est une frontière de mot pour \b
         return cleaned
     }
 }

@@ -992,8 +992,8 @@ class MiroirIME : InputMethodService() {
         cleaned = cleaned.replace(Regex("[^\\p{L}\\p{N} '\\-]"), " ")
         // Supprimer les espaces multiples
         cleaned = cleaned.replace(Regex("\\s+"), " ").trim()
-        // Supprimer les mots d'une seule lettre (artefacts)
-        cleaned = cleaned.replace(Regex("\\b\\p{L}\\b"), "").replace(Regex("\\s+"), " ").trim()
+        // ⚠️ Ne PAS supprimer les lettres isolées : \b\p{L}\b tue le "l" de "l'eau"
+        // car l'apostrophe est une frontière de mot pour \b
         return cleaned
     }
 
