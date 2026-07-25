@@ -984,7 +984,13 @@ class MiroirIME : InputMethodService() {
     }
 
     /** Nettoie un label Miroir → extrait le texte transcrit.
-     *  Formats possibles : "*G2-4S comprendre", "*G2-4S c'est bien", "bonjour" */
+     *  Formats possibles : "*G2-4S comprendre", "*G2-4S c'est bien", "bonjour"
+     *
+     *  ⚠️ NE PAS supprimer les lettres isolées (ex: regex \\b\\p{L}\\b).
+     *  L'apostrophe étant une frontière de mot pour \\b, le "l" de "l'eau"
+     *  serait supprimé → MDM tronqué → loadFromMdm() ne trouve plus le label
+     *  → génération de strokes synthétiques en double sur la 1ère interligne.
+     *  Voir SyntheticStrokeGenerator.kt pour l'analyse du conflit. */
     private fun cleanLabelForMdm(raw: String): String {
         // Supprimer le préfixe de groupe : "*G{idx}-{N}S "
         var cleaned = raw.replace(Regex("\\*G\\d+-\\d+S\\s*"), "")
@@ -992,8 +998,6 @@ class MiroirIME : InputMethodService() {
         cleaned = cleaned.replace(Regex("[^\\p{L}\\p{N} '\\-]"), " ")
         // Supprimer les espaces multiples
         cleaned = cleaned.replace(Regex("\\s+"), " ").trim()
-        // ⚠️ Ne PAS supprimer les lettres isolées : \b\p{L}\b tue le "l" de "l'eau"
-        // car l'apostrophe est une frontière de mot pour \b
         return cleaned
     }
 

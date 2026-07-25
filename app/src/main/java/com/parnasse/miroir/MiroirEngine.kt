@@ -608,7 +608,13 @@ class MiroirEngine {
         }
     }
 
-    /** Épure le texte MDM : retire les métadonnées {…} et les @. */
+    /** Épure le texte MDM : retire les métadonnées {…} et les @.
+     *
+     *  ⚠️ NE PAS supprimer les lettres isolées (ex: regex \\b\\p{L}\\b).
+     *  L'apostrophe étant une frontière de mot pour \\b, le "l" de "l'eau"
+     *  serait supprimé → MDM tronqué → loadFromMdm() ne trouve plus le label
+     *  → génération de strokes synthétiques en double sur la 1ère interligne.
+     *  Voir SyntheticStrokeGenerator.kt pour l'analyse du conflit. */
     private fun stripMdmTags(mdm: String): String {
         return mdm.replace(Regex("""\{[^}]*\}"""), "")  // retire {…}
                   .replace("@", "")                      // retire @

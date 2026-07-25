@@ -15,6 +15,18 @@ import kotlin.math.*
  *   val strokes = gen.generate("Bonjour", anchorX, anchorY)
  *   // strokes = liste de StrokeRecord prêts à être injectés dans le registre
  *
+ * ⚠️ CONFLIT POTENTIEL AVEC LE NETTOYAGE DES LABELS
+ * ─────────────────────────────────────────────────
+ * La génération de strokes est déclenchée par loadFromMdm() lorsque
+ * le label MDM n'est pas trouvé dans groupLabels (MiroirEngine.kt:1007).
+ * Si cleanLabelForMdm() altère le label (ex: supprime le "l" de "l'eau"
+ * via la regex \\b\\p{L}\\b), le MDM sauvegardé contient un label tronqué
+ * qui ne matche plus le label original dans groups.json → strokes en double.
+ *
+ * RÈGLE : cleanLabelForMdm() NE doit JAMAIS supprimer de caractères
+ * alphabétiques, même isolés. L'apostrophe est une frontière de mot
+ * pour \\b — toute regex utilisant \\b doit en tenir compte.
+ *
  * Propriétés :
  *   - Une sinusoïde par lettre (boucle cursive)
  *   - Pas de lever de plume dans un mot (un seul trait continu)
