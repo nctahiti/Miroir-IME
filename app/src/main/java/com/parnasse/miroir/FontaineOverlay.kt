@@ -27,6 +27,14 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
         private const val TAG = "Miroir/Fontaine"
         private const val STROKE_WIDTH_DP = 2f
         private const val SWIPE_THRESHOLD = 30f
+
+        /** Vérifie si le SDK Onyx TouchHelper est disponible (tablettes Boox). */
+        fun isAvailable(): Boolean {
+            return try {
+                Class.forName("com.onyx.android.sdk.pen.TouchHelper")
+                true
+            } catch (_: Exception) { false }
+        }
     }
 
     private var touchHelper: com.onyx.android.sdk.pen.TouchHelper? = null

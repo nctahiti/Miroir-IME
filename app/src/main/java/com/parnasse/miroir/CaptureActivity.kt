@@ -262,14 +262,19 @@ class CaptureActivity : Activity() {
                 FrameLayout.LayoutParams.MATCH_PARENT))
         }
 
-        // Couche 2 : SurfaceView FONTAINE — capture + rendu plume
-        fontaineOverlay = FontaineOverlay(this, engine).also { fo ->
-            fo.onStrokeFinished = { _ -> scheduleInference() }
-            fo.onStrokeBegin = { cancelTimers() }
-            fo.onLongPressDetected = { x, y -> handleLongPress(x, y) }
-            captureFrame.addView(fo, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT))
+        // Couche 2 : SurfaceView FONTAINE — capture + rendu plume (Boox uniquement)
+        if (FontaineOverlay.isAvailable()) {
+            fontaineOverlay = FontaineOverlay(this, engine).also { fo ->
+                fo.onStrokeFinished = { _ -> scheduleInference() }
+                fo.onStrokeBegin = { cancelTimers() }
+                fo.onLongPressDetected = { x, y -> handleLongPress(x, y) }
+                captureFrame.addView(fo, FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT))
+            }
+        } else {
+            fontaineOverlay = null
+            Log.i(TAG, "Fontaine indisponible — fallback onDraw standard (CaptureView)")
         }
 
         captureView?.fontaineOverlay = fontaineOverlay
