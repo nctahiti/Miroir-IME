@@ -38,7 +38,7 @@ Optimisé pour les tablettes **Onyx Boox** (E-Ink, stylet EMR) avec fallback sta
 └─────────────────────────────────────────────────────┘
 ```
 
-**51 fichiers Kotlin — ~8 700 lignes — APK debug 39 Mo (ML Kit inclus)**
+L’APK debug inclut ML Kit et les bibliothèques nécessaires au matériel Onyx.
 
 ---
 
@@ -78,9 +78,9 @@ GU = quand on manipule → sélection, effacement, déplacement
 │  Clic sur le mot → glisser                  │
 │  PAS d'inférence (ordre change, pas contenu) │
 ├─────────────────────────────────────────────┤
-│  État D — CORRECTION TRANSCRIPTION (à créer) │
-│  Label agrandi → écrire par-dessus           │
-│  Paires d'entraînement pour HTR libre        │
+│  État D — CORRECTION TRANSCRIPTION           │
+│  Geste ↑ → label agrandi → écrire par-dessus │
+│  Validation → paire strokes ↔ mot corrigé    │
 └─────────────────────────────────────────────┘
 ```
 
@@ -103,19 +103,24 @@ Stylet → strokes vectoriels (x,y,t) → DigitalInkWrapper
 - **Input** : strokes natifs, pas de rasterisation
 - **Usage** : reconnaissance temps réel, injection IME
 
-### ② Circuit Raster — EasyOCR (serveur, différé)
+### ② Circuit Raster — EasyOCR (serveur, différé, préparé)
 
 ```
 Stylet → strokes → rasterisation JPEG 1600×2000
-  → La Singularité (Python/HTTP :7701, EasyOCR)
+  ⇢ route Singularité préparée (Python/HTTP :7701, EasyOCR)
+  ⇢ connexion au flux courant encore à finaliser
   → texte → Cœur → note
 ```
 
-- **Modèle** : EasyOCR (CRAFT + CRNN, Apache 2.0, 80+ langues)
-- **Latence** : 2-10 secondes
-- **Usage** : transcription différée, traitement par lots
+- **Modèle envisagé** : EasyOCR (CRAFT + CRNN, Apache 2.0, 80+ langues)
+- **Statut** : transcripteur et route préparés ; circuit non encore connecté au pipeline principal
+- **Usage visé** : transcription différée et traitement par lots
 
-> Les deux circuits convergent vers **Panoptis** — un modèle HTR propriétaire entraîné sur les vecteurs V★.
+### ③ Horizon — Panoptis
+
+**Panoptis n’est pas encore un composant disponible.** C’est le futur modèle HTR du projet, destiné à apprendre à partir des groupes de strokes V★ associés aux labels validés ou corrigés.
+
+L’objectif est de publier librement le modèle, les poids et les données d’entraînement constituées par le Miroir, avec une gouvernance et des licences explicites.
 
 ---
 
@@ -126,7 +131,7 @@ Le blob est une ellipse autour d'un groupe de strokes. Paramètres calibrés :
 ```
 BlobParams(rx, ry, timeout = ∞)
   ├─ spatialDistanceX/Y → rayons de l'ellipse
-  ├─ computeBlobPath() → ray casting 90 rayons
+  ├─ computeBlobPath() → ray casting configurable (16 rayons par défaut)
   └─ Region.contains(x,y) → test d'appartenance
 ```
 
@@ -140,18 +145,23 @@ Format binaire optimisé pour les strokes manuscrits :
 
 | Composant | Rôle |
 |-----------|------|
-| `VStarDataRegion` | Stockage V★ v2.0 (16B/token) |
-| `VStarConduit` | Écriture append-only temps réel |
-| `VStarEncoder` / `VStarDecoder` | Sérialisation strokes |
-| `VStarDocument` / `VStarDocumentV2` | Document multi-pages |
+| `VStarDataRegion` | Lecture et reprise V★ v2.0 (16 octets/token) |
+| `VStarConduit` | Écriture append-only dans le fichier définitif de la page |
+| `VStarEncoder` / `VStarDecoder` | Sérialisation des strokes |
+| `VStarDocument` / `VStarDocumentV2` | Structures historiques et documents multi-pages |
+| `VStarWriter` v1.1 | Ancien conduit 14 octets/token, conservé pour transition |
 
+### Dossier canonique d’une page
+
+```text
+page.vstar   → flux vectoriel V★ v2.0, brut, append-only, 16 octets/token
+groups.json  → groupes de strokes, géométrie et ordre
+page.mdm     → composition spatiale lisible et ancres reconnues
+page.txt     → texte nettoyé destiné au Cœur
+bitmap.png   → rendu visuel de la page
 ```
-page.vstar → strokes vectoriels (x,y,pression,timestamp)
-page.mdm   → @tag{5s/120p} ancres spatiales
-page.txt   → texte épuré (sans métadonnées)
-groups.json → groupes + labels + blobs (ML Kit)
-bitmap.png → rendu visuel de la page
-```
+
+`VStarConduit` remplace l’ancien double système fondé sur `VStarWriter` v1.1. Le fichier `.note` décrit dans certaines expérimentations est un format d’échange de session regroupant strokes et transcriptions ; il ne remplace pas encore le dossier canonique de page ci-dessus.
 
 ---
 
@@ -188,22 +198,24 @@ Le rendu E-Ink utilise le **SDK Onyx OpenBridge** (`TouchHelper` + `EpdControlle
 
 Sur appareils non-Boox : **fallback `onDraw` standard** — `CaptureView` gère le rendu via `onTouchEvent` + `Canvas`.
 
+Ce fallback d’affichage ne doit pas être confondu avec la capture aux doigts. Le rendu non-Boox existe, mais le rafraîchissement continu pendant l’écriture et la capture tactile complète restent un chantier séparé à stabiliser.
+
 ---
 
 ## 📦 Composants
 
 | Composant | Fichier | Rôle |
 |-----------|---------|------|
-| **MiroirIME** | `MiroirIME.kt` (1 086 lignes) | IME système — clavier manuscrit contextuel |
+| **MiroirIME** | `MiroirIME.kt` | IME système — clavier manuscrit contextuel |
 | **CaptureActivity** | `CaptureActivity.kt` | Surface standalone — écriture libre |
 | **MiroirEngine** | `MiroirEngine.kt` | Moteur partagé — strokes, groupes, V★, bitmap, MDM |
-| **GroupManager** | `GroupManager.kt` (350 lignes) | Groupement spatial par blobs elliptiques |
+| **GroupManager** | `GroupManager.kt` | Groupement spatial par blobs elliptiques |
 | **FontaineOverlay** | `FontaineOverlay.kt` | Rendu plume temps réel (SurfaceView + TouchHelper) |
 | **CaptureView** | `CaptureView.kt` | Vue de capture partagée |
 | **DigitalInkWrapper** | `DigitalInkWrapper.kt` | Interface ML Kit Digital Ink |
 | **VStarDataRegion** | `VStarDataRegion.kt` | Stockage V★ v2.0 (16B/token) |
 | **MdmParser** | `MdmParser.kt` | MarkDownMiroir — ancres spatiales `@mot{5s/120p}` |
-| **CalibrationActivity** | `CalibrationActivity.kt` (271 lignes) | Réglages blob, timers, template |
+| **CalibrationActivity** | `CalibrationActivity.kt` | Réglages blob, timers, template |
 | **DisplayController** | `DisplayController.kt` | Contrôleur de mode EPD (DU/GU) |
 | **Template** | `Template.kt` | Lignes d'écriture paramétrables (interligne, snap) |
 | **SyntheticStrokeGenerator** | `SyntheticStrokeGenerator.kt` | Génération strokes synthétiques (fallback doigts) |
@@ -274,6 +286,10 @@ Ce projet utilise le **SDK Onyx OpenBridge** (`com.onyx.android.sdk.pen.TouchHel
 
 ---
 
-## 📄 Licence
+## 📄 Licence et ouverture
 
-Projet Parnasse Numérique — usage interne.
+Le code du Miroir est publié sous **licence Apache 2.0**. Toute réutilisation ou redistribution doit respecter cette licence, conserver les mentions requises et attribuer clairement l’origine du code au projet **Miroir**.
+
+Les dépendances tierces, notamment Google ML Kit et le SDK Onyx OpenBridge, conservent leurs propres licences.
+
+La publication future de Panoptis, de ses poids et des données d’entraînement fera l’objet de licences libres explicites et séparées.
