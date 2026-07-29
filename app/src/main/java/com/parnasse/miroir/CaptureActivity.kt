@@ -146,8 +146,7 @@ class CaptureActivity : Activity() {
                             val anchor = registrySnapshot.getOrNull(firstIdx)?.points?.firstOrNull()
                             if (anchor != null) engine.groupAnchor[firstIdx] = anchor
                             Log.i(TAG, "Reconnu: '$result' (groupe ${groupId.take(8)}, ${indices.size} strokes)")
-                            // ═══ Export SD + notification Cœur : le mot est scellé ═══
-                            engine.exportCurrentPage()
+                            // ═══ Notification Cœur : le mot est reconnu, la SD card est déjà à jour ═══
                             notifyCoeur()
                         }
                     }
@@ -505,7 +504,7 @@ class CaptureActivity : Activity() {
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.doOutput = true
-                val body = """{"library_id":"","block_name":"standalone"}"""
+                val body = """{"library_id":"3225cb96-a14f-4d6d-a965-dd3431489a74","block_name":"standalone"}"""
                 conn.outputStream.write(body.toByteArray())
                 val code = conn.responseCode
                 if (code == 200) {

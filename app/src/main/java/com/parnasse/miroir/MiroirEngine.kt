@@ -174,8 +174,18 @@ class MiroirEngine {
      *  @return le groupe affecte, ou null. */
     fun onStrokeSealed(sr: StrokeRecord, inkId: Long): InkGroup? {
         val gm = groupManager ?: return null
+
+        // ═══ Premier stroke d'une page blanche → déclarer la page au monde ═══
+        // La page existe déjà sur le disque (créée par le Miroir à l'ouverture),
+        // mais elle n'a pas encore de données → c'est le moment de l'exporter.
+        val isFirstLive = strokeRegistry.none { !it.isDeleted && it.points.isNotEmpty() }
+
         val inkStroke = strokeRecordToInkStroke(sr, inkId)
         val group = gm.onStrokeSealed(inkStroke)
+
+        if (isFirstLive) {
+            exportCurrentPage()
+        }
         // Creer/mettre a jour le blob du groupe
         if (group != null) {
             val blob = computeBlobPath(group)
@@ -590,6 +600,7 @@ class MiroirEngine {
         val bd = blockDir ?: return
         val dir = File(bd, "page_$currentPageIndex")
         if (!dir.exists()) return
+        Log.i(TAG, "exportCurrentPage: page $currentPageIndex → SD card")
         mirrorToSdcard(dir, bd.name, currentPageIndex)
     }
 
