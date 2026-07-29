@@ -6,6 +6,8 @@ import android.graphics.*
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import java.net.HttpURLConnection
+import java.net.URL
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -56,6 +58,11 @@ class CaptureActivity : Activity() {
     // ── Timers ──────────────────────────────────────────────────────────
     private val inferenceRunnable = Runnable { runGroupInference() }
     private val displayRefreshRunnable = Runnable { refreshDisplay() }
+
+    // ── Sync Cœur ───────────────────────────────────────────────────────
+    private var lastSyncNotification = 0L
+    private val coeurUrl = "http://127.0.0.1:8008"
+    private val syncDebounceMs = 3000L  // au plus une notification toutes les 3s
 
     // ── Contexte d'invocation ──────────────────────────────────────────
     private var invocBlockId: String? = null
@@ -139,6 +146,9 @@ class CaptureActivity : Activity() {
                             val anchor = registrySnapshot.getOrNull(firstIdx)?.points?.firstOrNull()
                             if (anchor != null) engine.groupAnchor[firstIdx] = anchor
                             Log.i(TAG, "Reconnu: '$result' (groupe ${groupId.take(8)}, ${indices.size} strokes)")
+                            // ═══ Export SD + notification Cœur : le mot est scellé ═══
+                            engine.exportCurrentPage()
+                            notifyCoeur()
                         }
                     }
                 }
@@ -357,6 +367,12 @@ class CaptureActivity : Activity() {
         engine.applyCalibrationParams(this)
     }
 
+    override fun onPause() {
+        super.onPause()
+        // ═══ Export complet au départ : bitmap.png + V★ + groupes + MDM ═══
+        engine.savePageFull()
+    }
+
     override fun onDestroy() {
         engine.savePageFull(); engine.closeBlock()
         recognizer?.close()
@@ -474,5 +490,34 @@ class CaptureActivity : Activity() {
         captureView?.invalidate()
         fontaineOverlay?.reactiver()
         Log.i(TAG, "Retour écriture — fontaine réactivée")
+    }
+
+    /** Notifie le Cœur que de nouvelles pages sont disponibles dans la SD card.
+     *  Debounce 3s pour ne pas spammer pendant l'écriture rapide. */
+    private fun notifyCoeur() {
+        val now = System.currentTimeMillis()
+        if (now - lastSyncNotification < syncDebounceMs) return
+        lastSyncNotification = now
+        Thread {
+            try {
+                val url = URL("$coeurUrl/api/miroir/sync")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.doOutput = true
+                val body = """{"library_id":"","block_name":"standalone"}"""
+                conn.outputStream.write(body.toByteArray())
+                val code = conn.responseCode
+                if (code == 200) {
+                    Log.i(TAG, "Coeur sync notifié: HTTP $code")
+                } else {
+                    Log.w(TAG, "Coeur sync: HTTP $code")
+                }
+                conn.disconnect()
+            } catch (e: Exception) {
+                // Cœur injoignable — le watcher 15s rattrapera
+                Log.d(TAG, "Coeur sync muet: ${e.message}")
+            }
+        }.start()
     }
 }

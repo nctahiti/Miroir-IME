@@ -583,9 +583,19 @@ class MiroirEngine {
         mirrorToSdcard(dir, bd.name, currentPageIndex)
     }
 
+    /** Exporte la page courante vers la SD card — appelé à chaque mot reconnu.
+     *  Les fichiers sont déjà sur disque (.vstar, groups.json, page.mdm).
+     *  On ne fait que les déclarer au monde extérieur. */
+    fun exportCurrentPage() {
+        val bd = blockDir ?: return
+        val dir = File(bd, "page_$currentPageIndex")
+        if (!dir.exists()) return
+        mirrorToSdcard(dir, bd.name, currentPageIndex)
+    }
+
     /** Copie miroir de la page sauvegardée vers le stockage externe
      *  pour que le Scanner et le Cœur puissent la lire sans sandboxing. */
-    private fun mirrorToSdcard(pageDir: File, blockName: String, pageN: Int) {
+    internal fun mirrorToSdcard(pageDir: File, blockName: String, pageN: Int) {
         try {
             val mirrorDir = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
