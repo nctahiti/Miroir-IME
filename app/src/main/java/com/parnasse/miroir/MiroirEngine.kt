@@ -453,10 +453,11 @@ class MiroirEngine {
         loadPage()
     }
 
-    /** Navigation avec sauvegarde/chargement complets (standalone). */
+    /** Navigation avec sauvegarde/chargement complets (standalone).
+     *  Permissive : accepte tout index ≥ 0 et tout index négatif (carnet affillié).
+     *  Si le dossier local n'existe pas, loadPageFull() crée une page blanche. */
     fun goToPageFull(index: Int) {
-        val total = countPages()
-        if (total == 0 || index < 0 || index >= total) return
+        if (index < Int.MIN_VALUE) return  // seule garde : sécurité absurde
         savePageFull()
         currentPageIndex = index
         loadPageFull()

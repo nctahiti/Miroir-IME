@@ -182,15 +182,12 @@ class CaptureActivity : Activity() {
         // ── Espace pousseur gauche ──
         toolbar.addView(View(this), LinearLayout.LayoutParams(0, 0, 0.15f))
 
-        // ── ◄ Navigation gauche ──
+        // ── ◄ Navigation gauche (carnet affillié : accepte pages négatives) ──
         toolbar.addView(makeToolBtn("\u25C0", Color.argb(200, 80, 80, 160)) {
-            val total = engine.countPages()
-            if (total > 0 && engine.currentPageIndex > 0) {
-                engine.goToPageFull(engine.currentPageIndex - 1)
-                returnToWriting()
-                captureView?.invalidate()
-                updatePageCounter()
-            }
+            engine.goToPageFull(engine.currentPageIndex - 1)
+            returnToWriting()
+            captureView?.invalidate()
+            updatePageCounter()
         })
 
         // ── Compteur de page ──
@@ -201,22 +198,12 @@ class CaptureActivity : Activity() {
         }
         toolbar.addView(pageCounter)
 
-        // ── ► Navigation droite ──
+        // ── ► Navigation droite (permissive : crée implicitement si page absente) ──
         toolbar.addView(makeToolBtn("\u25B6", Color.argb(200, 0, 80, 160)) {
-            val total = engine.countPages()
-            if (total > 0 && engine.currentPageIndex < total - 1) {
-                engine.goToPageFull(engine.currentPageIndex + 1)
-                returnToWriting()
-                captureView?.invalidate()
-                updatePageCounter()
-            } else if (total == 0 || engine.currentPageIndex >= total - 1) {
-                engine.newPage()
-                engine.initGroupManager(this)
-                engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
-                returnToWriting()
-                captureView?.clearCanvas()
-                updatePageCounter()
-            }
+            engine.goToPageFull(engine.currentPageIndex + 1)
+            returnToWriting()
+            captureView?.invalidate()
+            updatePageCounter()
         })
 
         // ── Bouton @ (MDM → Geppetto) ──
@@ -391,9 +378,10 @@ class CaptureActivity : Activity() {
         }
 
     private fun pageLabel(): String {
-        val total = engine.countPages()
-        val current = if (total > 0) engine.currentPageIndex + 1 else 0
-        return "$current / $total"
+        val idx = engine.currentPageIndex
+        val local = engine.countPages()
+        return if (idx >= 0) "${idx + 1} / ${maxOf(local, idx + 1)}"
+        else "${idx} [carnet] / ${maxOf(local, -idx)}"
     }
 
     private fun updatePageCounter() {
