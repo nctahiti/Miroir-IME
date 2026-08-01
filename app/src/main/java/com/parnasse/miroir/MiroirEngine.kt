@@ -460,7 +460,11 @@ class MiroirEngine {
         if (index < Int.MIN_VALUE) return  // seule garde : sécurité absurde
         savePageFull()
         currentPageIndex = index
-        loadPageFull()
+        val loaded = loadPageFull()
+        if (!loaded) {
+            // Pas de dossier local → page blanche
+            clearPage()
+        }
         redrawBitmapInternal()  // synchroniser après chargement
     }
 
