@@ -98,7 +98,20 @@ class CaptureActivity : Activity() {
             engine.goToPageFull(invocPageN)
         } else if (engine.countPages() > 0) {
             engine.currentPageIndex = engine.countPages() - 1
-            engine.loadPageFull()
+            // ⚠️ Posté après le layout pour garantir que onSizeChanged a créé le bitmap
+            // ET que la FontaineOverlay ne masque pas le rendu initial sur EPD.
+            // Sans ça, redrawBitmapInternal() trouve bitmapCanvas==null → return silencieux
+            // → strokes invisibles au démarrage (seuls les blobs apparaissent).
+            captureView?.post {
+                engine.loadPageFull()
+                updatePageCounter()
+                // Cycle EPD : désactiver la fontaine → invalider (bitmap + blobs) → réactiver
+                // Sans ce cycle, la SurfaceView ZOrderOnTop de la Fontaine masque le nouveau contenu.
+                fontaineOverlay?.desactiver()
+                captureView?.invalidate()
+                fontaineOverlay?.activer()
+            }
+            return  // onCreate continue, le post fera le reste
         }
         updatePageCounter()
         captureView?.post { captureView?.invalidate() }
