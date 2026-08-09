@@ -385,6 +385,40 @@ class MiroirEngine {
         blockDir = null
     }
 
+    /** Liste les blocs disponibles dans files/blocks/.
+     *  @return liste de BlockInfo (id, nom, nombre de pages, dernière modification). */
+    fun listBlocks(context: Context): List<BlockInfo> {
+        val blocksDir = File(context.filesDir, "blocks")
+        if (!blocksDir.exists()) return emptyList()
+        return blocksDir.listFiles()
+            ?.filter { it.isDirectory }
+            ?.map { dir ->
+                val pages = dir.listFiles()?.count { f -> f.isDirectory && f.name.startsWith("page_") } ?: 0
+                BlockInfo(
+                    id = dir.name,
+                    pages = pages,
+                    lastModified = dir.lastModified()
+                )
+            }
+            ?.sortedByDescending { it.lastModified }
+            ?: emptyList()
+    }
+
+    /** Change de bloc actif. Sauvegarde la page courante, ferme le bloc actuel,
+     *  ouvre le nouveau, initialise le GroupManager, et charge la dernière page. */
+    fun switchBlock(context: Context, blockId: String): Boolean {
+        savePageFull()
+        closeBlock()
+        openBlockDir(context, blockId)
+        initGroupManager(context)
+        val total = countPages()
+        if (total > 0) {
+            currentPageIndex = total - 1
+            return loadPageFull()
+        }
+        return true  // bloc vide, aucune page à charger
+    }
+
     fun countPages(): Int = blockDir?.listFiles()?.count {
         it.isDirectory && it.name.startsWith("page_")
     } ?: 0
@@ -1152,3 +1186,10 @@ class MiroirEngine {
 }
 
 data class BlobData(val path: Path, val bounds: RectF)
+
+/** Information sur un bloc pour le menu de sélection. */
+data class BlockInfo(
+    val id: String,
+    val pages: Int,
+    val lastModified: Long
+)

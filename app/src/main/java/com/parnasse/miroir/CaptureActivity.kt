@@ -301,6 +301,31 @@ class CaptureActivity : Activity() {
 
     private fun showCloseMenu(anchor: View) {
         val popup = PopupMenu(this, anchor)
+        val currentBlockId = engine.blockDir?.name ?: "—"
+
+        // ── Liste des blocs disponibles ──
+        val blocs = engine.listBlocks(this)
+        if (blocs.isNotEmpty()) {
+            val blocGroup = popup.menu.addSubMenu("Blocs")
+            for (bloc in blocs) {
+                val prefix = if (bloc.id == currentBlockId) "✓ " else "  "
+                val label = "$prefix${bloc.id.take(20)}  (${bloc.pages} p.)"
+                blocGroup.add(label).setOnMenuItemClickListener {
+                    if (bloc.id != currentBlockId) {
+                        engine.switchBlock(this@CaptureActivity, bloc.id)
+                        engine.updateTemplateSpacing(this@CaptureActivity, resources.displayMetrics.heightPixels)
+                        captureView?.clearCanvas()
+                        updatePageCounter()
+                        // Cycle EPD après changement de bloc
+                        fontaineOverlay?.desactiver()
+                        captureView?.invalidate()
+                        fontaineOverlay?.activer()
+                    }
+                    true
+                }
+            }
+        }
+
         popup.menu.add("Vider page").setOnMenuItemClickListener {
             engine.clearPage(); captureView?.clearCanvas(); updatePageCounter(); true
         }
