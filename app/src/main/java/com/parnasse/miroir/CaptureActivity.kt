@@ -64,6 +64,10 @@ class CaptureActivity : Activity() {
     private val coeurUrl = "http://127.0.0.1:8008"
     private val syncDebounceMs = 3000L  // au plus une notification toutes les 3s
 
+    // ── Cache des blocs Parnasse (chargé en arrière-plan) ───────────────
+    private var cachedLibraries: List<LibraryMiroirInfo> = emptyList()
+    private var cachedParnasseBlocs: MutableMap<String, List<ParnasseBlocInfo>> = mutableMapOf()  // libraryId → blocs
+
     // ── Contexte d'invocation ──────────────────────────────────────────
     private var invocBlockId: String? = null
     private var invocPageN: Int = 0
@@ -303,10 +307,32 @@ class CaptureActivity : Activity() {
         val popup = PopupMenu(this, anchor)
         val currentBlockId = engine.blockDir?.name ?: "—"
 
-        // ── Liste des blocs disponibles ──
+        // ── Blocs Parnasse (Cœur → toutes les bibliothèques) ──
+        if (cachedLibraries.isNotEmpty()) {
+            val parnasseGroup = popup.menu.addSubMenu("Blocs Parnasse")
+            for (lib in cachedLibraries) {
+                val blocs = cachedParnasseBlocs[lib.libraryId] ?: emptyList()
+                if (blocs.isEmpty()) continue
+                val libGroup = parnasseGroup.addSubMenu("  ${lib.libraryName}")
+                for (bloc in blocs) {
+                    val label = "    ${bloc.title}  (${bloc.nbNotes} notes)"
+                    libGroup.add(label).setOnMenuItemClickListener {
+                        Log.i(TAG, "Bloc Parnasse: ${lib.libraryName} > ${bloc.title} (${bloc.id})")
+                        true
+                    }
+                }
+            }
+            if (cachedLibraries.all { (cachedParnasseBlocs[it.libraryId] ?: emptyList()).isEmpty() }) {
+                parnasseGroup.add("(aucun bloc)").setEnabled(false)
+            }
+        } else {
+            popup.menu.add("Blocs Parnasse (—)").setEnabled(false)
+        }
+
+        // ── Blocs Miroir (internes : files/blocks/) ──
         val blocs = engine.listBlocks(this)
         if (blocs.isNotEmpty()) {
-            val blocGroup = popup.menu.addSubMenu("Blocs")
+            val blocGroup = popup.menu.addSubMenu("Blocs Miroir")
             for (bloc in blocs) {
                 val prefix = if (bloc.id == currentBlockId) "✓ " else "  "
                 val label = "$prefix${bloc.id.take(20)}  (${bloc.pages} p.)"
@@ -389,6 +415,20 @@ class CaptureActivity : Activity() {
         super.onResume()
         // Recharger les paramètres de calibration (blob, template)
         engine.applyCalibrationParams(this)
+        // Précharger les bibliothèques et leurs blocs Parnasse en arrière-plan
+        Thread {
+            Log.i(TAG, "fetchParnasseConfig: démarrage...")
+            val libs = engine.fetchParnasseConfig(coeurUrl)
+            cachedLibraries = libs
+            Log.i(TAG, "fetchParnasseConfig: ${libs.size} bibliothèques")
+            val blocsMap = mutableMapOf<String, List<ParnasseBlocInfo>>()
+            for (lib in libs) {
+                val blocs = engine.fetchParnasseBlocs(coeurUrl, lib.libraryId)
+                blocsMap[lib.libraryId] = blocs
+                Log.i(TAG, "  ${lib.libraryName}: ${blocs.size} blocs")
+            }
+            cachedParnasseBlocs = blocsMap
+        }.start()
     }
 
     override fun onPause() {

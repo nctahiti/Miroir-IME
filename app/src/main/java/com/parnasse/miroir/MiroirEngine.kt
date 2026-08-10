@@ -19,8 +19,14 @@ import android.content.Context
 import android.graphics.*
 import android.os.Environment
 import android.util.Log
+import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
+import java.time.Instant
+import org.json.JSONObject
 
 class MiroirEngine {
 
@@ -404,6 +410,106 @@ class MiroirEngine {
             ?: emptyList()
     }
 
+    /** Interroge le Cœur pour obtenir la configuration Miroir
+     *  (liste de toutes les bibliothèques avec leur étagère Miroir).
+     *  @param coeurUrl URL du Cœur (ex: \"http://127.0.0.1:8008\")
+     *  @return liste de LibraryMiroirInfo, ou liste vide si injoignable. */
+    fun fetchParnasseConfig(coeurUrl: String): List<LibraryMiroirInfo> {
+        try {
+            val url = URL("$coeurUrl/api/miroir/config")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            conn.requestMethod = "GET"
+            if (conn.responseCode != 200) return emptyList()
+            val body = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+            conn.disconnect()
+            val json = JSONObject(body)
+            val arr = json.optJSONArray("libraries") ?: return emptyList()
+            val result = mutableListOf<LibraryMiroirInfo>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                result.add(LibraryMiroirInfo(
+                    libraryId = obj.getString("library_id"),
+                    libraryName = obj.getString("library_name"),
+                    shelfId = obj.getString("shelf_id"),
+                    shelfTitle = obj.getString("shelf_title")
+                ))
+            }
+            return result
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchParnasseConfig: ${e.message}")
+            return emptyList()
+        }
+    }
+
+    /** Interroge le Cœur pour obtenir la liste des blocs Parnasse
+     *  dans l'étagère Miroir Standalone.
+     *  @param coeurUrl URL du Cœur (ex: \"http://127.0.0.1:8008\")
+     *  @param libraryId optionnel — UUID de la bibliothèque cible
+     *  @return liste de ParnasseBlocInfo, ou liste vide si injoignable. */
+    fun fetchParnasseBlocs(coeurUrl: String, libraryId: String? = null): List<ParnasseBlocInfo> {
+        try {
+            val urlStr = if (libraryId != null) {
+                "$coeurUrl/api/miroir/blocs?library_id=$libraryId"
+            } else {
+                "$coeurUrl/api/miroir/blocs"
+            }
+            val url = URL(urlStr)
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            conn.requestMethod = "GET"
+            if (conn.responseCode != 200) return emptyList()
+            val body = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+            conn.disconnect()
+            val json = JSONObject(body)
+            val arr = json.optJSONArray("blocs") ?: return emptyList()
+            val result = mutableListOf<ParnasseBlocInfo>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                result.add(ParnasseBlocInfo(
+                    id = obj.getString("id"),
+                    title = obj.getString("title"),
+                    nbNotes = obj.optInt("nb_notes", 0)
+                ))
+            }
+            return result
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchParnasseBlocs: ${e.message}")
+            return emptyList()
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // SERRE-LIVRES
+    // ═══════════════════════════════════════════════════════════════════
+
+    private val serreLivresFile = "serre-livres.json"
+
+    fun loadSerreLivres(context: Context): SerreLivresData {
+        try {
+            val f = File(context.filesDir, serreLivresFile)
+            if (!f.exists()) return SerreLivresData()
+            return SerreLivresData() // TODO: JSON parsing with Gson or manual
+            // Pour l'instant, retourne un objet vide — les serre-livres
+            // seront persistés quand le parseur JSON sera ajouté.
+        } catch (e: Exception) {
+            Log.w(TAG, "loadSerreLivres: ${e.message}")
+            return SerreLivresData()
+        }
+    }
+
+    fun saveSerreLivres(context: Context, data: SerreLivresData) {
+        try {
+            val f = File(context.filesDir, serreLivresFile)
+            // TODO: sérialiser en JSON
+            f.writeText("{}") // placeholder
+        } catch (e: Exception) {
+            Log.w(TAG, "saveSerreLivres: ${e.message}")
+        }
+    }
+
     /** Change de bloc actif. Sauvegarde la page courante, ferme le bloc actuel,
      *  ouvre le nouveau, initialise le GroupManager, et charge la dernière page. */
     fun switchBlock(context: Context, blockId: String): Boolean {
@@ -663,6 +769,10 @@ class MiroirEngine {
             // Copier bitmap.png (rendu visuel)
             val bmpSrc = File(pageDir, "bitmap.png")
             if (bmpSrc.exists()) bmpSrc.copyTo(File(mirrorDir, "bitmap.png"), overwrite = true)
+            // ── Témoin de boîte aux lettres ──
+            // Horodatage UTC de la dernière écriture Miroir.
+            // Parnasse compare avec note.metadata["miroir_releve"] pour détecter les mises à jour.
+            File(mirrorDir, ".miroir_temoin").writeText(Instant.now().toString())
         } catch (e: Exception) {
             Log.w(TAG, "mirrorToSdcard échec: ${e.message}")
         }
@@ -1192,4 +1302,31 @@ data class BlockInfo(
     val id: String,
     val pages: Int,
     val lastModified: Long
+)
+
+/** Information sur un bloc Parnasse (récupéré du Cœur via /api/miroir/blocs). */
+data class ParnasseBlocInfo(
+    val id: String,
+    val title: String,
+    val nbNotes: Int
+)
+
+/** Information sur une bibliothèque Parnasse avec son étagère Miroir. */
+data class LibraryMiroirInfo(
+    val libraryId: String,
+    val libraryName: String,
+    val shelfId: String,
+    val shelfTitle: String
+)
+
+/** Un serre-livres — groupement nommé de blocs (Miroir ou Parnasse). */
+data class SerreLivres(
+    val nom: String,
+    val blocs: MutableList<String>  // IDs des blocs (Miroir = nom de dossier, Parnasse = UUID)
+)
+
+/** Racine du fichier serre-livres.json dans files/. */
+data class SerreLivresData(
+    val miroir: MutableList<SerreLivres> = mutableListOf(),
+    val parnasse: MutableList<SerreLivres> = mutableListOf()
 )
