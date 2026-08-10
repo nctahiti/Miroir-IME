@@ -1,4 +1,14 @@
-# Journal de bord — 8 juillet 2026
+# Journal de bord
+
+## 10 août 2026 — Témoin de boîte aux lettres & Blocs Parnasse
+
+- **Témoin** : `mirrorToSdcard()` écrit `.miroir_temoin` (timestamp UTC). Le Cœur compare avec `note.metadata["miroir_releve"]` → upsert si la page a changé, skip sinon. Fini les décalages silencieux.
+- **Menu ✕ multi-bibliothèques** : « Blocs Parnasse » → Serre / Établi / … → blocs de l'étagère Miroir Standalone. Chaque bibliothèque a son étagère Miroir.
+- **fetchParnasseConfig()** : le Miroir découvre toutes les bibliothèques Parnasse et leurs étagères Miroir.
+- **Serre-livres** : data classes posées pour le groupement thématique des blocs.
+- **Pattern documenté** : `docs/temoin-boite-aux-lettres.md` — principe réutilisable pour Jardinier, Indexeur, Fourmis.
+
+## 8 juillet 2026 — Cap MDM — MarkDownMiroir
 
 ## Cap MDM — MarkDownMiroir
 

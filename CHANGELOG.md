@@ -1,5 +1,19 @@
 # Changelog — Miroir IME
 
+## 2026-08-10 — Session « Témoin & Blocs Parnasse »
+
+### Pont Miroir ↔ Parnasse
+- **`fetchParnasseConfig()`** : interroge `/api/miroir/config` → toutes les bibliothèques avec leur étagère Miroir
+- **`fetchParnasseBlocs(libraryId)`** : interroge `/api/miroir/blocs?library_id=` → blocs d'une bibliothèque
+- **Menu ✕ hiérarchique** : « Blocs Parnasse » → Bibliothèque → Blocs (à côté des « Blocs Miroir » internes)
+- **`LibraryMiroirInfo`** : data class pour la config multi-bibliothèques
+
+### Témoin de boîte aux lettres
+- **`mirrorToSdcard()`** écrit `.miroir_temoin` (timestamp UTC) à chaque export SD
+- Le Cœur compare `.miroir_temoin > miroir_releve` pour détecter les mises à jour
+- Pattern documenté dans `docs/temoin-boite-aux-lettres.md` (5 déclinaisons Parnasse)
+- **Serre-livres** : data classes posées (`SerreLivres`, `SerreLivresData`) + `loadSerreLivres()`/`saveSerreLivres()`
+
 ## 2026-07-21 — Session « Fontaine & UxK standalone » (38 commits)
 
 ### Cache & Performance

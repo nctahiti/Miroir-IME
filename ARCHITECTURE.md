@@ -161,3 +161,39 @@ Les deux circuits convergent vers **Panoptis** — un modèle HTR propriétaire 
 4. **L'ordre de lecture émerge des coordonnées.** Tri spatial (interligne, x). Poésie binaire.
 5. **Pas d'éviction.** `transcriptionTimeoutMs = Long.MAX_VALUE`. Les groupes survivent.
 6. **EPD : rafraîchir au pixel près.** `refreshRect`, pas `invalidate()` global.
+
+## 📬 Flux de synchronisation Miroir → Parnasse
+
+```
+┌─ Miroir standalone ───────────────────────────────────────┐
+│  savePageFull()                                           │
+│  ├─ savePageVStar()     → page.vstar (tokens V★)          │
+│  ├─ saveGroupsJson()    → groups.json (groupes ML Kit)    │
+│  ├─ rebuildAllBlobs()   → bitmap.png (rendu visuel)       │
+│  ├─ saveGroupMdm()      → page.mdm (markup sémantique)    │
+│  └─ mirrorToSdcard()    → /sdcard/.../page_N/             │
+│     ├─ page.txt         (texte épuré, sans @ ni {…})      │
+│     ├─ page.mdm                                         │
+│     ├─ bitmap.png                                        │
+│     └─ .miroir_temoin   ← timestamp UTC (témoin)          │
+└───────────────────────┬──────────────────────────────────┘
+                        │
+                        ▼
+┌─ Cœur Parnasse ───────────────────────────────────────────┐
+│  miroirSync() (toutes les 15s)                            │
+│  ├─ Lit .miroir_temoin                                    │
+│  ├─ Compare avec note.metadata["miroir_releve"]          │
+│  ├─ Si temoin > releve → upsert (création ou mise à jour) │
+│  └─ Si temoin ≤ releve → skip (déjà à jour)              │
+└───────────────────────────────────────────────────────────┘
+```
+
+### Témoin de boîte aux lettres
+
+Pattern réutilisable : le producteur (Miroir) écrit un timestamp, le consommateur (Parnasse) compare avec sa dernière relève. Une seule comparaison, zéro lecture de contenu, zéro hash.
+
+Documenté dans `docs/temoin-boite-aux-lettres.md` avec 5 déclinaisons Parnasse.
+
+### Navigation multi-bibliothèques
+
+Le menu ✕ du Miroir interroge `GET /api/miroir/config` pour découvrir toutes les bibliothèques Parnasse et leurs étagères « Miroir Standalone ». Les blocs sont listés par bibliothèque — une page manuscrite peut atterrir n'importe où dans Parnasse.
