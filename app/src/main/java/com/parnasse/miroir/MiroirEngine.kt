@@ -529,6 +529,43 @@ class MiroirEngine {
         it.isDirectory && it.name.startsWith("page_")
     } ?: 0
 
+    /** Lit le note_id Parnasse gravé dans le groups.json d'une page. */
+    fun readPageNoteId(pageIndex: Int): String? {
+        val bd = blockDir ?: return null
+        val groupsFile = File(bd, "page_$pageIndex/groups.json")
+        if (!groupsFile.exists()) return null
+        return try {
+            org.json.JSONObject(groupsFile.readText()).optString("note_id", null)
+        } catch (_: Exception) { null }
+    }
+
+    /** ⛪ Baptise une page : grave le note_id Parnasse dans son groups.json.
+     *  Les pages importées du standalone n'ont jamais été baptisées (pas de note_id).
+     *  Le baptême fait de l'identité le fil de navigation, au lieu du numéro de page. */
+    fun baptiserPage(pageIndex: Int, noteId: String) {
+        val bd = blockDir ?: return
+        val pageDir = File(bd, "page_$pageIndex")
+        if (!pageDir.exists()) return  // page vierge — baptisée à sa création
+        val groupsFile = File(pageDir, "groups.json")
+        try {
+            val root = if (groupsFile.exists()) {
+                org.json.JSONObject(groupsFile.readText())
+            } else {
+                org.json.JSONObject()
+            }
+            val deja = root.optString("note_id", null)
+            if (deja != null && deja.isNotEmpty() && deja != noteId) {
+                Log.w(TAG, "⛪ Page $pageIndex déjà baptisée avec $deja — ne pas écraser par $noteId")
+                return
+            }
+            root.put("note_id", noteId)
+            groupsFile.writeText(root.toString())
+            Log.i(TAG, "⛪ Page $pageIndex baptisée: note_id=$noteId")
+        } catch (e: Exception) {
+            Log.w(TAG, "baptiserPage: ${e.message}")
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // PAGES
     // ═══════════════════════════════════════════════════════════════════

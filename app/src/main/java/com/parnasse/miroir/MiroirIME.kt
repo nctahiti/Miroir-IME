@@ -1777,23 +1777,27 @@ class MiroirIME : InputMethodService() {
             if (isNewBlock || blockDir?.name != blockId) {
                 // Bloc nouveau → reconfigurer complètement
                 onParnasseContextReady()
-            } else if (pageN != currentPageIndex) {
-                // Même bloc, page différente → naviguer (savePage en arrière-plan anti-ANR)
-                lastLocalPageChange = System.currentTimeMillis()
-                val newPage = pageN.coerceAtLeast(0)
-                Thread {
-                    savePage()
-                    uiHandler.post {
-                        currentPageIndex = newPage
-                        if (!loadPage(currentPageIndex)) { clearPage() }
-                        refreshAll()
-                        updatePageIndicator()
-                        lastPostedPageN = currentPageIndex
-                        postMiroirState()
-                    }
-                }.start()
+            } else {
+                // ═══ Même bloc → résoudre la page par note_id (identité) avec repli pageN ═══
+                val targetPage = resolveTargetPage(noteId, pageN)
+                if (targetPage != currentPageIndex) {
+                    // Page différente → naviguer (savePage en arrière-plan anti-ANR)
+                    lastLocalPageChange = System.currentTimeMillis()
+                    val newPage = targetPage.coerceAtLeast(0)
+                    Thread {
+                        savePage()
+                        uiHandler.post {
+                            currentPageIndex = newPage
+                            if (!loadPage(currentPageIndex)) { clearPage() }
+                            refreshAll()
+                            updatePageIndicator()
+                            lastPostedPageN = currentPageIndex
+                            postMiroirState()
+                        }
+                    }.start()
+                }
+                // Si même page → rien à faire
             }
-            // Si même bloc et même page → rien à faire
         }
     }
 
@@ -2389,6 +2393,54 @@ class MiroirIME : InputMethodService() {
         }.start()
     }
 
+    /** Résout la page cible : par note_id (identité stable) avec repli sur pageN (position).
+     *  Dans un bloc hétérogène (notes manuscrites intercalées entre photo/audio/doc),
+     *  le numéro de page manuscrite ne coïncide plus avec la position — le note_id est le fil. */
+    private fun resolveTargetPage(noteId: String?, pageN: Int): Int {
+        if (!noteId.isNullOrEmpty()) {
+            val bd = blockDir ?: return pageN
+            val pageDirs = bd.listFiles()?.filter { it.isDirectory && it.name.startsWith("page_") } ?: return pageN
+            for (dir in pageDirs) {
+                val idx = dir.name.removePrefix("page_").toIntOrNull() ?: continue
+                if (readPageNoteId(idx) == noteId) {
+                    Log.i(TAG, "🧭 Page résolue par note_id: $noteId → page $idx")
+                    return idx
+                }
+            }
+            Log.i(TAG, "🧭 note_id $noteId introuvable — repli sur pageN=$pageN")
+            // ═══ BAPTÊME : la page pageN reçoit ce note_id (identité gravée) ═══
+            baptiserPage(pageN, noteId)
+        }
+        return pageN
+    }
+
+    /** ⛪ Baptise une page : grave le note_id Parnasse dans son groups.json.
+     *  Les pages importées du standalone n'ont jamais été baptisées (pas de note_id).
+     *  Le baptême fait de l'identité le fil de navigation, au lieu du numéro de page. */
+    private fun baptiserPage(pageIndex: Int, noteId: String) {
+        val bd = blockDir ?: return
+        val pageDir = java.io.File(bd, "page_$pageIndex")
+        if (!pageDir.exists()) return  // page encore vierge — baptisée à sa création (saveGroupsJson)
+        val groupsFile = java.io.File(pageDir, "groups.json")
+        try {
+            val root = if (groupsFile.exists()) {
+                org.json.JSONObject(groupsFile.readText())
+            } else {
+                org.json.JSONObject()
+            }
+            val deja = root.optString("note_id", null)
+            if (deja != null && deja.isNotEmpty() && deja != noteId) {
+                Log.w(TAG, "⛪ Page $pageIndex déjà baptisée avec $deja — ne pas écraser par $noteId")
+                return
+            }
+            root.put("note_id", noteId)
+            groupsFile.writeText(root.toString())
+            Log.i(TAG, "⛪ Page $pageIndex baptisée: note_id=$noteId")
+        } catch (e: Exception) {
+            Log.w(TAG, "baptiserPage: ${e.message}")
+        }
+    }
+
     /** Complète la configuration après réception du contexte Parnasse (broadcast ou HTTP).
      *  Appelé sur le thread principal. Sans danger si appelé plusieurs fois. */
     private fun onParnasseContextReady() {
@@ -2400,7 +2452,9 @@ class MiroirIME : InputMethodService() {
             // ═══ totalNotes=0 est un poison — utiliser countPages() en fallback ═══
             val effectiveTotal = if (ctx.totalNotes > 0) ctx.totalNotes else countPages()
             val totalPages = maxOf(ctx.pageN + 1, effectiveTotal)
-            currentPageIndex = ctx.pageN.coerceIn(0, (totalPages - 1).coerceAtLeast(0))
+            // ═══ Résolution par note_id (identité) avec repli pageN (position) ═══
+            val targetPage = resolveTargetPage(ctx.noteId, ctx.pageN)
+            currentPageIndex = targetPage.coerceIn(0, (totalPages - 1).coerceAtLeast(0))
             clearPage()
             Log.i(TAG, "🎯 Parnasse ready: bloc=$newBlockId page=$currentPageIndex (total=$totalPages)")
         }

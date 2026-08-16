@@ -71,6 +71,7 @@ class CaptureActivity : Activity() {
     // ── Contexte d'invocation ──────────────────────────────────────────
     private var invocBlockId: String? = null
     private var invocPageN: Int = 0
+    private var invocNoteId: String? = null
     private var invocMode: String = "bloc"
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,10 +80,31 @@ class CaptureActivity : Activity() {
 
         invocBlockId = intent.getStringExtra(EXTRA_BLOCK_ID)
         invocPageN   = intent.getIntExtra(EXTRA_PAGE_N, 0)
+        invocNoteId  = intent.getStringExtra(EXTRA_NOTE_ID)
         invocMode    = intent.getStringExtra(EXTRA_MODE) ?: "bloc"
 
+        // ═══ Fallback : contexte via fichier partagé (launchIME ne passe pas d'extras) ═══
+        if (invocBlockId == null) {
+            try {
+                val ctxFile = java.io.File("/sdcard/parnasse_context.json")
+                if (ctxFile.exists()) {
+                    val j = org.json.JSONObject(ctxFile.readText())
+                    val bid = j.optString("block_id", "")
+                    if (bid.isNotEmpty()) {
+                        invocBlockId = bid
+                        invocPageN   = j.optInt("page_n", 0)
+                        invocNoteId  = j.optString("note_id", null)
+                        invocMode    = j.optString("mode", "bloc")
+                        Log.i(TAG, "📂 Contexte lu depuis parnasse_context.json: bloc=$bid page=$invocPageN noteId=$invocNoteId")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Lecture parnasse_context.json: ${e.message}")
+            }
+        }
+
         val isContextual = invocBlockId != null
-        Log.i(TAG, "=== CAPTURE ACTIVITY === mode=$invocMode contextual=$isContextual blockId=$invocBlockId page=$invocPageN")
+        Log.i(TAG, "=== CAPTURE ACTIVITY === mode=$invocMode contextual=$isContextual blockId=$invocBlockId page=$invocPageN noteId=$invocNoteId")
 
         recognizer = DigitalInkWrapper(this).also { it.load() }
 
@@ -94,12 +116,30 @@ class CaptureActivity : Activity() {
         engine.initGroupManager(this)
         engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
 
+        // ═══ BAPTÊME : résoudre la page par note_id (identité) avec repli pageN ═══
+        var targetPage = invocPageN
+        if (!invocNoteId.isNullOrEmpty()) {
+            val total = engine.countPages()
+            var found = -1
+            for (i in 0 until total) {
+                if (engine.readPageNoteId(i) == invocNoteId) { found = i; break }
+            }
+            if (found >= 0) {
+                targetPage = found
+                Log.i(TAG, "🧭 Page résolue par note_id: $invocNoteId → page $found")
+            } else {
+                // Page pas encore baptisée → graver l'identité sur la page invocPageN
+                engine.baptiserPage(invocPageN, invocNoteId!!)
+                Log.i(TAG, "⛪ Page $invocPageN baptisée avec $invocNoteId")
+            }
+        }
+
         when (invocMode) {
             else -> buildBlockView()
         }
 
-        if (isContextual && invocPageN > 0 && engine.countPages() > invocPageN) {
-            engine.goToPageFull(invocPageN)
+        if (isContextual && targetPage > 0 && engine.countPages() > targetPage) {
+            engine.goToPageFull(targetPage)
         } else if (engine.countPages() > 0) {
             engine.currentPageIndex = engine.countPages() - 1
             // ⚠️ Posté après le layout pour garantir que onSizeChanged a créé le bitmap
