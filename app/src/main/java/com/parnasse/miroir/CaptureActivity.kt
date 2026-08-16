@@ -161,6 +161,56 @@ class CaptureActivity : Activity() {
         captureView?.post { captureView?.invalidate() }
     }
 
+    // ═══ singleInstance : les clics suivants passent par onNewIntent (pas onCreate) ═══
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val newBlockId = intent.getStringExtra(EXTRA_BLOCK_ID) ?: return
+        val newPageN   = intent.getIntExtra(EXTRA_PAGE_N, 0)
+        val newNoteId  = intent.getStringExtra(EXTRA_NOTE_ID)
+        val newMode    = intent.getStringExtra(EXTRA_MODE) ?: "bloc"
+
+        val blocChanged = newBlockId != invocBlockId
+        invocBlockId = newBlockId
+        invocPageN   = newPageN
+        invocNoteId  = newNoteId
+        invocMode    = newMode
+        Log.i(TAG, "♻ onNewIntent: bloc=$newBlockId page=$newPageN noteId=$newNoteId")
+
+        if (blocChanged) {
+            engine.openBlockDir(this, newBlockId)
+            engine.initGroupManager(this)
+            engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
+            buildBlockView()
+        }
+
+        // ═══ Résolution par note_id (identité) avec repli pageN — comme onCreate ═══
+        var targetPage = newPageN
+        if (!newNoteId.isNullOrEmpty()) {
+            val total = engine.countPages()
+            var found = -1
+            for (i in 0 until total) {
+                if (engine.readPageNoteId(i) == newNoteId) { found = i; break }
+            }
+            if (found >= 0) {
+                targetPage = found
+                Log.i(TAG, "🧭 onNewIntent: page résolue par note_id $newNoteId → $found")
+            } else {
+                engine.baptiserPage(newPageN, newNoteId!!)
+                Log.i(TAG, "⛪ onNewIntent: page $newPageN baptisée")
+            }
+        }
+
+        if (targetPage > 0 && engine.countPages() > targetPage) {
+            engine.goToPageFull(targetPage)
+        } else {
+            engine.currentPageIndex = targetPage.coerceAtLeast(0)
+            engine.loadPageFull()
+        }
+        updatePageCounter()
+        captureView?.post { captureView?.invalidate() }
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // INFERENCE PAR GROUPE (timer)
     // ═══════════════════════════════════════════════════════════════════
