@@ -74,6 +74,36 @@ class CaptureActivity : Activity() {
     private var invocNoteId: String? = null
     private var invocMode: String = "bloc"
 
+    /** Résout l'UUID Parnasse d'un bloc vers son nom de dossier Miroir (ex: "standalone").
+     *  1. D'abord via le cache (fetchParnasseConfig, asynchrone).
+     *  2. Sinon, interroge le Cœur directement (anti-course au premier lancement). */
+    private fun resolveMirrorBlockName(blockId: String): String? {
+        for ((_, blocs) in cachedParnasseBlocs) {
+            for (b in blocs) {
+                if (b.id == blockId && b.mirrorName.isNotEmpty()) return b.mirrorName
+            }
+        }
+        // ═══ Fallback synchrone : interroger le Cœur (thread + latch) ═══
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var result: String? = null
+        Thread {
+            try {
+                for (lib in engine.fetchParnasseConfig(coeurUrl)) {
+                    for (b in engine.fetchParnasseBlocs(coeurUrl, lib.libraryId)) {
+                        if (b.id == blockId && b.mirrorName.isNotEmpty()) {
+                            result = b.mirrorName
+                            break
+                        }
+                    }
+                    if (result != null) break
+                }
+            } catch (_: Exception) {}
+            latch.countDown()
+        }.start()
+        try { latch.await(2500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: Exception) {}
+        return result
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -109,7 +139,10 @@ class CaptureActivity : Activity() {
         recognizer = DigitalInkWrapper(this).also { it.load() }
 
         if (isContextual) {
-            engine.openBlockDir(this, invocBlockId!!)
+            val mirrorName = resolveMirrorBlockName(invocBlockId!!)
+            val blockDirName = mirrorName ?: invocBlockId!!
+            engine.openBlockDir(this, blockDirName)
+            Log.i(TAG, "📂 Bloc ouvert: $blockDirName (résolu depuis $invocBlockId)")
         } else {
             engine.openBlockDir(this, "standalone")
         }
@@ -178,7 +211,10 @@ class CaptureActivity : Activity() {
         Log.i(TAG, "♻ onNewIntent: bloc=$newBlockId page=$newPageN noteId=$newNoteId")
 
         if (blocChanged) {
-            engine.openBlockDir(this, newBlockId)
+            val mirrorName = resolveMirrorBlockName(newBlockId)
+            val blockDirName = mirrorName ?: newBlockId
+            engine.openBlockDir(this, blockDirName)
+            Log.i(TAG, "♻ Bloc ouvert: $blockDirName (résolu depuis $newBlockId)")
             engine.initGroupManager(this)
             engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
             buildBlockView()

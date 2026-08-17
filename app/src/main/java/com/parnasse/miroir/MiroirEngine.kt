@@ -471,7 +471,8 @@ class MiroirEngine {
                 result.add(ParnasseBlocInfo(
                     id = obj.getString("id"),
                     title = obj.getString("title"),
-                    nbNotes = obj.optInt("nb_notes", 0)
+                    nbNotes = obj.optInt("nb_notes", 0),
+                    mirrorName = obj.optString("mirror_name", "")
                 ))
             }
             return result
@@ -1345,7 +1346,8 @@ data class BlockInfo(
 data class ParnasseBlocInfo(
     val id: String,
     val title: String,
-    val nbNotes: Int
+    val nbNotes: Int,
+    val mirrorName: String = ""
 )
 
 /** Information sur une bibliothèque Parnasse avec son étagère Miroir. */
