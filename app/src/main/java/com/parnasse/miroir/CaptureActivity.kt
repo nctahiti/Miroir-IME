@@ -161,9 +161,10 @@ class CaptureActivity : Activity() {
                 targetPage = found
                 Log.i(TAG, "🧭 Page résolue par note_id: $invocNoteId → page $found")
             } else {
-                // Page pas encore baptisée → graver l'identité sur la page invocPageN
-                engine.baptiserPage(invocPageN, invocNoteId!!)
-                Log.i(TAG, "⛪ Page $invocPageN baptisée avec $invocNoteId")
+                // Nouvelle note → créer une page vierge à la fin + la baptiser
+                val newPage = engine.createPageAtEnd(invocNoteId!!)
+                targetPage = newPage
+                Log.i(TAG, "⛪ Nouvelle page $newPage créée et baptisée avec $invocNoteId")
             }
         }
 
@@ -232,8 +233,9 @@ class CaptureActivity : Activity() {
                 targetPage = found
                 Log.i(TAG, "🧭 onNewIntent: page résolue par note_id $newNoteId → $found")
             } else {
-                engine.baptiserPage(newPageN, newNoteId!!)
-                Log.i(TAG, "⛪ onNewIntent: page $newPageN baptisée")
+                val newPage = engine.createPageAtEnd(newNoteId!!)
+                targetPage = newPage
+                Log.i(TAG, "⛪ onNewIntent: nouvelle page $newPage créée et baptisée avec $newNoteId")
             }
         }
 

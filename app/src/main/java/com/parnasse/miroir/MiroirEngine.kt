@@ -612,6 +612,27 @@ class MiroirEngine {
         currentPageIndex = total
     }
 
+    /** Crée une nouvelle page à la fin du bloc et la baptise immédiatement
+     *  avec le note_id Parnasse. Retourne l'index de la page créée.
+     *  Utilisé par CaptureActivity quand une note manuscrite est nouvelle
+     *  (pas encore de page baptisée) : on ouvre une page vierge à la fin,
+     *  pas la première page. */
+    fun createPageAtEnd(noteId: String): Int {
+        val bd = blockDir ?: return 0
+        val newPage = countPages()
+        val pageDir = File(bd, "page_$newPage")
+        pageDir.mkdirs()
+        try {
+            val root = org.json.JSONObject()
+            root.put("note_id", noteId)
+            File(pageDir, "groups.json").writeText(root.toString())
+            Log.i(TAG, "⛪ Nouvelle page $newPage créée et baptisée: note_id=$noteId")
+        } catch (e: Exception) {
+            Log.w(TAG, "createPageAtEnd: ${e.message}")
+        }
+        return newPage
+    }
+
     fun clearPage() {
         groupManager?.clearAll()
         groupBlobs.clear()
@@ -997,9 +1018,15 @@ class MiroirEngine {
                 }
                 arr.put(obj)
             }
-            java.io.FileWriter(File(dir, "groups.json")).use { w ->
+            val groupsFile = File(dir, "groups.json")
+            // ═══ Conserver le note_id du baptême (sinon écrasé au 1er save) ═══
+            val existingNoteId = try {
+                if (groupsFile.exists()) org.json.JSONObject(groupsFile.readText()).optString("note_id", null) else null
+            } catch (_: Exception) { null }
+            java.io.FileWriter(groupsFile).use { w ->
                 val root = org.json.JSONObject()
                 root.put("groups", arr)
+                if (!existingNoteId.isNullOrEmpty()) root.put("note_id", existingNoteId)
                 w.write(root.toString(2))
             }
             Log.i(TAG, "groups.json: ${allGroups.size} groupes sauvegardes")
