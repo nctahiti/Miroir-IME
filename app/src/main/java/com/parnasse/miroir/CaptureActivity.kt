@@ -321,7 +321,13 @@ class CaptureActivity : Activity() {
 
         // ── Bouton ✕ (fermer) ──
         toolbar.addView(makeToolBtn("\u2715", Color.argb(200, 150, 0, 0)) { view ->
-            showCloseMenu(view)
+            if (invocBlockId != null) {
+                // Lancé depuis Parnasse → retour au Flutter.
+                // finish() déclenche onPause/onDestroy → savePageFull + closeBlock (export SD).
+                finish()
+            } else {
+                showCloseMenu(view)
+            }
         })
 
         // ── Espace pousseur gauche ──
