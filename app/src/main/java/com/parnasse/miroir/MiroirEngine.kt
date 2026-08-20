@@ -832,6 +832,17 @@ class MiroirEngine {
             // Horodatage UTC de la dernière écriture Miroir.
             // Parnasse compare avec note.metadata["miroir_releve"] pour détecter les mises à jour.
             File(mirrorDir, ".miroir_temoin").writeText(Instant.now().toString())
+            // ── Identité durable : note_id Parnasse (lien note ↔ capture ↔ transcription) ──
+            // groups.json contient le note_id gravé au baptême. On le recopie sur la SD
+            // pour que le Cœur joigne par identité, pas par position (le titre p.N change
+            // à la renumérotation, l'ID non).
+            val groupsFile = File(pageDir, "groups.json")
+            if (groupsFile.exists()) {
+                try {
+                    val noteId = org.json.JSONObject(groupsFile.readText()).optString("note_id", null)
+                    if (!noteId.isNullOrEmpty()) File(mirrorDir, ".note_id").writeText(noteId)
+                } catch (_: Exception) {}
+            }
         } catch (e: Exception) {
             Log.w(TAG, "mirrorToSdcard échec: ${e.message}")
         }
