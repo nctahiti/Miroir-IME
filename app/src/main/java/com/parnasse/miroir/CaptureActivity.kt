@@ -339,6 +339,7 @@ class CaptureActivity : Activity() {
             returnToWriting()
             captureView?.invalidate()
             updatePageCounter()
+            postMiroirState()
         })
 
         // ── Compteur de page ──
@@ -355,6 +356,7 @@ class CaptureActivity : Activity() {
             returnToWriting()
             captureView?.invalidate()
             updatePageCounter()
+            postMiroirState()
         })
 
         // ── Bouton @ (MDM → Geppetto) ──
@@ -575,6 +577,38 @@ class CaptureActivity : Activity() {
         engine.savePageFull(); engine.closeBlock()
         recognizer?.close()
         super.onDestroy()
+    }
+
+    /** Notifie le Cœur de la page courante (navigation bidirectionnelle Miroir → Parnasse).
+     *  Parnasse lit cet état (polling) pour ouvrir la note affichée au moment du basculement. */
+    private fun postMiroirState() {
+        val bid = invocBlockId ?: return
+        try {
+            val json = org.json.JSONObject().apply {
+                put("block_id", bid)
+                put("page_n", engine.currentPageIndex)
+                put("mode", "capture")
+                val nid = engine.readPageNoteId(engine.currentPageIndex)
+                if (nid != null) put("note_id", nid)
+            }
+            Thread {
+                try {
+                    val url = java.net.URL("$coeurUrl/api/miroir/state")
+                    val conn = url.openConnection() as java.net.HttpURLConnection
+                    conn.requestMethod = "POST"
+                    conn.setRequestProperty("Content-Type", "application/json")
+                    conn.doOutput = true
+                    conn.outputStream.write(json.toString().toByteArray())
+                    val code = conn.responseCode
+                    conn.disconnect()
+                    Log.i(TAG, "📡 État → Parnasse: page=${engine.currentPageIndex} (HTTP $code)")
+                } catch (e: Exception) {
+                    Log.w(TAG, "postMiroirState: ${e.message}")
+                }
+            }.start()
+        } catch (e: Exception) {
+            Log.w(TAG, "postMiroirState: ${e.message}")
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════
