@@ -633,6 +633,29 @@ class MiroirEngine {
         return newPage
     }
 
+    /** Insère une nouvelle page à la position pageN (décale les suivantes vers la droite)
+     *  et la baptise avec noteId. Si pageN >= countPages, append à la fin.
+     *  Cinématique d'insertion au milieu : Parnasse indique la position, le Miroir reflète et décale. */
+    fun insertPageAt(pageN: Int, noteId: String): Int {
+        val bd = blockDir ?: return 0
+        val total = countPages()
+        val target = if (pageN >= total) total else pageN
+        for (i in total - 1 downTo target) {
+            File(bd, "page_$i").renameTo(File(bd, "page_${i + 1}"))
+        }
+        val pageDir = File(bd, "page_$target")
+        pageDir.mkdirs()
+        try {
+            val root = org.json.JSONObject()
+            root.put("note_id", noteId)
+            File(pageDir, "groups.json").writeText(root.toString())
+            Log.i(TAG, "⛪ Page $target insérée et baptisée: note_id=$noteId")
+        } catch (e: Exception) {
+            Log.w(TAG, "insertPageAt: ${e.message}")
+        }
+        return target
+    }
+
     fun clearPage() {
         groupManager?.clearAll()
         groupBlobs.clear()
