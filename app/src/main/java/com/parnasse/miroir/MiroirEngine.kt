@@ -599,6 +599,30 @@ class MiroirEngine {
         } catch (_: Exception) { null }
     }
 
+    /** Retrouve le dossier local qui porte ce note_id — par l'identité, pas la position.
+     *  Une note peut se déplacer (changer de page_number) sans perdre sa capture. */
+    fun findPageByNoteId(noteId: String): Int {
+        val total = countPages()
+        for (i in 0 until total) {
+            if (readPageNoteId(i) == noteId) return i
+        }
+        return -1
+    }
+
+    /** Où est la matière de la page courante ? Le sens est unique : « où lire/écrire ? »
+     *  LOCAL    → currentPageIndex (le Miroir numérote ses dossiers).
+     *  PARNASSE → retrouvé par note_id (l'identité) — jamais par la position. */
+    private fun pageDirIndex(): Int {
+        if (navMode == NavMode.PARNASSE) {
+            val nid = parnasseNoteId
+            if (nid != null) {
+                val idx = findPageByNoteId(nid)
+                if (idx >= 0) return idx
+            }
+        }
+        return currentPageIndex
+    }
+
     /** ⛪ Baptise une page : grave le note_id Parnasse dans son groups.json.
      *  Les pages importées du standalone n'ont jamais été baptisées (pas de note_id).
      *  Le baptême fait de l'identité le fil de navigation, au lieu du numéro de page. */
@@ -839,7 +863,7 @@ class MiroirEngine {
     /** Sauvegarde complete : V★ + bitmap + groupes + MDM. */
     fun savePageFull() {
         val bd = blockDir ?: return
-        val dir = File(bd, "page_$currentPageIndex")
+        val dir = File(bd, "page_${pageDirIndex()}")
         dir.mkdirs()
         val vstarFile = File(dir, "page.vstar")
         // ═══ Inclure TOUS les strokes non-supprimés (vivants + archivés) ═══
@@ -963,7 +987,7 @@ class MiroirEngine {
     fun loadPageFull(): Boolean {
         val bd = blockDir ?: return false
         try {
-            val dir = File(bd, "page_$currentPageIndex")
+            val dir = File(bd, "page_${pageDirIndex()}")
             if (!dir.exists()) return false
 
             // Nettoyer l'etat avant chargement
