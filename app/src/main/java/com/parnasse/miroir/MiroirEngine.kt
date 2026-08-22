@@ -906,6 +906,9 @@ class MiroirEngine {
     /** Copie miroir de la page sauvegardée vers le stockage externe
      *  pour que le Scanner et le Cœur puissent la lire sans sandboxing. */
     internal fun mirrorToSdcard(pageDir: File, blockName: String, pageN: Int) {
+        // PARNASSE est la source : pas d'export SD (l'ancien pipeline watcher→CreateNote
+        // re-créerait des notes en doublon). Le viewport n'écrit plus vers la SD.
+        if (navMode == NavMode.PARNASSE) return
         try {
             val mirrorDir = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),

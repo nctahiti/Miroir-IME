@@ -161,8 +161,10 @@ class CaptureActivity : Activity() {
         engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
 
         // ═══ BAPTÊME : résoudre la page par note_id (identité) avec repli pageN ═══
+        // ⚠️ LOCAL seulement. En PARNASSE le Miroir est viewport : ni scan ni insertion,
+        // la position vient de Parnasse (invocPageN) et goToPageFull interrogera le Cœur.
         var targetPage = invocPageN
-        if (!invocNoteId.isNullOrEmpty()) {
+        if (!invocNoteId.isNullOrEmpty() && engine.navMode != NavMode.PARNASSE) {
             val total = engine.countPages()
             var found = -1
             for (i in 0 until total) {
@@ -183,7 +185,16 @@ class CaptureActivity : Activity() {
             else -> buildBlockView()
         }
 
-        if (isContextual && targetPage > 0 && engine.countPages() > targetPage) {
+        if (engine.navMode == NavMode.PARNASSE) {
+            // Parnasse est maître : navigue à la position dictée (interroge le Cœur).
+            captureView?.post {
+                engine.goToPageFull(targetPage)
+                updatePageCounter()
+                fontaineOverlay?.desactiver()
+                captureView?.invalidate()
+                fontaineOverlay?.activer()
+            }
+        } else if (isContextual && targetPage > 0 && engine.countPages() > targetPage) {
             engine.goToPageFull(targetPage)
         } else if (engine.countPages() > 0) {
             engine.currentPageIndex = engine.countPages() - 1
@@ -233,8 +244,9 @@ class CaptureActivity : Activity() {
         }
 
         // ═══ Résolution par note_id (identité) avec repli pageN — comme onCreate ═══
+        // ⚠️ LOCAL seulement. En PARNASSE, la position vient de Parnasse (newPageN).
         var targetPage = newPageN
-        if (!newNoteId.isNullOrEmpty()) {
+        if (!newNoteId.isNullOrEmpty() && engine.navMode != NavMode.PARNASSE) {
             val total = engine.countPages()
             var found = -1
             for (i in 0 until total) {
@@ -250,7 +262,9 @@ class CaptureActivity : Activity() {
             }
         }
 
-        if (targetPage > 0 && engine.countPages() > targetPage) {
+        if (engine.navMode == NavMode.PARNASSE) {
+            engine.goToPageFull(targetPage)
+        } else if (targetPage > 0 && engine.countPages() > targetPage) {
             engine.goToPageFull(targetPage)
         } else {
             engine.currentPageIndex = targetPage.coerceAtLeast(0)
