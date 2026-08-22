@@ -28,6 +28,9 @@ import java.net.URL
 import java.time.Instant
 import org.json.JSONObject
 
+/** Deux maîtres de navigation : le Miroir (LOCAL) ou Parnasse (viewport). */
+enum class NavMode { LOCAL, PARNASSE }
+
 class MiroirEngine {
 
     companion object {
@@ -38,6 +41,16 @@ class MiroirEngine {
     var blockDir: File? = null; private set
     var currentPageIndex = 0
     private var appContext: android.content.Context? = null
+
+    // ── Navigation viewport Parnasse ────────────────────────────────────
+    // Quand navMode = PARNASSE, Parnasse est maître : il donne le nombre de
+    // pages (parnasseTotal) et l'identité de la page courante (parnasseNoteId).
+    // Le Miroir n'est plus qu'une surface — il reflète ce que Parnasse dicte.
+    var navMode: NavMode = NavMode.LOCAL
+    var coeurUrl: String = "http://127.0.0.1:8008"
+    var parnasseBlockUuid: String? = null
+    var parnasseTotal: Int = 0
+    var parnasseNoteId: String? = null
 
     // ── Strokes ────────────────────────────────────────────────────────
     val strokeRegistry = mutableListOf<StrokeRecord>()
@@ -482,6 +495,31 @@ class MiroirEngine {
         }
     }
 
+    /** Interroge le Cœur : « qu'y a-t-il à la page N de ce bloc ? » (mode PARNASSE).
+     *  Parnasse répond le nombre de pages (total_notes) et l'identité de la note
+     *  (note_id) — ou null si la position est vide. Le Miroir ne calcule plus rien. */
+    fun queryPageParnasse(pageN: Int): Boolean {
+        val uuid = parnasseBlockUuid ?: return false
+        try {
+            val url = URL("$coeurUrl/api/miroir/page?block_id=$uuid&page_n=$pageN")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            conn.requestMethod = "GET"
+            if (conn.responseCode != 200) { conn.disconnect(); return false }
+            val body = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+            conn.disconnect()
+            val json = JSONObject(body)
+            parnasseTotal = json.optInt("total_notes", 0)
+            parnasseNoteId = json.optString("note_id").ifEmpty { null }
+            Log.i(TAG, "queryPageParnasse: page=$pageN total=$parnasseTotal note_id=$parnasseNoteId")
+            return true
+        } catch (e: Exception) {
+            Log.w(TAG, "queryPageParnasse: ${e.message}")
+            return false
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // SERRE-LIVRES
     // ═══════════════════════════════════════════════════════════════════
@@ -526,9 +564,14 @@ class MiroirEngine {
         return true  // bloc vide, aucune page à charger
     }
 
-    fun countPages(): Int = blockDir?.listFiles()?.count {
-        it.isDirectory && it.name.startsWith("page_")
-    } ?: 0
+    /** Nombre de dossiers page_N/ locaux — le sens ne change pas, quel que soit le mode.
+     *  C'est la vérité du cache local (les fonctions de manipulation de dossiers s'y fient). */
+    fun countPages(): Int =
+        blockDir?.listFiles()?.count { it.isDirectory && it.name.startsWith("page_") } ?: 0
+
+    /** Total de navigation : Parnasse dicte en mode PARNASSE, sinon le cache local. */
+    fun navigationTotal(): Int =
+        if (navMode == NavMode.PARNASSE) parnasseTotal else countPages()
 
     /** Lit le note_id Parnasse gravé dans le groups.json d'une page. */
     fun readPageNoteId(pageIndex: Int): String? {
@@ -677,11 +720,24 @@ class MiroirEngine {
 
     /** Navigation avec sauvegarde/chargement complets (standalone).
      *  Permissive : accepte tout index ≥ 0 et tout index négatif (carnet affillié).
-     *  Si le dossier local n'existe pas, loadPageFull() crée une page blanche. */
+     *  Le sens est unique : « va à la page N ». Le maître change selon le mode :
+     *    LOCAL    → le Miroir lit ses dossiers page_N/ (page blanche si absent).
+     *    PARNASSE → le Miroir interroge le Cœur (page vierge si note_id null). */
     fun goToPageFull(index: Int) {
         if (index < Int.MIN_VALUE) return  // seule garde : sécurité absurde
         savePageFull()
         currentPageIndex = index
+        // PARNASSE est maître : interroge le Cœur avant de charger.
+        // La réponse met à jour le total (parnasseTotal) et l'identité (parnasseNoteId).
+        if (navMode == NavMode.PARNASSE) {
+            queryPageParnasse(index)
+            if (parnasseNoteId == null) {
+                // Parnasse dit « vide » → page vierge, quelle que soit la cache locale.
+                clearPage()
+                redrawBitmapInternal()
+                return
+            }
+        }
         val loaded = loadPageFull()
         if (!loaded) {
             // Pas de dossier local → page blanche

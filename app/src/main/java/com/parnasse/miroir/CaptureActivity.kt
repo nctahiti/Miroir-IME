@@ -136,6 +136,17 @@ class CaptureActivity : Activity() {
         val isContextual = invocBlockId != null
         Log.i(TAG, "=== CAPTURE ACTIVITY === mode=$invocMode contextual=$isContextual blockId=$invocBlockId page=$invocPageN noteId=$invocNoteId")
 
+        // ═══ BASCULE : qui est le maître de la navigation ? ═══
+        // Contextuel (ouvert depuis Flutter, bloc de l'étagère) → Parnasse dicte.
+        // Standalone (depuis le lanceur) → le Miroir garde la main sur ses blocs.
+        engine.coeurUrl = coeurUrl
+        if (isContextual) {
+            engine.navMode = NavMode.PARNASSE
+            engine.parnasseBlockUuid = invocBlockId
+        } else {
+            engine.navMode = NavMode.LOCAL
+        }
+
         recognizer = DigitalInkWrapper(this).also { it.load() }
 
         if (isContextual) {
@@ -625,7 +636,7 @@ class CaptureActivity : Activity() {
 
     private fun pageLabel(): String {
         val idx = engine.currentPageIndex
-        val local = engine.countPages()
+        val local = engine.navigationTotal()
         return if (idx >= 0) "${idx + 1} / ${maxOf(local, idx + 1)}"
         else "${idx} [carnet] / ${maxOf(local, -idx)}"
     }
