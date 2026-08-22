@@ -497,27 +497,43 @@ class MiroirEngine {
 
     /** Interroge le Cœur : « qu'y a-t-il à la page N de ce bloc ? » (mode PARNASSE).
      *  Parnasse répond le nombre de pages (total_notes) et l'identité de la note
-     *  (note_id) — ou null si la position est vide. Le Miroir ne calcule plus rien. */
+     *  (note_id) — ou null si la position est vide. Le Miroir ne calcule plus rien.
+     *  ⚠️ HTTP sur thread secondaire (NetworkOnMainThreadException sinon), synchronisé
+     *  par CountDownLatch — même pattern que resolveMirrorBlockName. */
     fun queryPageParnasse(pageN: Int): Boolean {
         val uuid = parnasseBlockUuid ?: return false
-        try {
-            val url = URL("$coeurUrl/api/miroir/page?block_id=$uuid&page_n=$pageN")
-            val conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 5000
-            conn.readTimeout = 5000
-            conn.requestMethod = "GET"
-            if (conn.responseCode != 200) { conn.disconnect(); return false }
-            val body = BufferedReader(InputStreamReader(conn.inputStream)).readText()
-            conn.disconnect()
-            val json = JSONObject(body)
-            parnasseTotal = json.optInt("total_notes", 0)
-            parnasseNoteId = json.optString("note_id").ifEmpty { null }
+        val urlStr = "$coeurUrl/api/miroir/page?block_id=$uuid&page_n=$pageN"
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var ok = false
+        var total = 0
+        var noteId: String? = null
+        Thread {
+            try {
+                val url = URL(urlStr)
+                val conn = url.openConnection() as HttpURLConnection
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                conn.requestMethod = "GET"
+                if (conn.responseCode == 200) {
+                    val body = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+                    val json = JSONObject(body)
+                    total = json.optInt("total_notes", 0)
+                    noteId = json.optString("note_id").ifEmpty { null }
+                    ok = true
+                }
+                conn.disconnect()
+            } catch (e: Exception) {
+                Log.w(TAG, "queryPageParnasse: ${e.javaClass.simpleName}: ${e.message}")
+            }
+            latch.countDown()
+        }.start()
+        try { latch.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: Exception) {}
+        if (ok) {
+            parnasseTotal = total
+            parnasseNoteId = noteId
             Log.i(TAG, "queryPageParnasse: page=$pageN total=$parnasseTotal note_id=$parnasseNoteId")
-            return true
-        } catch (e: Exception) {
-            Log.w(TAG, "queryPageParnasse: ${e.message}")
-            return false
         }
+        return ok
     }
 
     // ═══════════════════════════════════════════════════════════════════
