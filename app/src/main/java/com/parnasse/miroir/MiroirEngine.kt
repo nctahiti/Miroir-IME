@@ -930,9 +930,6 @@ class MiroirEngine {
     /** Copie miroir de la page sauvegardée vers le stockage externe
      *  pour que le Scanner et le Cœur puissent la lire sans sandboxing. */
     internal fun mirrorToSdcard(pageDir: File, blockName: String, pageN: Int) {
-        // PARNASSE est la source : pas d'export SD (l'ancien pipeline watcher→CreateNote
-        // re-créerait des notes en doublon). Le viewport n'écrit plus vers la SD.
-        if (navMode == NavMode.PARNASSE) return
         try {
             val mirrorDir = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
@@ -955,16 +952,21 @@ class MiroirEngine {
             // Parnasse compare avec note.metadata["miroir_releve"] pour détecter les mises à jour.
             File(mirrorDir, ".miroir_temoin").writeText(Instant.now().toString())
             // ── Identité durable : note_id Parnasse (lien note ↔ capture ↔ transcription) ──
-            // groups.json contient le note_id gravé au baptême. On le recopie sur la SD
-            // pour que le Cœur joigne par identité, pas par position (le titre p.N change
-            // à la renumérotation, l'ID non).
-            val groupsFile = File(pageDir, "groups.json")
-            if (groupsFile.exists()) {
-                try {
-                    val noteId = org.json.JSONObject(groupsFile.readText()).optString("note_id", null)
-                    if (!noteId.isNullOrEmpty()) File(mirrorDir, ".note_id").writeText(noteId)
-                } catch (_: Exception) {}
+            // PARNASSE → parnasseNoteId (la source de vérité du viewport).
+            // LOCAL    → groups.json (note_id gravé au baptême).
+            // Le Cœur joint par identité (note_id), jamais par position — le titre p.N
+            // change à la renumérotation, l'ID non.
+            val noteId = if (navMode == NavMode.PARNASSE) {
+                parnasseNoteId
+            } else {
+                val groupsFile = File(pageDir, "groups.json")
+                if (groupsFile.exists()) {
+                    try {
+                        org.json.JSONObject(groupsFile.readText()).optString("note_id", null)
+                    } catch (_: Exception) { null }
+                } else null
             }
+            if (!noteId.isNullOrEmpty()) File(mirrorDir, ".note_id").writeText(noteId)
         } catch (e: Exception) {
             Log.w(TAG, "mirrorToSdcard échec: ${e.message}")
         }
