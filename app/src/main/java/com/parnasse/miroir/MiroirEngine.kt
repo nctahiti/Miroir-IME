@@ -17,6 +17,8 @@ package com.parnasse.miroir
 
 import android.content.Context
 import android.graphics.*
+import android.os.Handler
+import android.os.Looper
 import android.os.Environment
 import android.util.Log
 import java.io.BufferedReader
@@ -51,6 +53,10 @@ class MiroirEngine {
     var parnasseBlockUuid: String? = null
     var parnasseTotal: Int = 0
     var parnasseNoteId: String? = null
+    var parnassePageNumber: Int = -1
+
+    // Le Cœur répond sur le UI thread — jamais de blocage (ANR).
+    private val uiHandler = Handler(Looper.getMainLooper())
 
     // ── Strokes ────────────────────────────────────────────────────────
     val strokeRegistry = mutableListOf<StrokeRecord>()
@@ -500,14 +506,26 @@ class MiroirEngine {
      *  (note_id) — ou null si la position est vide. Le Miroir ne calcule plus rien.
      *  ⚠️ HTTP sur thread secondaire (NetworkOnMainThreadException sinon), synchronisé
      *  par CountDownLatch — même pattern que resolveMirrorBlockName. */
-    fun queryPageParnasse(pageN: Int): Boolean {
+    fun queryPageParnasse(pageN: Int, navDelta: Int = 0, onDone: () -> Unit = {}): Boolean {
         val uuid = parnasseBlockUuid ?: return false
-        val urlStr = "$coeurUrl/api/miroir/page?block_id=$uuid&page_n=$pageN"
-        val latch = java.util.concurrent.CountDownLatch(1)
-        var ok = false
-        var total = 0
-        var noteId: String? = null
+        // L'identité d'abord : le Cœur résout par note_id (et calcule le voisin
+        // pour le geste de navigation). La position n'est qu'une réponse.
+        val hasId = !parnasseNoteId.isNullOrEmpty()
+        val urlStr = when {
+            hasId && navDelta != 0 ->
+                "$coeurUrl/api/miroir/page?block_id=$uuid&note_id=$parnasseNoteId" +
+                    "&nav=$navDelta"
+            hasId -> "$coeurUrl/api/miroir/page?block_id=$uuid&note_id=$parnasseNoteId"
+            else -> "$coeurUrl/api/miroir/page?block_id=$uuid&page_n=$pageN"
+        }
+        // ═══ ASYNCHRONE : la réponse revient sur le UI thread — le thread
+        // d'interface n'est jamais gelé (ANR). onDone: la suite du chargement. ═══
         Thread {
+            var okF = false
+            var totalF = 0
+            var noteIdF: String? = null
+            var posF = pageN
+            var pageNumF = -1
             try {
                 val url = URL(urlStr)
                 val conn = url.openConnection() as HttpURLConnection
@@ -517,23 +535,35 @@ class MiroirEngine {
                 if (conn.responseCode == 200) {
                     val body = BufferedReader(InputStreamReader(conn.inputStream)).readText()
                     val json = JSONObject(body)
-                    total = json.optInt("total_notes", 0)
-                    noteId = json.optString("note_id").ifEmpty { null }
-                    ok = true
+                    totalF = json.optInt("total_notes", 0)
+                    noteIdF = json.optString("note_id").ifEmpty { null }
+                    posF = json.optInt("page_n", pageN)  // position de lecture
+                    pageNumF = json.optInt("page_number", -1)  // ⚠️ le numéro de la note
+                    okF = true
                 }
                 conn.disconnect()
             } catch (e: Exception) {
                 Log.w(TAG, "queryPageParnasse: ${e.javaClass.simpleName}: ${e.message}")
             }
-            latch.countDown()
+            val ok = okF
+            val total = totalF
+            val noteId = noteIdF
+            val pos = posF
+            val pageNum = pageNumF
+            uiHandler.post {
+                if (ok) {
+                    parnasseTotal = total
+                    parnasseNoteId = noteId
+                    parnassePageNumber = pageNum
+                    // ⚠️ La position de lecture est dictée par le Cœur — jamais calculée.
+                    currentPageIndex = pos
+                    Log.i(TAG, "queryPageParnasse: page=$pos num=$pageNum total=$parnasseTotal note_id=$parnasseNoteId" +
+                        (if (hasId && navDelta != 0) " nav=$navDelta" else ""))
+                }
+                onDone()
+            }
         }.start()
-        try { latch.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: Exception) {}
-        if (ok) {
-            parnasseTotal = total
-            parnasseNoteId = noteId
-            Log.i(TAG, "queryPageParnasse: page=$pageN total=$parnasseTotal note_id=$parnasseNoteId")
-        }
-        return ok
+        return true
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -614,11 +644,18 @@ class MiroirEngine {
      *  PARNASSE → retrouvé par note_id (l'identité) — jamais par la position. */
     private fun pageDirIndex(): Int {
         if (navMode == NavMode.PARNASSE) {
-            val nid = parnasseNoteId
-            if (nid != null) {
-                val idx = findPageByNoteId(nid)
-                if (idx >= 0) return idx
+            // ═══ LE NUMÉRO de la note — la colonne locale page_<num> ═══
+            // Jamais la position du Cœur (dérive : doublons, renumérotation),
+            // jamais le cache des baptêmes (pollué par l'ère positionnelle).
+            // Le Cœur est la vérité : il a dit « cette note = page numéro N ».
+            val pn = parnassePageNumber
+            if (pn >= 0) {
+                val bd = blockDir
+                if (bd != null && File(bd, "page_$pn").exists()) return pn
             }
+            // ⚠️ Numéro inconnu = la Cœur n'a pas encore parlé pour cette vue :
+            // aucune page à désigner — surtout pas page_0 (poison hérité).
+            return -1
         }
         return currentPageIndex
     }
@@ -627,6 +664,7 @@ class MiroirEngine {
      *  Les pages importées du standalone n'ont jamais été baptisées (pas de note_id).
      *  Le baptême fait de l'identité le fil de navigation, au lieu du numéro de page. */
     fun baptiserPage(pageIndex: Int, noteId: String) {
+        if (pageIndex < 0) return  // pas de page désignée — pas de baptême à détourer
         val bd = blockDir ?: return
         val pageDir = File(bd, "page_$pageIndex")
         if (!pageDir.exists()) return  // page vierge — baptisée à sa création
@@ -638,7 +676,9 @@ class MiroirEngine {
                 org.json.JSONObject()
             }
             val deja = root.optString("note_id", null)
-            if (deja != null && deja.isNotEmpty() && deja != noteId) {
+            // ═══ En PARNASSE, le Cœur est la vérité : le baptême répare les
+            // notes polluées par l'ancienne résolution par position. ═══
+            if (deja != null && deja.isNotEmpty() && deja != noteId && navMode != NavMode.PARNASSE) {
                 Log.w(TAG, "⛪ Page $pageIndex déjà baptisée avec $deja — ne pas écraser par $noteId")
                 return
             }
@@ -763,20 +803,25 @@ class MiroirEngine {
      *  Le sens est unique : « va à la page N ». Le maître change selon le mode :
      *    LOCAL    → le Miroir lit ses dossiers page_N/ (page blanche si absent).
      *    PARNASSE → le Miroir interroge le Cœur (page vierge si note_id null). */
-    fun goToPageFull(index: Int) {
+    fun goToPageFull(index: Int, navDelta: Int = 0, onSettled: (() -> Unit)? = null) {
         if (index < Int.MIN_VALUE) return  // seule garde : sécurité absurde
         savePageFull()
         currentPageIndex = index
-        // PARNASSE est maître : interroge le Cœur avant de charger.
-        // La réponse met à jour le total (parnasseTotal) et l'identité (parnasseNoteId).
+        // ═══ PARNASSE maître — RYTHME ASYNCHRONE (jamais de gel du UI thread) ═══
         if (navMode == NavMode.PARNASSE) {
-            queryPageParnasse(index)
-            if (parnasseNoteId == null) {
-                // Parnasse dit « vide » → page vierge, quelle que soit la cache locale.
-                clearPage()
-                redrawBitmapInternal()
-                return
+            queryPageParnasse(index, navDelta) {
+                if (parnasseNoteId == null) {
+                    // Parnasse dit « vide » → page vierge, quelle que soit la cache locale.
+                    clearPage()
+                    redrawBitmapInternal()
+                } else {
+                    val loaded = loadPageFull()
+                    if (!loaded) clearPage()
+                    redrawBitmapInternal()
+                }
+                onSettled?.invoke()
             }
+            return
         }
         val loaded = loadPageFull()
         if (!loaded) {
@@ -784,6 +829,7 @@ class MiroirEngine {
             clearPage()
         }
         redrawBitmapInternal()  // synchroniser après chargement
+        onSettled?.invoke()
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -911,6 +957,14 @@ class MiroirEngine {
 
         // ── MDM ──
         savePageMdm(dir)
+
+        // ═══ BAPTÊME en PARNASSE : grave note_id dans groups.json local. ═══
+        // Le lien capture↔note devient l'identité (note_id), pas la position.
+        // findPageByNoteId retrouve la matière par identité, même si la note
+        // se déplace (renumérotation Parnasse).
+        if (navMode == NavMode.PARNASSE && parnasseNoteId != null) {
+            baptiserPage(pageDirIndex(), parnasseNoteId!!)
+        }
 
         // ── Miroir sdcard — copie accessible au Scanner/Cœur ──
         mirrorToSdcard(dir, bd.name, currentPageIndex)

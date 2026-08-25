@@ -8,6 +8,9 @@ import android.os.Handler
 import android.os.Looper
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import org.json.JSONObject
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -116,7 +119,7 @@ class CaptureActivity : Activity() {
         // ═══ Fallback : contexte via fichier partagé (launchIME ne passe pas d'extras) ═══
         if (invocBlockId == null) {
             try {
-                val ctxFile = java.io.File("/sdcard/parnasse_context.json")
+                val ctxFile = java.io.File("/storage/emulated/0/Documents/parnasse/miroir/parnasse_context.json")
                 if (ctxFile.exists()) {
                     val j = org.json.JSONObject(ctxFile.readText())
                     val bid = j.optString("block_id", "")
@@ -143,6 +146,8 @@ class CaptureActivity : Activity() {
         if (isContextual) {
             engine.navMode = NavMode.PARNASSE
             engine.parnasseBlockUuid = invocBlockId
+            // ═══ L'identité d'abord : la note invoquée, jamais la position ═══
+            engine.parnasseNoteId = invocNoteId?.takeIf { it.isNotEmpty() }
         } else {
             engine.navMode = NavMode.LOCAL
         }
@@ -188,11 +193,12 @@ class CaptureActivity : Activity() {
         if (engine.navMode == NavMode.PARNASSE) {
             // Parnasse est maître : navigue à la position dictée (interroge le Cœur).
             captureView?.post {
-                engine.goToPageFull(targetPage)
-                updatePageCounter()
-                fontaineOverlay?.desactiver()
-                captureView?.invalidate()
-                fontaineOverlay?.activer()
+                engine.goToPageFull(targetPage) {
+                    updatePageCounter()
+                    fontaineOverlay?.desactiver()
+                    captureView?.invalidate()
+                    fontaineOverlay?.activer()
+                }
             }
         } else if (isContextual && targetPage > 0 && engine.countPages() > targetPage) {
             engine.goToPageFull(targetPage)
@@ -233,6 +239,9 @@ class CaptureActivity : Activity() {
         invocMode    = newMode
         Log.i(TAG, "♻ onNewIntent: bloc=$newBlockId page=$newPageN noteId=$newNoteId")
 
+        // ═══ L'identité suit l'invocation — jamais la position ═══
+        engine.parnasseNoteId = newNoteId?.takeIf { it.isNotEmpty() }
+
         if (blocChanged) {
             val mirrorName = resolveMirrorBlockName(newBlockId)
             val blockDirName = mirrorName ?: newBlockId
@@ -263,7 +272,10 @@ class CaptureActivity : Activity() {
         }
 
         if (engine.navMode == NavMode.PARNASSE) {
-            engine.goToPageFull(targetPage)
+            engine.goToPageFull(targetPage) {
+                updatePageCounter()
+                captureView?.invalidate()
+            }
         } else if (targetPage > 0 && engine.countPages() > targetPage) {
             engine.goToPageFull(targetPage)
         } else {
@@ -360,11 +372,12 @@ class CaptureActivity : Activity() {
 
         // ── ◄ Navigation gauche (carnet affillié : accepte pages négatives) ──
         toolbar.addView(makeToolBtn("\u25C0", Color.argb(200, 80, 80, 160)) {
-            engine.goToPageFull(engine.currentPageIndex - 1)
+            engine.goToPageFull(engine.currentPageIndex - 1, navDelta = -1) {
+                updatePageCounter()
+                postMiroirState()
+            }
             returnToWriting()
             captureView?.invalidate()
-            updatePageCounter()
-            postMiroirState()
         })
 
         // ── Compteur de page ──
@@ -377,11 +390,12 @@ class CaptureActivity : Activity() {
 
         // ── ► Navigation droite (permissive : crée implicitement si page absente) ──
         toolbar.addView(makeToolBtn("\u25B6", Color.argb(200, 0, 80, 160)) {
-            engine.goToPageFull(engine.currentPageIndex + 1)
+            engine.goToPageFull(engine.currentPageIndex + 1, navDelta = +1) {
+                updatePageCounter()
+                postMiroirState()
+            }
             returnToWriting()
             captureView?.invalidate()
-            updatePageCounter()
-            postMiroirState()
         })
 
         // ── Bouton @ (MDM → Geppetto) ──
@@ -576,6 +590,11 @@ class CaptureActivity : Activity() {
         super.onResume()
         // Recharger les paramètres de calibration (blob, template)
         engine.applyCalibrationParams(this)
+        // ═══ Le focus suit le Cœur : si Parnasse a déplacé la sélection
+        // pendant notre absence, on la suit par identité — jamais par position. ═══
+        if (engine.navMode == NavMode.PARNASSE) {
+            followCoeurFocus()
+        }
         // Précharger les bibliothèques et leurs blocs Parnasse en arrière-plan
         Thread {
             Log.i(TAG, "fetchParnasseConfig: démarrage...")
@@ -589,6 +608,40 @@ class CaptureActivity : Activity() {
                 Log.i(TAG, "  ${lib.libraryName}: ${blocs.size} blocs")
             }
             cachedParnasseBlocs = blocsMap
+        }.start()
+    }
+
+    /** Re-questionne le Cœur : quel est le focus actuel ? Si Parnasse a changé
+     *  la sélection, le Miroir la suit par identité (le focus est partagé). */
+    private fun followCoeurFocus() {
+        val bid = invocBlockId ?: return
+        Thread {
+            try {
+                val url = java.net.URL("$coeurUrl/api/miroir/state?block_id=$bid")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 3000
+                conn.readTimeout = 3000
+                conn.requestMethod = "GET"
+                if (conn.responseCode == 200) {
+                    val body = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+                    val stateNoteId = org.json.JSONObject(body).optString("note_id").ifEmpty { null }
+                    conn.disconnect()
+                    if (stateNoteId != null && stateNoteId != engine.parnasseNoteId) {
+                        Log.i(TAG, "🧭 Focus Parnasse a changé: ${stateNoteId.substring(0, 8)} — le suivre")
+                        uiHandler.post {
+                            engine.parnasseNoteId = stateNoteId
+                            engine.goToPageFull(engine.currentPageIndex) {
+                                updatePageCounter()
+                                captureView?.invalidate()
+                            }
+                        }
+                    }
+                } else {
+                    conn.disconnect()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "followCoeurFocus: ${e.message}")
+            }
         }.start()
     }
 
@@ -613,7 +666,13 @@ class CaptureActivity : Activity() {
                 put("block_id", bid)
                 put("page_n", engine.currentPageIndex)
                 put("mode", "capture")
-                val nid = engine.readPageNoteId(engine.currentPageIndex)
+                // ═══ L'identité du FOCUS (parnasseNoteId), pas la lecture locale ═══
+                // La page locale peut n'être pas baptisée ; l'identité vient du Cœur.
+                val nid = if (engine.navMode == NavMode.PARNASSE) {
+                    engine.parnasseNoteId
+                } else {
+                    engine.readPageNoteId(engine.currentPageIndex)
+                }
                 if (nid != null) put("note_id", nid)
             }
             Thread {
