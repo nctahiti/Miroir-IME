@@ -378,6 +378,15 @@ class CaptureActivity : Activity() {
             }
             returnToWriting()
             captureView?.invalidate()
+            // ═══ FLASH DE NETTOYAGE (26/08/2026) — après chaque changement de
+            // page, le panneau reçoit un rafraîchissement complet (GC16) :
+            // les étiquettes de la page précédente laissées en fantôme par
+            // les mises à jour partielles (« les labels restent à n-1 ») sont
+            // effacées d'un coup. ═══
+            captureView?.post {
+                com.onyx.android.sdk.api.device.epd.EpdController.refreshScreen(
+                    captureView!!, com.onyx.android.sdk.api.device.epd.UpdateMode.GC)
+            }
         })
 
         // ── Compteur de page ──
@@ -396,6 +405,11 @@ class CaptureActivity : Activity() {
             }
             returnToWriting()
             captureView?.invalidate()
+            // ═══ FLASH DE NETTOYAGE (26/08/2026) — voir la nav gauche ═══
+            captureView?.post {
+                com.onyx.android.sdk.api.device.epd.EpdController.refreshScreen(
+                    captureView!!, com.onyx.android.sdk.api.device.epd.UpdateMode.GC)
+            }
         })
 
         // ── Bouton @ (MDM → Geppetto) ──
