@@ -385,7 +385,7 @@ class CaptureActivity : Activity() {
             // effacées d'un coup. ═══
             captureView?.post {
                 com.onyx.android.sdk.api.device.epd.EpdController.refreshScreen(
-                    captureView!!, com.onyx.android.sdk.api.device.epd.UpdateMode.GC)
+                    captureView!!, com.onyx.android.sdk.api.device.epd.UpdateMode.REGAL)
             }
         })
 
@@ -408,7 +408,7 @@ class CaptureActivity : Activity() {
             // ═══ FLASH DE NETTOYAGE (26/08/2026) — voir la nav gauche ═══
             captureView?.post {
                 com.onyx.android.sdk.api.device.epd.EpdController.refreshScreen(
-                    captureView!!, com.onyx.android.sdk.api.device.epd.UpdateMode.GC)
+                    captureView!!, com.onyx.android.sdk.api.device.epd.UpdateMode.REGAL)
             }
         })
 
