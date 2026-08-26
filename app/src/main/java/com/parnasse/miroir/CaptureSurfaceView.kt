@@ -125,7 +125,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         try {
             touchHelper?.closeRawDrawing()
             touchHelper?.setRawDrawingEnabled(false)
-            com.onyx.android.sdk.api.device.epd.EpdController.setViewDefaultUpdateMode(this, com.onyx.android.sdk.api.device.epd.UpdateMode.GU)
+            // ═══ Mode vue REGAL (26/08/2026) — fracture A unifiée avec l'IME ═══
+            // GU gris partiel laissait les labels fantômes (« se déchirent,
+            // restent malgré la navigation ») ; REGAL nettoie le ghosting.
+            com.onyx.android.sdk.api.device.epd.EpdController.setViewDefaultUpdateMode(this, com.onyx.android.sdk.api.device.epd.UpdateMode.REGAL)
             com.onyx.android.sdk.api.device.epd.EpdController.setScreenHandWritingPenState(this, 0)
         } catch (_: Exception) {}
         touchHelper = null

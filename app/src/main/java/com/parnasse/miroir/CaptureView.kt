@@ -531,7 +531,7 @@ class CaptureView(context: Context) : View(context) {
         } catch (_: Exception) {}
         // ═══ ONYX EPD — désactiver le mode écriture ═══
         try {
-            displayController.entrerVue(DisplayMode.GU)  // retour au mode normal
+            displayController.entrerVue(DisplayMode.REGAL)  // retour au mode vue — REGAL nettoie le ghosting (unifié avec l'IME, fracture A)
             Log.i(TAG, "EPD handwriting mode OFF")
         } catch (e: Exception) {
             Log.w(TAG, "EPD release échoué: ${e.message}")
