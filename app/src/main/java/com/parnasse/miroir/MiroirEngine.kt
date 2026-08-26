@@ -54,6 +54,13 @@ class MiroirEngine {
     var parnasseTotal: Int = 0
     var parnasseNoteId: String? = null
     var parnassePageNumber: Int = -1
+    // ═══ Garde de séquence (26/08/2026) — la réponse fantôme ═══
+    // Une réponse asynchrone tardive (navigation précédente) atterrissait
+    // après le chargement de la nouvelle page et réécrivait l'état
+    // (labels + barre) sans re-rasteriser le bitmap → encre d'une page,
+    // étiquettes de la précédente : décalage d'une page, persistant.
+    // Chaque requête porte un rang ; seule la dernière réponse s'applique.
+    private var requestSeq = 0
 
     // Le Cœur répond sur le UI thread — jamais de blocage (ANR).
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -508,6 +515,7 @@ class MiroirEngine {
      *  par CountDownLatch — même pattern que resolveMirrorBlockName. */
     fun queryPageParnasse(pageN: Int, navDelta: Int = 0, onDone: () -> Unit = {}): Boolean {
         val uuid = parnasseBlockUuid ?: return false
+        val seq = ++requestSeq  // rang de cette requête — la garde la jette si périmée
         // L'identité d'abord : le Cœur résout par note_id (et calcule le voisin
         // pour le geste de navigation). La position n'est qu'une réponse.
         val hasId = !parnasseNoteId.isNullOrEmpty()
@@ -551,6 +559,10 @@ class MiroirEngine {
             val pos = posF
             val pageNum = pageNumF
             uiHandler.post {
+                if (seq != requestSeq) {
+                    Log.w(TAG, "queryPageParnasse: réponse périmée rang=$seq (dernier=$requestSeq) jetée — état et rendu non touchés")
+                    return@post
+                }
                 if (ok) {
                     parnasseTotal = total
                     parnasseNoteId = noteId
