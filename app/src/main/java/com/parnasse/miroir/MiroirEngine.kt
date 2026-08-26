@@ -1445,6 +1445,17 @@ class MiroirEngine {
             }
 
             // ── Nouveau mot → générer strokes synthétiques ──
+            // ⚠️ PIÈGE (26/08/2026) : si la page porte DÉJÀ de l'encre réelle,
+            // un label manquant est un MISMATCH — labels MDM pollués par
+            // l'ancien cleanLabelForMdm (ex. « l'eau » → « eau », regex
+            // \b\p{L}\b supprimant les lettres isolées) — PAS un mot nouveau.
+            // La sinusoïde ne doit JAMAIS recouvrir les vrais strokes :
+            // génération interdite quand la page est déjà encrée. Elle reste
+            // réservée aux pages texte sans encre (imports MDM textes).
+            if (strokeRegistry.isNotEmpty()) {
+                Log.w(TAG, "MDM→strokes: label «$targetLabel» non trouvé — page déjà encrée, génération INTERDITE (mismatch, pas un mot nouveau)")
+                continue
+            }
             // Vérifier le cache generatedStrokes d'abord
             val cachedStrokes = generatedStrokes[targetLabel.lowercase()]
             val records: List<StrokeRecord>
