@@ -378,11 +378,11 @@ class CaptureActivity : Activity() {
             }
             returnToWriting()
             captureView?.invalidate()
-            // ═══ FLASH DE NETTOYAGE (26/08/2026) — après chaque changement de
-            // page, le panneau reçoit un rafraîchissement complet (GC16) :
-            // les étiquettes de la page précédente laissées en fantôme par
-            // les mises à jour partielles (« les labels restent à n-1 ») sont
-            // effacées d'un coup. ═══
+            // ═══ NETTOYAGE DE NAVIGATION (26/08/2026) — après chaque changement
+            // de page, le panneau reçoit un rafraîchissement REGAL (doux, sans
+            // éclair) : les étiquettes de la page précédente laissées en
+            // fantôme par les mises à jour partielles (« les labels restent à
+            // n-1 ») sont balayées sans que l'encre clignote. ═══
             captureView?.post {
                 com.onyx.android.sdk.api.device.epd.EpdController.refreshScreen(
                     captureView!!, com.onyx.android.sdk.api.device.epd.UpdateMode.REGAL)
