@@ -921,8 +921,26 @@ class MiroirEngine {
     /** Sauvegarde complete : V★ + bitmap + groupes + MDM. */
     fun savePageFull() {
         val bd = blockDir ?: return
-        val dir = File(bd, "page_${pageDirIndex()}")
-        dir.mkdirs()
+        val idx = pageDirIndex()
+        val dir: File
+        if (idx < 0) {
+            // ═══ ANTI-LIMBE (26/08/2026) — jamais page_-1 ═══
+            // La page peut n'avoir aucun dossier local (note née du Parnasse,
+            // numéro dicté par le Cœur) : pageDirIndex() renvoie -1 et la
+            // sauvegarde partait dans page_-1 — le limbe — les strokes
+            // « n'étaient pas conservés ». Si le Cœur a dicté un numéro,
+            // on crée SA maison : les traits atterrissent à leur page.
+            if (parnassePageNumber >= 0) {
+                dir = File(bd, "page_${parnassePageNumber}").apply { mkdirs() }
+                Log.i(TAG, "savePageFull: page_$idx inexistante → maison créée page_${parnassePageNumber}")
+            } else {
+                Log.w(TAG, "savePageFull: numéro non dicté (Cœur pas encore parlé) — sauvegarde refusée, aucun limbe écrit")
+                return
+            }
+        } else {
+            dir = File(bd, "page_$idx")
+            dir.mkdirs()
+        }
         val vstarFile = File(dir, "page.vstar")
         // ═══ Inclure TOUS les strokes non-supprimés (vivants + archivés) ═══
         // Les strokes archivés sont déjà dans le bitmap mais doivent persister
@@ -1055,7 +1073,14 @@ class MiroirEngine {
     fun loadPageFull(): Boolean {
         val bd = blockDir ?: return false
         try {
-            val dir = File(bd, "page_${pageDirIndex()}")
+            // ═══ ANTI-LIMBE (26/08/2026) — jamais lire page_-1 ═══
+            // pageDirIndex() < 0 = aucune page désignée par le Cœur : la
+            // lecture ne doit rien charger (surtout pas le limbe écrit par
+            // l'ancienne garde incomplète) — la page reste vierge, le
+            // réglage viendra au prochain battement de focus.
+            val pdi = pageDirIndex()
+            if (pdi < 0) return false
+            val dir = File(bd, "page_$pdi")
             if (!dir.exists()) return false
 
             // Nettoyer l'etat avant chargement
