@@ -49,6 +49,11 @@ class MiroirEngine {
     // pages (parnasseTotal) et l'identité de la page courante (parnasseNoteId).
     // Le Miroir n'est plus qu'une surface — il reflète ce que Parnasse dicte.
     var navMode: NavMode = NavMode.LOCAL
+    /** Gardien de l'œuvre — true dès que la page courante a été chargée
+     *  (loadPageFull réussi) ; false au vide (clearPage, process neuf).
+     *  Le savePageFull ne détruit jamais un vstar existant tant que la page
+     *  n'a pas été chargée : un registre vide ne veut pas dire une page vide. */
+    private var pageLoaded = false
     var coeurUrl: String = "http://127.0.0.1:8008"
     var parnasseBlockUuid: String? = null
     var parnasseTotal: Int = 0
@@ -817,6 +822,7 @@ class MiroirEngine {
         groupAnchor.clear()
         // Effacer le bitmap sans le détruire (reste utilisable pour redrawBitmapOnly)
         bitmap?.eraseColor(android.graphics.Color.WHITE)
+        pageLoaded = false
     }
 
     fun goToPage(index: Int) {
@@ -985,6 +991,13 @@ class MiroirEngine {
             }
             dataRegion.close()
             Log.i(TAG, "savePageFull page=$currentPageIndex vstar=${vstarFile.length()}B strokes=$allStrokes")
+        } else if (vstarFile.exists() && !pageLoaded) {
+            // ⚠️ GARDIEN DE L'ŒUVRE (28/08) — le registre est vide parce que la
+            // page courante n'a PAS encore été chargée (process neuf, ouverture
+            // avant la requête). Le vstar existant est l'écriture des sessions
+            // précédentes — le détruire effacerait l'encre (« strokes non
+            // enregistrés » — vu 28/08 : poème 61 Ko réduit à 1792 B).
+            Log.i(TAG, "savePageFull page=$currentPageIndex — registre vide avant chargement, vstar intact")
         } else {
             if (vstarFile.exists()) { vstarFile.delete() }
             Log.i(TAG, "savePageFull page=$currentPageIndex — page vide")
@@ -1193,6 +1206,7 @@ class MiroirEngine {
             Log.i(TAG, "loadPageFull geom: bbox=(${minX.toInt()},${minY.toInt()})-(${maxX.toInt()},${maxY.toInt()}) pts=$totalPts first=$firstPts last=$lastPts")
 
             Log.i(TAG, "loadPageFull page=$currentPageIndex: ${strokeRegistry.size} strokes, ${groupLabels.size} labels")
+            pageLoaded = true
             return true
         } catch (e: Exception) {
             Log.e(TAG, "loadPageFull: ${e.message}", e)
