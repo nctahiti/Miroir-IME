@@ -835,6 +835,10 @@ class MiroirEngine {
     fun goToPageFull(index: Int, navDelta: Int = 0, onSettled: (() -> Unit)? = null) {
         if (index < Int.MIN_VALUE) return  // seule garde : sécurité absurde
         savePageFull()
+        // ═══ FERMETURE PROPRE — le cache est vidé SYNCHRONE, avant la requête ═══
+        // Tout repaint intermédiaire (canal Onyx, fontaine, invalidates) ne peut plus
+        // dessiner l'encre/labels de l'ancienne page : la toile est blanche et nue.
+        clearPage()
         currentPageIndex = index
         // ═══ PARNASSE maître — RYTHME ASYNCHRONE (jamais de gel du UI thread) ═══
         if (navMode == NavMode.PARNASSE) {

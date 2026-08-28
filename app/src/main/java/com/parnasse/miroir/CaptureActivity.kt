@@ -375,16 +375,16 @@ class CaptureActivity : Activity() {
             engine.goToPageFull(engine.currentPageIndex - 1, navDelta = -1) {
                 updatePageCounter()
                 postMiroirState()
+                // ═══ REFRESH DE NAVIGATION (28/08) — le rafraîchissement
+                // (GC : lavage complet) vient APRÈS le chargement, dans le
+                // onSettled : la page est posée d'un seul geste, encre ET
+                // labels. Un refresh avant la charge posait une toile nue
+                // (labels jamais dessinés — « les nouveaux n'apparaissent
+                // qu'après un cycle de la fontaine »). ═══
+                refreshAfterNav()
             }
             returnToWriting()
             captureView?.invalidate()
-            // ═══ NETTOYAGE DE NAVIGATION (26/08/2026) — après chaque changement
-            // de page, le panneau reçoit un rafraîchissement : REGAL (doux, sans
-            // éclair) quand la page porte matière, GC (lavage complet) quand la
-            // page est vide — sinon les noirs de la page précédente restent en
-            // fantôme sur la feuille nue (vu 28/08 : « la page 4 vide mais les
-            // labels de la page d'avant » — le REGAL ne lave pas absence). ═══
-            refreshAfterNav()
         })
 
         // ── Compteur de page ──
@@ -400,13 +400,12 @@ class CaptureActivity : Activity() {
             engine.goToPageFull(engine.currentPageIndex + 1, navDelta = +1) {
                 updatePageCounter()
                 postMiroirState()
+                // ═══ REFRESH DE NAVIGATION (28/08) — après le chargement,
+                // d'un seul geste (voir la nav gauche). ═══
+                refreshAfterNav()
             }
             returnToWriting()
             captureView?.invalidate()
-            // ═══ FLASH DE NETTOYAGE (26/08/2026) — la page reçoit un
-            // rafraîchissement : REGAL (doux) si elle porte matière, GC (lavage
-            // complet) si elle est vide — voir la nav gauche. ═══
-            refreshAfterNav()
         })
 
         // ── Bouton @ (MDM → Geppetto) ──
