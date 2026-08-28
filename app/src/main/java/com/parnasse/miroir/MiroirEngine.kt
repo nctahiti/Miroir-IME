@@ -642,11 +642,16 @@ class MiroirEngine {
     }
 
     /** Retrouve le dossier local qui porte ce note_id — par l'identité, pas la position.
-     *  Une note peut se déplacer (changer de page_number) sans perdre sa capture. */
+     *  Une note peut se déplacer (changer de page_number) sans perdre sa capture.
+     *  ⚠️ Scanne les DOSSIERS RÉELS (page_4, page_5 — le tiroir peut n'avoir que les
+     *  pages visitées, jamais la séquence 0..count-1 : les pages absentes manqueraient). */
     fun findPageByNoteId(noteId: String): Int {
-        val total = countPages()
-        for (i in 0 until total) {
-            if (readPageNoteId(i) == noteId) return i
+        val bd = blockDir ?: return -1
+        val pages = bd.listFiles()?.filter { it.isDirectory && it.name.startsWith("page_") }
+            ?: return -1
+        for (dir in pages) {
+            val idx = dir.name.removePrefix("page_").toIntOrNull() ?: continue
+            if (readPageNoteId(idx) == noteId) return idx
         }
         return -1
     }

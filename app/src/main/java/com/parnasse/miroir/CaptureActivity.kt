@@ -379,14 +379,12 @@ class CaptureActivity : Activity() {
             returnToWriting()
             captureView?.invalidate()
             // ═══ NETTOYAGE DE NAVIGATION (26/08/2026) — après chaque changement
-            // de page, le panneau reçoit un rafraîchissement REGAL (doux, sans
-            // éclair) : les étiquettes de la page précédente laissées en
-            // fantôme par les mises à jour partielles (« les labels restent à
-            // n-1 ») sont balayées sans que l'encre clignote. ═══
-            captureView?.post {
-                com.onyx.android.sdk.api.device.epd.EpdController.refreshScreen(
-                    captureView!!, com.onyx.android.sdk.api.device.epd.UpdateMode.REGAL)
-            }
+            // de page, le panneau reçoit un rafraîchissement : REGAL (doux, sans
+            // éclair) quand la page porte matière, GC (lavage complet) quand la
+            // page est vide — sinon les noirs de la page précédente restent en
+            // fantôme sur la feuille nue (vu 28/08 : « la page 4 vide mais les
+            // labels de la page d'avant » — le REGAL ne lave pas absence). ═══
+            refreshAfterNav()
         })
 
         // ── Compteur de page ──
@@ -405,11 +403,10 @@ class CaptureActivity : Activity() {
             }
             returnToWriting()
             captureView?.invalidate()
-            // ═══ FLASH DE NETTOYAGE (26/08/2026) — voir la nav gauche ═══
-            captureView?.post {
-                com.onyx.android.sdk.api.device.epd.EpdController.refreshScreen(
-                    captureView!!, com.onyx.android.sdk.api.device.epd.UpdateMode.REGAL)
-            }
+            // ═══ FLASH DE NETTOYAGE (26/08/2026) — la page reçoit un
+            // rafraîchissement : REGAL (doux) si elle porte matière, GC (lavage
+            // complet) si elle est vide — voir la nav gauche. ═══
+            refreshAfterNav()
         })
 
         // ── Bouton @ (MDM → Geppetto) ──
@@ -491,6 +488,28 @@ class CaptureActivity : Activity() {
     // ═══════════════════════════════════════════════════════════════════
     // MENUS FLOTTANTS
     // ═══════════════════════════════════════════════════════════════════
+
+    /** Nettoyage du panneau après une navigation — LA FORME JUSTE :
+     *  le rafraîchissement appartient au repaint (le mécanisme natif de la vue
+     *  via setViewDefaultUpdateMode), jamais à un refreshScreen détaché — un
+     *  runnable posté peut précéder le repaint qu'il prétend laver et laisser
+     *  les noirs d'avant (encre, blobs, labels — vu 28/08).
+     *  Ici : le mode GC (lavage complet) pour une page vide, REGAL (doux) pour
+     *  une page à matière — puis retour à REGAL après le repaint. */
+    private fun refreshAfterNav() {
+        val cv = captureView ?: return
+        val ink = engine.strokeRegistry.isNotEmpty() || engine.groupLabels.isNotEmpty()
+        val mode = if (ink)
+            com.onyx.android.sdk.api.device.epd.UpdateMode.REGAL
+        else
+            com.onyx.android.sdk.api.device.epd.UpdateMode.GC
+        com.onyx.android.sdk.api.device.epd.EpdController.setViewDefaultUpdateMode(cv, mode)
+        cv.invalidate()
+        cv.post {
+            com.onyx.android.sdk.api.device.epd.EpdController.setViewDefaultUpdateMode(
+                cv, com.onyx.android.sdk.api.device.epd.UpdateMode.REGAL)
+        }
+    }
 
     private fun showCloseMenu(anchor: View) {
         val popup = PopupMenu(this, anchor)
