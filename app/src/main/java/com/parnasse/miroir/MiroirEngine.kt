@@ -653,20 +653,27 @@ class MiroirEngine {
 
     /** Où est la matière de la page courante ? Le sens est unique : « où lire/écrire ? »
      *  LOCAL    → currentPageIndex (le Miroir numérote ses dossiers).
-     *  PARNASSE → retrouvé par note_id (l'identité) — jamais par la position. */
+     *  PARNASSE → retrouvé par note_id (l'identité) — jamais par la position,
+     *             jamais par le NUMÉRO du titre (parnassePageNumber : les
+     *             renumérotations du tiroir en ont fait un traître). */
     private fun pageDirIndex(): Int {
         if (navMode == NavMode.PARNASSE) {
-            // ═══ LE NUMÉRO de la note — la colonne locale page_<num> ═══
-            // Jamais la position du Cœur (dérive : doublons, renumérotation),
-            // jamais le cache des baptêmes (pollué par l'ère positionnelle).
-            // Le Cœur est la vérité : il a dit « cette note = page numéro N ».
-            val pn = parnassePageNumber
-            if (pn >= 0) {
-                val bd = blockDir
-                if (bd != null && File(bd, "page_$pn").exists()) return pn
+            // ═══ L'IDENTITÉ d'abord : la dictée a nommé la note — chercher SA
+            // matière. Le numéro (parnassePageNumber) n'est qu'un titre : les
+            // trous et déchirures du tiroir (page_28..37 absentes, renumérotation)
+            // l'ont rendu trompeur — le voisin s'affichait avec les labels d'avant.
+            // L'identité ne bouge jamais : chaque dossier porte son note_id gravé.
+            val nid = parnasseNoteId
+            if (!nid.isNullOrEmpty()) {
+                val idx = findPageByNoteId(nid)
+                if (idx >= 0) return idx
+                // Note inconnue du tiroir (jamais visitée/écrite) → page vierge :
+                // jamais le voisin, jamais le limbe. La matière naîtra à l'écriture
+                // (savePageFull crée la maison à la position dictée).
+                return -1
             }
-            // ⚠️ Numéro inconnu = la Cœur n'a pas encore parlé pour cette vue :
-            // aucune page à désigner — surtout pas page_0 (poison hérité).
+            // ⚠️ Aucune note désignée par le Cœur : aucune page à charger — surtout
+            // pas page_0 (poison hérité), ni le limbe page_-1.
             return -1
         }
         return currentPageIndex
@@ -696,6 +703,11 @@ class MiroirEngine {
             }
             root.put("note_id", noteId)
             groupsFile.writeText(root.toString())
+            // ═══ Le pont : le watcher du Cœur lit `.note_id` (convention SD) —
+            // une seule identité par page, lisible des deux rives. ═══
+            try {
+                File(pageDir, ".note_id").writeText(noteId)
+            } catch (_: Exception) {}
             Log.i(TAG, "⛪ Page $pageIndex baptisée: note_id=$noteId")
         } catch (e: Exception) {
             Log.w(TAG, "baptiserPage: ${e.message}")
