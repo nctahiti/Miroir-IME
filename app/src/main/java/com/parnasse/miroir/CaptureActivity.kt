@@ -489,26 +489,20 @@ class CaptureActivity : Activity() {
     // MENUS FLOTTANTS
     // ═══════════════════════════════════════════════════════════════════
 
-    /** Nettoyage du panneau après une navigation — LA FORME JUSTE :
-     *  le rafraîchissement appartient au repaint (le mécanisme natif de la vue
-     *  via setViewDefaultUpdateMode), jamais à un refreshScreen détaché — un
-     *  runnable posté peut précéder le repaint qu'il prétend laver et laisser
-     *  les noirs d'avant (encre, blobs, labels — vu 28/08).
-     *  Ici : le mode GC (lavage complet) pour une page vide, REGAL (doux) pour
-     *  une page à matière — puis retour à REGAL après le repaint. */
+    /** Rythme du panneau — LA FORME JUSTE (28/08/2026, écouté au stylet) :
+     *  le trait lave en DU (redessin intégral — c'est pour cela qu'un stroke
+     *  efface les fantômes de la page d'avant), le relâchement remet REGAL
+     *  (releaseTouchHelper — fracture A), la nav doit donc laver en GC (la
+     *  page change ENTIÈREMENT — le REGAL doux ne lave pas les noirs d'une
+     *  autre image : labels, blobs, traits restaient en fantôme).
+     *  Jamais de refreshScreen détaché (runnable qui peut précéder le repaint),
+     *  jamais de post de "retour" qui court le chevauchement : c'est le mode
+     *  de la vue qui orchestre, et relâcher la plume rend REGAL naturellement. */
     private fun refreshAfterNav() {
         val cv = captureView ?: return
-        val ink = engine.strokeRegistry.isNotEmpty() || engine.groupLabels.isNotEmpty()
-        val mode = if (ink)
-            com.onyx.android.sdk.api.device.epd.UpdateMode.REGAL
-        else
-            com.onyx.android.sdk.api.device.epd.UpdateMode.GC
-        com.onyx.android.sdk.api.device.epd.EpdController.setViewDefaultUpdateMode(cv, mode)
+        com.onyx.android.sdk.api.device.epd.EpdController.setViewDefaultUpdateMode(
+            cv, com.onyx.android.sdk.api.device.epd.UpdateMode.GC)
         cv.invalidate()
-        cv.post {
-            com.onyx.android.sdk.api.device.epd.EpdController.setViewDefaultUpdateMode(
-                cv, com.onyx.android.sdk.api.device.epd.UpdateMode.REGAL)
-        }
     }
 
     private fun showCloseMenu(anchor: View) {
