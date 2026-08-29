@@ -59,6 +59,8 @@ class MiroirEngine {
     var parnasseTotal: Int = 0
     var parnasseNoteId: String? = null
     var parnassePageNumber: Int = -1
+    var parnasseCapture: String? = null
+    var parnasseUpdated: Long = 0L
     // ═══ Garde de séquence (26/08/2026) — la réponse fantôme ═══
     // Une réponse asynchrone tardive (navigation précédente) atterrissait
     // après le chargement de la nouvelle page et réécrivait l'état
@@ -539,6 +541,8 @@ class MiroirEngine {
             var noteIdF: String? = null
             var posF = pageN
             var pageNumF = -1
+            var captureF: String? = null
+            var updatedF = 0L
             try {
                 val url = URL(urlStr)
                 val conn = url.openConnection() as HttpURLConnection
@@ -552,6 +556,8 @@ class MiroirEngine {
                     noteIdF = json.optString("note_id").ifEmpty { null }
                     posF = json.optInt("page_n", pageN)  // position de lecture
                     pageNumF = json.optInt("page_number", -1)  // ⚠️ le numéro de la note
+                    captureF = json.optString("capture").ifEmpty { null }
+                    updatedF = json.optLong("updated_date", 0)
                     okF = true
                 }
                 conn.disconnect()
@@ -563,6 +569,8 @@ class MiroirEngine {
             val noteId = noteIdF
             val pos = posF
             val pageNum = pageNumF
+            val capture = captureF
+            val updated = updatedF
             uiHandler.post {
                 if (seq != requestSeq) {
                     Log.w(TAG, "queryPageParnasse: réponse périmée rang=$seq (dernier=$requestSeq) jetée — état et rendu non touchés")
@@ -572,15 +580,63 @@ class MiroirEngine {
                     parnasseTotal = total
                     parnasseNoteId = noteId
                     parnassePageNumber = pageNum
+                    parnasseCapture = capture
+                    parnasseUpdated = updated
                     // ⚠️ La position de lecture est dictée par le Cœur — jamais calculée.
                     currentPageIndex = pos
                     Log.i(TAG, "queryPageParnasse: page=$pos num=$pageNum total=$parnasseTotal note_id=$parnasseNoteId" +
-                        (if (hasId && navDelta != 0) " nav=$navDelta" else ""))
+                        (if (hasId && navDelta != 0) " nav=$navDelta" else "") +
+                        (if (capture != null) " capture=${capture.take(30)}" else ""))
                 }
                 onDone()
             }
         }.start()
         return true
+    }
+
+    /** Hook de rendu (29/08/2026) — l'Activity l'allume pour invalider la vue
+     *  après un rendu asynchrone (la LECTURE : le PNG de la matrice arrive). */
+    var onPageRendered: (() -> Unit)? = null
+
+    /** ═══ LA LECTURE (29/08/2026) — VOIE PNG ═══
+     *  La fenêtre n'a pas la matière LOCALE (jamais écrite dans ce tiroir) ;
+     *  la MATRICE la porte (la capture du canal, le PNG de la page).
+     *  Le viewport affiche ce que la matrice rend : téléchargement de
+     *  /api/files/<capture>?v=<updated> — le PNG devient le fond de la vue.
+     *  Le premier trait transformera la page en page d'édition (naît locale). */
+    private fun loadLectureBitmap() {
+        val cap = parnasseCapture ?: return
+        val upd = parnasseUpdated
+        Thread {
+            try {
+                val urlStr = "$coeurUrl/api/files/$cap" + (if (upd > 0) "?v=$upd" else "")
+                val url = URL(urlStr)
+                val conn = url.openConnection() as HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+                val bmp = android.graphics.BitmapFactory.decodeStream(conn.inputStream)
+                conn.disconnect()
+                uiHandler.post {
+                    if (bmp != null) {
+                        bitmap = bmp
+                        redrawBitmapInternal()
+                        Log.i(TAG, "🧭 LECTURE: capture affichée (${cap.take(30)}… v=$upd)")
+                    } else {
+                        Log.w(TAG, "🧭 LECTURE: décodage null pour $cap")
+                        clearPage()
+                        redrawBitmapInternal()
+                    }
+                    onPageRendered?.invoke()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "🧭 LECTURE: ${e.javaClass.simpleName}: ${e.message}")
+                uiHandler.post {
+                    clearPage()
+                    redrawBitmapInternal()
+                    onPageRendered?.invoke()
+                }
+            }
+        }.start()
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -855,7 +911,13 @@ class MiroirEngine {
                     redrawBitmapInternal()
                 } else {
                     val loaded = loadPageFull()
-                    if (!loaded) clearPage()
+                    if (!loaded) {
+                        // ═══ LA LECTURE (29/08/2026) : la fenêtre n'a pas la matière
+                        // LOCALE — la matrice la porte (la capture du canal). Le
+                        // viewport affiche ce que la matrice rend — LA VOIE PNG.
+                        if (!parnasseCapture.isNullOrEmpty()) loadLectureBitmap()
+                        else clearPage()
+                    }
                     redrawBitmapInternal()
                 }
                 onSettled?.invoke()

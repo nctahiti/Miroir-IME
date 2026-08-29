@@ -192,6 +192,10 @@ class CaptureActivity : Activity() {
             else -> buildBlockView()
         }
 
+        // ═══ LA LECTURE : la vue se rafraîchit après le rendu asynchrone du
+        // PNG de la matrice (29/08/2026) — le hook du moteur éclairé ici.
+        engine.onPageRendered = { captureView?.invalidate() }
+
         if (engine.navMode == NavMode.PARNASSE) {
             // Parnasse est maître : navigue à la position dictée (interroge le Cœur).
             captureView?.post {
