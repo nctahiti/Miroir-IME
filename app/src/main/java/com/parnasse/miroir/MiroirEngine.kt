@@ -618,7 +618,11 @@ class MiroirEngine {
                 conn.disconnect()
                 uiHandler.post {
                     if (bmp != null) {
-                        bitmap = bmp
+                        // ⚠️ IMMUTABLE (29/08/2026) : decodeStream rend un bitmap
+                        // immuable — eraseColor/drawColor lèvent
+                        // « cannot erase immutable bitmaps » (crash clearPage).
+                        // La LECTURE pose une copie MUTABLE — la page vit encore.
+                        bitmap = bmp.copy(android.graphics.Bitmap.Config.ARGB_8888, true)
                         redrawBitmapInternal()
                         Log.i(TAG, "🧭 LECTURE: capture affichée (${cap.take(30)}… v=$upd)")
                     } else {
