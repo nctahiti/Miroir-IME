@@ -243,6 +243,12 @@ class CaptureActivity : Activity() {
 
         // ═══ L'identité suit l'invocation — jamais la position ═══
         engine.parnasseNoteId = newNoteId?.takeIf { it.isNotEmpty() }
+        // ═══ L'AMARRAGE AUSSI (29/08/2026) — LE VER MANQUANT : sans cette
+        // ligne, parnasseBlockUuid reste celui du premier onCreate → la
+        // requête miroir/page cherche la note du nouveau bloc dans l'ANCIEN
+        // → note_id = null → la fenêtre affiche une page vierge (la capture
+        // « ne charge pas »). Le coq suit la captine, la rime suit l'invocation.
+        engine.parnasseBlockUuid = newBlockId
 
         if (blocChanged) {
             val mirrorName = resolveMirrorBlockName(newBlockId)
