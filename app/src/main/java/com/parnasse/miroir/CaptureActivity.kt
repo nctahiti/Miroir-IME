@@ -159,6 +159,8 @@ class CaptureActivity : Activity() {
             val blockDirName = mirrorName ?: invocBlockId!!
             engine.openBlockDir(this, blockDirName)
             Log.i(TAG, "📂 Bloc ouvert: $blockDirName (résolu depuis $invocBlockId)")
+            // ⚓ Pas d'étiquette → déclarer l'amarrage au Cœur (canal universel)
+            if (mirrorName == null) amarrerBloc(invocBlockId!!)
         } else {
             engine.openBlockDir(this, "standalone")
         }
@@ -247,6 +249,8 @@ class CaptureActivity : Activity() {
             val blockDirName = mirrorName ?: newBlockId
             engine.openBlockDir(this, blockDirName)
             Log.i(TAG, "♻ Bloc ouvert: $blockDirName (résolu depuis $newBlockId)")
+            // ⚓ Pas d'étiquette → déclarer l'amarrage au Cœur (canal universel)
+            if (mirrorName == null) amarrerBloc(newBlockId)
             engine.initGroupManager(this)
             engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
             buildBlockView()
@@ -724,6 +728,30 @@ class CaptureActivity : Activity() {
     // ═══════════════════════════════════════════════════════════════════
     // HELPERS
     // ═══════════════════════════════════════════════════════════════════
+
+    /** ⚓ Amarrage (29/08/2026) : le bloc Parnasse n'est pas étiqueté — la fenêtre
+     *  le déclare au Cœur (POST /api/miroir/amarrer) pour que son tiroir devienne
+     *  un canal du rivage universel (carte + veilleur). Best effort, jamais bloquant. */
+    private fun amarrerBloc(blockId: String) {
+        Thread {
+            try {
+                val url = java.net.URL("$coeurUrl/api/miroir/amarrer")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.doOutput = true
+                conn.connectTimeout = 3000
+                conn.readTimeout = 3000
+                val payload = "{\"block_id\":\"$blockId\",\"mirror_name\":\"$blockId\"}"
+                conn.outputStream.write(payload.toByteArray())
+                val code = conn.responseCode
+                conn.disconnect()
+                Log.i(TAG, "⚓ Amarrage déclaré: bloc=$blockId (HTTP $code)")
+            } catch (e: Exception) {
+                Log.w(TAG, "⚓ Amarrage échoué: ${e.message}")
+            }
+        }.start()
+    }
 
     private fun makeToolBtn(text: String, bg: Int, onClick: (View) -> Unit): TextView =
         TextView(this).apply {
