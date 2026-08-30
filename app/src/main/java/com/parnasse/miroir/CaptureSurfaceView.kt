@@ -548,6 +548,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 val idx = engine.inkStrokeIdToRegistryIndex[sid]
                 if (idx != null && idx < engine.strokeRegistry.size) {
                     engine.strokeRegistry[idx].isDeleted = true
+                    engine.pageDirty = true  // ⚓ MARÉE 30/08 — la page a bougé
                 }
             }
             engine.groupBlobs.remove(tempGroup.id)
@@ -561,6 +562,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                     val idx = engine.inkStrokeIdToRegistryIndex[sid]
                     if (idx != null && idx < engine.strokeRegistry.size) {
                         engine.strokeRegistry[idx].isDeleted = true
+                        engine.pageDirty = true  // ⚓ MARÉE 30/08 — la page a bougé
                     }
                 }
                 origGroup.strokeIds.removeAll(addedIds)
@@ -720,6 +722,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             } else if (accum >= cutLen) {
                 sr.points.clear(); sr.timestamps.clear(); sr.pressures.clear()
                 sr.isDeleted = true
+                engine.pageDirty = true  // ⚓ MARÉE 30/08 — la page a bougé
                 if (idx !in erasedStrokes) erasedStrokes.add(idx)
             } else {
                 val pts = sr.points

@@ -42,6 +42,12 @@ class MiroirEngine {
     // ── Blocs & Pages ──────────────────────────────────────────────────
     var blockDir: File? = null; private set
     var currentPageIndex = 0
+    /** ⚓ MARÉE 30/08 — le drapeau du saut : la page a-t-elle changé depuis le
+     *  dernier coucher ? Posé par l'écriture (endStroke), les archives
+     *  (onGroupEvicted) et les effacements (CaptureSurfaceView). Le save
+     *  conditionnel n'écrit que si la page a bougé — jamais 390 Ko de
+     *  réécriture pour un battement d'horloge. */
+    @Volatile var pageDirty = false
     private var appContext: android.content.Context? = null
 
     // ── Navigation viewport Parnasse ────────────────────────────────────
@@ -137,6 +143,7 @@ class MiroirEngine {
                     val ri = inkStrokeIdToRegistryIndex[sid] ?: continue
                     strokeRegistry.getOrNull(ri)?.isArchived = true
                 }
+                pageDirty = true  // ⛪ MARÉE 30/08 — les états changent : le save écrira.
             }
         }
     }
@@ -198,6 +205,7 @@ class MiroirEngine {
 
         // Ajouter au registre
         strokeRegistry.add(sr)
+        pageDirty = true  // ⛪ MARÉE 30/08 — la page a bougé : le save écrira.
         val ri = strokeRegistry.size - 1
         val inkId = ++inkStrokeIdCounter
         inkStrokeIdToRegistryIndex[inkId] = ri
@@ -1055,7 +1063,14 @@ class MiroirEngine {
                 dir = File(bd, "page_${parnassePageNumber}").apply { mkdirs() }
                 Log.i(TAG, "savePageFull: page_$idx inexistante → maison créée page_${parnassePageNumber}")
             } else {
-                Log.w(TAG, "savePageFull: numéro non dicté (Cœur pas encore parlé) — sauvegarde refusée, aucun limbe écrit")
+                // ⚓ MARÉE 30/08 — la dictée est en retard (le Cœur traîne — le
+                // sync absorbé) : la matière RESTE dans le registre, et la
+                // fenêtre redemande la position (nav=0). Le prochain save
+                // écrira à la bonne maison — jamais de refus absolu.
+                Log.w(TAG, "savePageFull: numéro non dicté — redemande la position (nav=0), matière gardée en mémoire")
+                if (navMode == NavMode.PARNASSE && parnasseNoteId != null) {
+                    queryPageParnasse(currentPageIndex, 0)
+                }
                 return
             }
         } else {
@@ -1063,6 +1078,10 @@ class MiroirEngine {
             dir.mkdirs()
         }
         val vstarFile = File(dir, "page.vstar")
+        // ⚓ MARÉE 30/08 — SAUVE CONDITIONNEL : la page n'a pas bougé (ni trait,
+        // ni archive, ni effacement) → le disque parle déjà — ne pas réécrire
+        // le vstar à chaque battement (390 Ko pour un battement d'horloge).
+        if (!pageDirty && vstarFile.exists()) return
         // ═══ Inclure TOUS les strokes non-supprimés (vivants + archivés) ═══
         // Les strokes archivés sont déjà dans le bitmap mais doivent persister
         // dans le .vstar pour le rechargement futur.
@@ -1131,6 +1150,7 @@ class MiroirEngine {
 
         // ── Miroir sdcard — copie accessible au Scanner/Cœur ──
         mirrorToSdcard(dir, bd.name)
+        pageDirty = false  // ⚓ MARÉE 30/08 — le disque parle comme la mémoire
     }
 
     /** Exporte la page courante vers la SD card — appelé à chaque mot reconnu.
@@ -1314,6 +1334,7 @@ class MiroirEngine {
 
             Log.i(TAG, "loadPageFull page=$currentPageIndex: ${strokeRegistry.size} strokes, ${groupLabels.size} labels")
             pageLoaded = true
+            pageDirty = false  // ⚓ MARÉE 30/08 — la mémoire parle comme le disque
             return true
         } catch (e: Exception) {
             Log.e(TAG, "loadPageFull: ${e.message}", e)
