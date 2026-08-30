@@ -533,6 +533,9 @@ class MiroirEngine {
             hasId -> "$coeurUrl/api/miroir/page?block_id=$uuid&note_id=$parnasseNoteId"
             else -> "$coeurUrl/api/miroir/page?block_id=$uuid&page_n=$pageN"
         }
+        // 🧭 MARÉE 30/08 — trace de la requête (la course d'identité : deux
+        // requêtes en vol au démarrage — voir laquelle porte l'identité).
+        Log.i(TAG, "▸ req[$seq] hasId=$hasId nid=$parnasseNoteId → $urlStr")
         // ═══ ASYNCHRONE : la réponse revient sur le UI thread — le thread
         // d'interface n'est jamais gelé (ANR). onDone: la suite du chargement. ═══
         Thread {
@@ -765,6 +768,19 @@ class MiroirEngine {
                 org.json.JSONObject()
             }
             val deja = root.optString("note_id", null)
+            // ⚠️ MARÉE 30/08 — la course d'identité : deux dictées en rafale
+            // (bascule en rafale sur la même position) font changer la maison
+            // de nom — la matière du poème précédent se lie alors à la mauvaise
+            // note (coquillage : la note du matin affichant le poème du midi).
+            // Une maison HABITÉE (un nom + de l'encre) reste au nom de sa
+            // matière — jamais renommée par une visite.
+            if (deja != null && deja.isNotEmpty() && deja != noteId) {
+                val matiere = File(pageDir, "page.vstar")
+                if (matiere.exists() && matiere.length() > 0) {
+                    Log.w(TAG, "⛪ Page $pageIndex déjà habitée ($deja) — ne pas renommer en $noteId (matière présente)")
+                    return
+                }
+            }
             // ═══ En PARNASSE, le Cœur est la vérité : le baptême répare les
             // notes polluées par l'ancienne résolution par position. ═══
             if (deja != null && deja.isNotEmpty() && deja != noteId && navMode != NavMode.PARNASSE) {
