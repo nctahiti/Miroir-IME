@@ -610,6 +610,13 @@ class MiroirEngine {
     private fun loadLectureBitmap() {
         val cap = parnasseCapture ?: return
         val upd = parnasseUpdated
+        // ⚠️ MARÉE 30/08 — L'ÉCHO PÉRIMÉ : la LECTURE est asynchrone ; si une
+        // autre navigation a eu lieu pendant le téléchargement, le PNG
+        // revient poser le bitmap de l'ANCIENNE page par-dessus l'encre de
+        // la nouvelle (« les strokes disparaissaient après la rafale » —
+        // vu 30/08 : page 468 → 465, l'écho de 468 effaçait le poème). Même
+        // garde que les réponses : le rang de la requête qui a lancé la LECTURE.
+        val seqAtLaunch = requestSeq
         Thread {
             try {
                 val urlStr = "$coeurUrl/api/files/$cap" + (if (upd > 0) "?v=$upd" else "")
@@ -620,6 +627,10 @@ class MiroirEngine {
                 val bmp = android.graphics.BitmapFactory.decodeStream(conn.inputStream)
                 conn.disconnect()
                 uiHandler.post {
+                    if (seqAtLaunch != requestSeq) {
+                        Log.w(TAG, "🧭 LECTURE périmée (rang $seqAtLaunch, dernier $requestSeq) — bitmap non posé")
+                        return@post
+                    }
                     if (bmp != null) {
                         // ⚠️ IMMUTABLE (29/08/2026) : decodeStream rend un bitmap
                         // immuable — eraseColor/drawColor lèvent
@@ -638,6 +649,7 @@ class MiroirEngine {
             } catch (e: Exception) {
                 Log.w(TAG, "🧭 LECTURE: ${e.javaClass.simpleName}: ${e.message}")
                 uiHandler.post {
+                    if (seqAtLaunch != requestSeq) return@post
                     clearPage()
                     redrawBitmapInternal()
                     onPageRendered?.invoke()
