@@ -75,6 +75,9 @@ class CaptureActivity : Activity() {
     private var invocBlockId: String? = null
     private var invocPageN: Int = 0
     private var invocNoteId: String? = null
+    // ⚓ MARÉE 30/08 — le focus ne détourne pas l'invocation : tant que la
+    // note invoquée (l'intent) n'est pas réglée, le suiveur du focus se tait.
+    private var invocationSettled = false
     private var invocMode: String = "bloc"
 
     /** Résout l'UUID Parnasse d'un bloc vers son nom de dossier Miroir (ex: "standalone").
@@ -208,6 +211,7 @@ class CaptureActivity : Activity() {
             // Parnasse est maître : navigue à la position dictée (interroge le Cœur).
             captureView?.post {
                 engine.goToPageFull(targetPage) {
+                    invocationSettled = true
                     updatePageCounter()
                     fontaineOverlay?.desactiver()
                     captureView?.invalidate()
@@ -683,7 +687,7 @@ class CaptureActivity : Activity() {
                     val body = BufferedReader(InputStreamReader(conn.inputStream)).readText()
                     val stateNoteId = org.json.JSONObject(body).optString("note_id").ifEmpty { null }
                     conn.disconnect()
-                    if (stateNoteId != null && stateNoteId != engine.parnasseNoteId) {
+                    if (stateNoteId != null && stateNoteId != engine.parnasseNoteId && invocationSettled) {
                         Log.i(TAG, "🧭 Focus Parnasse a changé: ${stateNoteId.substring(0, 8)} — le suivre")
                         uiHandler.post {
                             engine.parnasseNoteId = stateNoteId
