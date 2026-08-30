@@ -194,7 +194,15 @@ class CaptureActivity : Activity() {
 
         // ═══ LA LECTURE : la vue se rafraîchit après le rendu asynchrone du
         // PNG de la matrice (29/08/2026) — le hook du moteur éclairé ici.
-        engine.onPageRendered = { captureView?.invalidate() }
+        engine.onPageRendered = {
+            // ⚓ MARÉE 30/08 — le rendu asynchrone (LECTURE) se peint sous la
+            // Fontaine : sans le cycle EPD (SurfaceView setZOrderOnTop),
+            // l'écran garde l'ancienne glace et l'encre « disparaît après
+            // la fontaine ». On retire la Fontaine le temps du reflet.
+            fontaineOverlay?.desactiver()
+            captureView?.invalidate()
+            fontaineOverlay?.activer()
+        }
 
         if (engine.navMode == NavMode.PARNASSE) {
             // Parnasse est maître : navigue à la position dictée (interroge le Cœur).
@@ -288,7 +296,9 @@ class CaptureActivity : Activity() {
         if (engine.navMode == NavMode.PARNASSE) {
             engine.goToPageFull(targetPage) {
                 updatePageCounter()
-                captureView?.invalidate()
+                // ⚓ MARÉE 30/08 — la page vient d'être chargée en PARNASSE :
+                // le même geste que la nav boutons (cycle EPD dans refreshAfterNav).
+                refreshAfterNav()
             }
         } else if (targetPage > 0 && engine.countPages() > targetPage) {
             engine.goToPageFull(targetPage)
@@ -513,9 +523,16 @@ class CaptureActivity : Activity() {
      *  de la vue qui orchestre, et relâcher la plume rend REGAL naturellement. */
     private fun refreshAfterNav() {
         val cv = captureView ?: return
+        // ⚓ MARÉE 30/08 — trois temps, un seul geste : la Fontaine (SurfaceView
+        // setZOrderOnTop) garde la glace — on la retire un battement, la vue
+        // se peint (encre fraîche), la Fontaine se rallume. Sans ce cycle,
+        // le bitmap chargé restait invisible dessous (« l'encre disparaît
+        // après la fontaine » — vu 30/08).
+        fontaineOverlay?.desactiver()
         com.onyx.android.sdk.api.device.epd.EpdController.setViewDefaultUpdateMode(
             cv, com.onyx.android.sdk.api.device.epd.UpdateMode.GC)
         cv.invalidate()
+        fontaineOverlay?.activer()
     }
 
     private fun showCloseMenu(anchor: View) {

@@ -1093,11 +1093,16 @@ class MiroirEngine {
         // findPageByNoteId retrouve la matière par identité, même si la note
         // se déplace (renumérotation Parnasse).
         if (navMode == NavMode.PARNASSE && parnasseNoteId != null) {
-            baptiserPage(pageDirIndex(), parnasseNoteId!!)
+            // ⛪ MARÉE 30/08 — la maison vient de naître à la position dictée :
+            // pageDirIndex() vaut encore -1 (l'identité ne s'y est pas encore
+            // gravée), le baptême tombait dans le limbe et la page restait
+            // sans nom — findPageByNoteId ne la retrouvait jamais.
+            val maison = if (idx < 0) parnassePageNumber else idx
+            baptiserPage(maison, parnasseNoteId!!)
         }
 
         // ── Miroir sdcard — copie accessible au Scanner/Cœur ──
-        mirrorToSdcard(dir, bd.name, currentPageIndex)
+        mirrorToSdcard(dir, bd.name)
     }
 
     /** Exporte la page courante vers la SD card — appelé à chaque mot reconnu.
@@ -1105,15 +1110,23 @@ class MiroirEngine {
      *  On ne fait que les déclarer au monde extérieur. */
     fun exportCurrentPage() {
         val bd = blockDir ?: return
-        val dir = File(bd, "page_$currentPageIndex")
+        // ⛪ MARÉE 30/08 — la page exportée est celle de l'IDENTITÉ (la maison :
+        // position dictée), jamais la position affichée qui n'est qu'un titre.
+        val idx = pageDirIndex()
+        val dir = if (idx >= 0) File(bd, "page_$idx") else File(bd, "page_$parnassePageNumber")
         if (!dir.exists()) return
-        Log.i(TAG, "exportCurrentPage: page $currentPageIndex → SD card")
-        mirrorToSdcard(dir, bd.name, currentPageIndex)
+        Log.i(TAG, "exportCurrentPage: $dir → SD card")
+        mirrorToSdcard(dir, bd.name)
     }
 
     /** Copie miroir de la page sauvegardée vers le stockage externe
      *  pour que le Scanner et le Cœur puissent la lire sans sandboxing. */
-    internal fun mirrorToSdcard(pageDir: File, blockName: String, pageN: Int) {
+    internal fun mirrorToSdcard(pageDir: File, blockName: String) {
+        // ⛪ MARÉE 30/08 — le reflet est le jumeau de la maison : il porte SA
+        // adresse (le nom du dossier), jamais une position parallèle. Côté
+        // Cœur, l'identité se lit à l'adresse de la maison — et la maison,
+        // elle, est baptisée par savePageFull.
+        val pageN = pageDir.name.removePrefix("page_").toIntOrNull() ?: return
         try {
             val mirrorDir = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
