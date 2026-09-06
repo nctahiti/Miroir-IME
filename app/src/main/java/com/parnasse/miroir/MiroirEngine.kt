@@ -646,7 +646,7 @@ class MiroirEngine {
                         // La LECTURE pose une copie MUTABLE — la page vit encore.
                         bitmap = bmp.copy(android.graphics.Bitmap.Config.ARGB_8888, true)
                         redrawBitmapInternal()
-                        Log.i(TAG, "🧭 LECTURE: capture affichée (${cap.take(30)}… v=$upd)")
+                        Log.i(TAG, "🧭 MATRICE: effigie affichée (${cap.take(30)}… v=$upd)")
                     } else {
                         Log.w(TAG, "🧭 LECTURE: décodage null pour $cap")
                         clearPage()
@@ -729,6 +729,32 @@ class MiroirEngine {
         } catch (_: Exception) { null }
     }
 
+    /** 🧭 SENTINELLE — lit la forme des résidences (les deux liens + la matière).
+     *  N'expose que les faiblesses — ne corrige JAMAIS (le doute au Tas).
+     *  Les trois respirations : bascule (savePageFull), fermeture d'app (onDestroy),
+     *  sonnerie (findPageByNoteId = -1). Zéro réseau, zéro boucle, ~30 lignes. */
+    fun sentinelAudit(reason: String) {
+        val bd = blockDir ?: return
+        val pages = bd.listFiles()?.filter { it.isDirectory && it.name.startsWith("page_") } ?: return
+        var maisons = 0; var fantomes = 0; var divergences = 0
+        for (dir in pages) {
+            val idx = dir.name.removePrefix("page_").toIntOrNull() ?: continue
+            maisons++
+            val gObj = try {
+                org.json.JSONObject(File(dir, "groups.json").takeIf { it.exists() }?.readText() ?: "{}")
+            } catch (_: Exception) { org.json.JSONObject() }
+            val lienJson = gObj.optString("note_id", null).takeUnless { it.isNullOrEmpty() }
+            val lienFile = File(dir, ".note_id").takeIf { it.exists() }?.readText()?.trim()?.takeUnless { it.isEmpty() }
+            val vstar = File(dir, "page.vstar").takeIf { it.exists() && it.length() > 0 }
+            if (vstar != null && lienJson == null && lienFile == null) fantomes++   // matière sans nom
+            if (lienJson != null && lienFile != null && lienJson != lienFile) divergences++ // les deux liens qui mentent
+        }
+        if (fantomes + divergences > 0)
+            Log.w(TAG, "🧭 SENTINEL[$reason]: maisons=$maisons MATIÈRE-sans-maison=$fantomes liens-divergents=$divergences — le doute passe au Tas, jamais la poubelle")
+        else if (maisons > 0)
+            Log.i(TAG, "🧭 SENTINEL[$reason]: résidences saines ($maisons maisons)")
+    }
+
     /** Retrouve le dossier local qui porte ce note_id — par l'identité, pas la position.
      *  Une note peut se déplacer (changer de page_number) sans perdre sa capture.
      *  ⚠️ Scanne les DOSSIERS RÉELS (page_4, page_5 — le tiroir peut n'avoir que les
@@ -741,6 +767,9 @@ class MiroirEngine {
             val idx = dir.name.removePrefix("page_").toIntOrNull() ?: continue
             if (readPageNoteId(idx) == noteId) return idx
         }
+        // 🧭 SENTINEL — la sonnerie de la brume : la note n'a pas de maison.
+        // La MATRICE va parler à sa place. Le doute est noté, jamais corrigé.
+        Log.w(TAG, "🧭 SENTINEL: note $noteId sans maison — MATRICE en héritage (les deux liens lus : groups.json + .note_id)")
         return -1
     }
 
@@ -1150,6 +1179,8 @@ class MiroirEngine {
 
         // ── Miroir sdcard — copie accessible au Scanner/Cœur ──
         mirrorToSdcard(dir, bd.name)
+        // 🧭 SENTINEL — la bascule : la forme vient d'être couchée, l'audit le dit.
+        sentinelAudit("bascule")
         pageDirty = false  // ⚓ MARÉE 30/08 — le disque parle comme la mémoire
     }
 

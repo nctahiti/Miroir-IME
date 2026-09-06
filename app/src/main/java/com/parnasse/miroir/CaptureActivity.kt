@@ -714,6 +714,10 @@ class CaptureActivity : Activity() {
 
     override fun onDestroy() {
         engine.savePageFull(); engine.closeBlock()
+        // ⚓ MARÉE 06/09 — LA BASCULE RESPIIRE AVEC LE PONT : le sync immédiat au
+        // départ (le PNG lié AVANT la vue du Parnasse — la course du reflet morte).
+        notifyCoeur()
+        engine.sentinelAudit("fermeture-app")
         recognizer?.close()
         super.onDestroy()
     }
@@ -907,7 +911,7 @@ class CaptureActivity : Activity() {
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/json")
                 conn.doOutput = true
-                val body = """{"library_id":"3225cb96-a14f-4d6d-a965-dd3431489a74","block_name":"standalone"}"""
+                val body = """{"library_id":"3225cb96-a14f-4d6d-a965-dd3431489a74","block_name":"${engine.blockDir?.name ?: "standalone"}"}"""
                 conn.outputStream.write(body.toByteArray())
                 val code = conn.responseCode
                 if (code == 200) {
