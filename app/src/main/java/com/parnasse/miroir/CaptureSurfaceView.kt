@@ -175,7 +175,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                         correctLetterIndex = -1; insertAtIndex = -1
                         correctionTapConsumed = true
                         Log.i(TAG, "Correction: ─ #$minusIdx → '${correctionLabel}'")
-                        invalidate(); return true
+                        rafraichirCorrectionUI(); return true
                     }
                     val plusIdx = hitTestPlus(event.x, event.y)
                     if (plusIdx >= 0 && plusIdx <= correctionLabel.length) {
@@ -185,14 +185,14 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                         correctionTapConsumed = true
                         fontaineOverlay?.correctionWriteActive = true
                         Log.i(TAG, "Correction: + @$plusIdx → '$correctionLabel' (case #$plusIdx sélectionnée)")
-                        invalidate(); return true
+                        rafraichirCorrectionUI(); return true
                     }
                     val letterIdx = hitTestLetter(event.x, event.y)
                     if (letterIdx >= 0 && letterIdx < correctionLabel.length) {
                         correctLetterIndex = letterIdx; insertAtIndex = -1
                         correctionTapConsumed = true
                         Log.i(TAG, "Correction: lettre #$letterIdx sélectionnée → prêt à écrire")
-                        invalidate(); return true
+                        rafraichirCorrectionUI(); return true
                     }
                     // Tap hors cadre → armer un long-press (500ms) pour sortir
                     Log.i(TAG, "Correction: tap hors cadre → maintien pour sortir")
@@ -251,63 +251,61 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     // HIT-TEST PUCES (correction)
     // ═══════════════════════════════════════════════════════════════════
 
-    private fun correctionFrame(): RectF? {
+    /** 🛡️ MESURE 07/09 — la géométrie de la correction, UNE SEULE fois, clampe aux bords.
+     *  Au bord de l'écran le mot sortait et les dernières lettres devenaient
+     *  incorrigeables (la géométrie était dupliquée dans 5 fonctions). */
+    private data class CorrectionLayout(val caseW: Float, val chipR: Float, val startX: Float, val startY: Float)
+    private fun correctionLayout(): CorrectionLayout? {
         val anchor = engine.groupAnchor[correctionGroupFirstIdx] ?: return null
         if (correctionLabel.isEmpty()) return null
         val spacing = CalibrationActivity.getTemplateSpacing(context)
-        val letterW = spacing * 0.7f
-        val totalW = letterW * correctionLabel.length
+        val caseW = spacing * 0.7f
+        val totalW = caseW * correctionLabel.length
+        val chipR = maxOf(caseW * 0.3f, 14f)
         val snapY = engine.snapToLine(anchor.second)
-        val startX = anchor.first - totalW / 2f
-        val startY = snapY - spacing * 0.8f
-        return RectF(startX - 20f, startY - 10f, startX + totalW + 20f, startY + letterW + 10f)
+        var sx = anchor.first - totalW / 2f
+        var sy = snapY - spacing * 0.8f
+        // Cases + puces +/− restent DANS la vue (marges 24px, puces en haut/bas)
+        sx = sx.coerceIn(24f, maxOf(24f, width - totalW - 24f))
+        sy = sy.coerceIn(chipR + 16f, maxOf(chipR + 16f, height - caseW - chipR - 30f))
+        return CorrectionLayout(caseW, chipR, sx, sy)
+    }
+
+    private fun correctionFrame(): RectF? {
+        val l = correctionLayout() ?: return null
+        return RectF(l.startX - 20f, l.startY - 10f, l.startX + l.caseW * correctionLabel.length + 20f, l.startY + l.caseW + 10f)
     }
 
     private fun hitTestMinus(x: Float, y: Float): Int {
-        val anchor = engine.groupAnchor[correctionGroupFirstIdx] ?: return -1
-        if (correctionLabel.isEmpty()) return -1
-        val spacing = CalibrationActivity.getTemplateSpacing(context)
-        val letterW = spacing * 0.7f
-        val totalW = letterW * correctionLabel.length
-        val snapY = engine.snapToLine(anchor.second)
-        val startX = anchor.first - totalW / 2f
-        val startY = snapY - spacing * 0.8f
-        val chipRadius = maxOf(letterW * 0.3f, 14f)
+        val l = correctionLayout() ?: return -1
         for (i in correctionLabel.indices) {
-            val cx = startX + letterW * i + letterW / 2f
-            val cy = startY + letterW + chipRadius + 4f
+            val cx = l.startX + l.caseW * i + l.caseW / 2f
+            val cy = l.startY + l.caseW + l.chipR + 4f
             val d = Math.hypot((x - cx).toDouble(), (y - cy).toDouble())
-            if (d < chipRadius + 8f) return i
+            if (d < l.chipR + 8f) return i
         }
         return -1
     }
 
     private fun hitTestPlus(x: Float, y: Float): Int {
-        val anchor = engine.groupAnchor[correctionGroupFirstIdx] ?: return -1
-        val spacing = CalibrationActivity.getTemplateSpacing(context)
-        val letterW = spacing * 0.7f
-        val totalW = letterW * correctionLabel.length
-        val snapY = engine.snapToLine(anchor.second)
-        val startX = anchor.first - totalW / 2f
-        val startY = snapY - spacing * 0.8f
-        val chipRadius = maxOf(letterW * 0.3f, 14f)
+        val l = correctionLayout() ?: return -1
         for (i in 0..correctionLabel.length) {
-            val cx = startX + letterW * i
-            val cy = startY - chipRadius - 4f
+            val cx = l.startX + l.caseW * i
+            val cy = l.startY - l.chipR - 4f
             val d = Math.hypot((x - cx).toDouble(), (y - cy).toDouble())
-            if (d < chipRadius + 8f) return i
+            if (d < l.chipR + 8f) return i
         }
         return -1
     }
 
     private fun hitTestLetter(x: Float, y: Float): Int {
-        val frame = correctionFrame() ?: return -1
-        val spacing = CalibrationActivity.getTemplateSpacing(context)
-        val letterW = spacing * 0.7f
-        val startX = frame.left + 20f
-        val startY = frame.top + 10f
-        if (x < startX || x > frame.right - 20f || y < startY || y > frame.bottom - 10f) return -1
-        val idx = ((x - startX) / letterW).toInt()
+        val l = correctionLayout() ?: return -1
+        val startX = l.startX
+        val startY = l.startY
+        val endX = startX + l.caseW * correctionLabel.length
+        val endY = startY + l.caseW
+        if (x < startX || x > endX || y < startY || y > endY) return -1
+        val idx = ((x - startX) / l.caseW).toInt()
         return if (idx in correctionLabel.indices) idx else -1
     }
 
@@ -517,7 +515,11 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         if (!isCorrecting()) return
         val origIdx = correctionGroupFirstIdx
         if (origIdx < 0) return
-        val origLabel = engine.groupLabels[origIdx] ?: return
+        // ⚠️ MESURE 07/09 — la vérité de la session est correctionLabel (l'édité par
+        // +/−), PAS engine.groupLabels[origIdx] (qui garde le label d'origine jusqu'à
+        // la sortie) : corriger depuis le moteur faisait ressusciter le caractère
+        // retranché ('dan:' → correction → 'dané:...').
+        val origLabel = correctionLabel.ifEmpty { engine.groupLabels[origIdx] ?: return }
         val gm = engine.groupManager ?: return
 
         if (correctLetterIndex >= 0) {
@@ -537,9 +539,16 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             engine.groupLabels[origIdx] = newLabel
             correctionLabel = newLabel
             Log.i(TAG, "Insertion: '$origLabel' → '$newLabel' (position #$insertAtIndex: '$result')")
+        } else {
+            // 🛡️ MESURE 07/09 — trait orphelin (aucune case active) : le groupe
+            // temporaire est jeté tel quel — jamais de baptême d'un trait de correction.
+            Log.i(TAG, "Correction: résultat orphelin '$result' — groupe jeté, pas de label")
         }
         // Nettoyer les strokes de correction
-        val tempGroup = gm.allGroups().find { g ->
+        // ⚠️ allGroupsFull (pas allGroups) : le groupe temporaire est déjà ÉVINCÉ
+        // (hors zone → STORED → .groups) au moment de l'inference — le cache seul
+        // ne le verrait pas, et le jet raterait sa cible. (MESURE 07/09)
+        val tempGroup = gm.allGroupsFull().find { g ->
             g.strokeIds.firstOrNull()?.let { engine.inkStrokeIdToRegistryIndex[it] == tempGroupFirstIdx } == true
         }
         if (tempGroup != null) {
@@ -584,12 +593,34 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         // ⚠️ Ne pas désactiver correctionWriteActive ni la fontaine —
         // on reste en mode correction, prêt pour la prochaine lettre.
         // Cycle desactiver/activer pour forcer la fontaine à effacer sa surface
+        rafraichirCorrectionUI()
+        Log.i(TAG, "applyCorrectionResult: correctionLabel='$correctionLabel' → rafraîchi")
+    }
+
+    /** 🛡️ SENTINELLE D'AFFICHAGE (07/09/2026) — expose l'ordre de la danse, ne corrige pas. */
+    private var sentinelSequence = 0
+    private fun sentinelleAffichage(step: String, ordre: List<String>) {
+        val inv = ordre.indexOf("invalidate")
+        val act = ordre.indexOf("activer")
+        val verdict = when {
+            inv < 0 || act < 0 -> "—"
+            inv < act -> "peinture avant réactivation (OK)"
+            else -> "UNSAFE_ORDER — peinture après réactivation"
+        }
+        Log.i(TAG, "🛡️ SENTINELLE #${++sentinelSequence} [$step] ${ordre.joinToString("→")} → $verdict")
+    }
+
+    /** Cycle de rafraîchissement de la correction — la ponctuation du 07/09 :
+     *  la SurfaceView de la Fontaine masque la vue tant qu'elle n'est pas vidée ;
+     *  donc : vider la surface, peindre (invalidate), PUIS rallumer le canal.
+     *  Une seule fonction du cycle — trois appelants (clic −, clic +, lettre, firmware). */
+    fun rafraichirCorrectionUI() {
         fontaineOverlay?.desactiver()
         engine.redrawBitmapInternal(fullRedraw = true)
         fontaineOverlay?.effacerSurface()
-        fontaineOverlay?.activer()  // réactive la fontaine (raw drawing + rendu)
-        Log.i(TAG, "applyCorrectionResult: correctionLabel='$correctionLabel' → rafraîchi")
+        sentinelleAffichage("rafraichirCorrectionUI", listOf("desactiver", "redraw", "effacer", "invalidate", "activer"))
         invalidate()
+        fontaineOverlay?.activer()  // réactive la fontaine (raw drawing + rendu)
     }
 
     private fun exitEditMode() {
@@ -623,6 +654,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             correctionLabel = correctionLabel.removeRange(minusIdx, minusIdx + 1)
             correctLetterIndex = -1; insertAtIndex = -1
             Log.i(TAG, "Correction firmware: ─ #$minusIdx → '$correctionLabel'")
+            // ⚠️ MESURE 07/09 — ICI JAMAIS de cycle fontaine : ce hit-test est appelé
+            // au BEGIN du contact (onBeginRawDrawing) ; le cycle desactiver/activer
+            // coupait le canal pendant le trait → capture interrompue avant le PEN_UP
+            // (traits tronqués, reco de fragments). Rien qu'un invalidate.
             invalidate(); return true
         }
         val plusIdx = hitTestPlus(x, y)
@@ -932,17 +967,14 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     }
 
     private fun drawCorrectionFrame(canvas: Canvas) {
-        val anchor = engine.groupAnchor[correctionGroupFirstIdx] ?: run {
-            Log.w(TAG, "drawCorrectionFrame: anchor null pour firstIdx=$correctionGroupFirstIdx")
+        val l = correctionLayout() ?: run {
+            Log.w(TAG, "drawCorrectionFrame: layout null (anchor ou label vide)")
             return
         }
-        if (correctionLabel.isEmpty()) return
-        val spacing = CalibrationActivity.getTemplateSpacing(context)
-        val letterW = spacing * 0.7f
+        val letterW = l.caseW
         val totalW = letterW * correctionLabel.length
-        val snapY = engine.snapToLine(anchor.second)
-        val startX = anchor.first - totalW / 2f
-        val startY = snapY - spacing * 0.8f
+        val startX = l.startX
+        val startY = l.startY
 
         // Fond blanc (tampon)
         canvas.drawRect(startX - 20f, startY - 10f, startX + totalW + 20f, startY + letterW + 10f,
@@ -966,7 +998,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         }
 
         // Puces +
-        val chipRadius = maxOf(letterW * 0.3f, 14f)
+        val chipRadius = l.chipR
         for (i in 0..correctionLabel.length) {
             val cx = startX + letterW * i
             val cy = startY - chipRadius - 4f

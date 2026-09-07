@@ -61,6 +61,9 @@ class CaptureActivity : Activity() {
     // ── Timers ──────────────────────────────────────────────────────────
     private val inferenceRunnable = Runnable { runGroupInference() }
     private val displayRefreshRunnable = Runnable { refreshDisplay() }
+    // 🛡️ SENTINELLE REFRESH_PENDING (07/09/2026) — le lavage avalé par
+    // modeInteraction est consigné, jamais perdu : il revient à la sortie.
+    private var refreshPendingAfterInteraction = false
 
     // ── Sync Cœur ───────────────────────────────────────────────────────
     private var lastSyncNotification = 0L
@@ -342,9 +345,11 @@ class CaptureActivity : Activity() {
                     uiHandler.post {
                         // ═══ Mode correction → redirect vers CaptureSurfaceView ═══
                         val cv = captureView
-                        if (cv != null && cv.isCorrecting() && (cv.correctLetterIndex >= 0 || cv.insertAtIndex >= 0)) {
-                            // Avec la désélection à l'entrée, les strokes de correction
-                            // créent toujours des groupes SÉPARÉS (firstIdx != correctionGroupFirstIdx)
+                        if (cv != null && cv.isCorrecting()) {
+                            // SESSION PARENTE (07/09) : pendant la correction, TOUT
+                            // résultat d'un groupe ≠ groupe source est un trait de
+                            // correction — appliquer (case active) ou jeter (orphelin),
+                            // JAMAIS baptiser comme mot.
                             if (firstIdx != cv.correctionGroupFirstIdx) {
                                 cv.applyCorrectionResult(result, firstIdx)
                                 Log.i(TAG, "Correction appliquée: '$result' (mode correction, firstIdx=$firstIdx)")
@@ -852,7 +857,12 @@ class CaptureActivity : Activity() {
 
     /** Rafraîchit l'affichage : désactive la fontaine, synchronise le bitmap, réactive. */
     private fun refreshDisplay() {
-        if (fontaineOverlay?.modeInteraction == true) return
+        if (fontaineOverlay?.modeInteraction == true) {
+            // 🛡️ SENTINELLE (07/09) — ne pas avaler le besoin : consigner.
+            refreshPendingAfterInteraction = true
+            Log.i(TAG, "refreshDisplay: modeInteraction → REFRESH_PENDING consigné")
+            return
+        }
         engine.groupManager?.evictInactive()
         // 🔬 SÉMATOGRAMME CACHE
         val gm = engine.groupManager
@@ -896,6 +906,15 @@ class CaptureActivity : Activity() {
         captureView?.invalidate()
         fontaineOverlay?.reactiver()
         Log.i(TAG, "Retour écriture — fontaine réactivée")
+        // 🛡️ SENTINELLE REFRESH_PENDING (07/09/2026) : le lavage perdu pendant
+        // l'interaction revient une fois la plume posée, après la réactivation
+        // (le mode de la vue orchestre — jamais de refreshScreen détaché).
+        if (refreshPendingAfterInteraction) {
+            refreshPendingAfterInteraction = false
+            uiHandler.removeCallbacks(displayRefreshRunnable)
+            uiHandler.postDelayed(displayRefreshRunnable, 250)
+            Log.i(TAG, "SENTINELLE: REFRESH_PENDING relancé — lavage dans 250ms")
+        }
     }
 
     /** Notifie le Cœur que de nouvelles pages sont disponibles dans la SD card.

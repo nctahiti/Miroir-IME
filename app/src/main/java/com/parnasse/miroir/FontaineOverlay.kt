@@ -220,10 +220,21 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                         processedPoints.clear()
                     } else {
                         val ptCount = engine.currentStrokeRecord?.activePoints ?: 0
-                        Log.i(TAG, "🖊️ END   #$strokeCount pts=$ptCount")
+                        Log.i(TAG, "🖊️ END   #$strokeCount pts=$ptCount dist=${lpTotalDist.toInt()}px")
                         val ri = engine.endStroke()
                         processedPoints.clear()
-                        if (ri >= 0 && ptCount >= 10) {
+                        if (correctionWriteActive && lpTotalDist < 8f) {
+                            // 🛡️ MESURE 07/09 — tap/micro-contact pendant la correction :
+                            // le stroke est ANNULÉ (pas juste ignoré) — le groupe fantôme
+                            // qui se formait en arrière-plan à chaque clic +/− ne naît plus.
+                            if (ri >= 0) engine.strokeRegistry[ri].isDeleted = true
+                            engine.pageDirty = true
+                            Log.d(TAG, "Stroke annulé ($ptCount pts, dist=${lpTotalDist.toInt()}px) — pas de groupe fantôme")
+                        } else if (ri >= 0 && (ptCount >= 10 || (correctionWriteActive && lpTotalDist >= 8f))) {
+                            // 🛡️ MESURE 07/09 — en correction, un trait ≥ 8px EST une
+                            // lettre (même 2-6 points, ex. un 'i') : l'inférer aussitôt,
+                            // isolée — sinon il s'accumule en groupe composite et la
+                            // reco mélange (reco ':' au lieu de la lettre dessinée).
                             onStrokeFinished?.invoke(ri)
                         } else if (ri >= 0) {
                             Log.d(TAG, "Stroke ignoré (${ptCount} pts)")
