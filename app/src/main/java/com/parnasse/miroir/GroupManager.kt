@@ -282,9 +282,33 @@ class GroupManager(
             }
             strokeToGroup[sid] = group.id
         }
+        // ═══ L'entrée en cache calcule la dérivée : le registre spatial est la vérité ═══
+        refreshBounds(group)
         machine.transition(group, GroupState.STORED)
         persistence?.writeGroup(group)
         Log.d(TAG, "Groupe charge: " + group.id + " (" + group.strokeCount + " strokes)")
+    }
+
+    /** ⚠️ Les bounds ne sont pas une donnée couchée — elles sont une DÉRIVÉE.
+     *  Le registre spatial (pointProvider, branché sur strokeRegistry) est la
+     *  vérité : calculées À L'ENTRÉE EN CACHE (chargement) et à CHAQUE CHANGEMENT
+     *  DE MEMBRES (absorption, scrub, move, merge) — jamais à la réactivation
+     *  (rien n'a changé) et jamais depuis les blobs (l'ellipse est visuelle). */
+    internal fun refreshBounds(group: InkGroup) {
+        val provider = pointProvider ?: return
+        group.bounds.setEmpty()
+        var totalPts = 0
+        for (sid in group.strokeIds) {
+            val pts = provider(sid)
+            if (pts == null) { Log.d(TAG, "💠 BOUNDS sid=$sid → null (introuvable)"); continue }
+            if (pts.isEmpty()) { Log.d(TAG, "💠 BOUNDS sid=$sid → 0 pts"); continue }
+            totalPts += pts.size
+            for ((px, py) in pts) {
+                if (group.bounds.isEmpty) group.bounds.set(px, py, px, py)
+                else group.bounds.union(px, py)
+            }
+        }
+        Log.d(TAG, "💠 BOUNDS ${group.id.take(8)}: ${group.strokeIds.size} strokes → ${totalPts} pts → ${group.bounds.toShortString()}")
     }
 
     /** Synchronise les strokeIds d'un groupe avec la liste fournie (groupe spatial).
@@ -306,21 +330,8 @@ class GroupManager(
             }
             strokeToGroup[sid] = groupId
         }
-        // ═══ Recalculer les bounds à partir de TOUS les strokeIds ═══
-        val provider = pointProvider
-        if (provider != null) {
-            group.bounds.setEmpty()
-            for (sid in strokeIds) {
-                val pts = provider(sid) ?: continue
-                for ((px, py) in pts) {
-                    if (group.bounds.isEmpty) {
-                        group.bounds.set(px, py, px, py)
-                    } else {
-                        group.bounds.union(px, py)
-                    }
-                }
-            }
-        }
+        // ═══ Les bounds sont une dérivée du registre spatial — la vérité unique ═══
+        refreshBounds(group)
         Log.i(TAG, "Groupe " + groupId + " strokeIds synchronises: $oldCount → ${strokeIds.size}, bounds=${group.bounds.toShortString()}")
     }
 

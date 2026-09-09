@@ -1290,6 +1290,16 @@ class MiroirEngine {
 
             // ── V★ → strokes (format V2, 16 bytes/token, scaleFactor=8) ──
             val vstarFile = File(dir, "page.vstar")
+            // ═══ LA SENTINELLE VEILLE — le sculpteur façonne la forme ancienne ═══
+            // « Quand une note vit mal, façonner la forme, jamais le sens. »
+            // Un .vstar v1.1 (header JSON + 14 B/token) est mal lu par le décodeur v2 :
+            // les strokes dégénèrent (points identiques) et les groupes rechargés meurent.
+            // Le sculpteur migre la forme (v1.1 → v2), le sens reste intact ; l'original
+            // reste en .bak (la trace). Une forme inconnue reste en trace, jamais touchée.
+            if (VStarSculptor.needsSculpting(vstarFile)) {
+                Log.i(TAG, "Sculpteur: forme v1.1 détectée dans ${vstarFile.name} — façonnage (sens préservé, .bak gardé)")
+                VStarSculptor.sculpter(vstarFile)
+            }
             val ciToRi = mutableMapOf<Short, Int>()
             if (vstarFile.exists() && vstarFile.length() > 0) {
                 val region = VStarDataRegion(vstarFile)
@@ -1331,6 +1341,17 @@ class MiroirEngine {
                     Log.i(TAG, "loadPageFull: ${strokeRegistry.size} strokes depuis V★ (${tokens.size} tokens)")
                 }
             }
+
+            // ═══ ALIGNEMENT DE L'IDENTITÉ ═══
+            // Un stroke ne change jamais d'identité : les strokes rechargés portent
+            // les ids PÉRENNES (ci+1) — le compteur de session reprend AU-DELÀ, il ne
+            // repart jamais de zéro (sinon les ids de session divergent des ids du
+            // disque : les groupes évincés .groups pointent dans le vide et
+            // l'absorption des groupes rechargés meurt — les « frères » fantômes).
+            var maxInkId = 0L
+            for (id in inkStrokeIdToRegistryIndex.keys) if (id > maxInkId) maxInkId = id
+            if (maxInkId >= inkStrokeIdCounter) inkStrokeIdCounter = maxInkId
+            Log.d(TAG, "Alignement identité : inkStrokeIdCounter=$inkStrokeIdCounter (max ci+1=$maxInkId)")
 
             // ── Groupes & labels ──
             loadGroupsJson(dir, ciToRi)

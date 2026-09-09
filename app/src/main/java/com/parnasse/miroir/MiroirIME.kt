@@ -3244,8 +3244,9 @@ class MiroirIME : InputMethodService() {
             groupManager?.allGroups()?.find { it.id == gid }?.let { group ->
                 computeBlobPath(group)?.let { blob ->
                     groupBlobs[gid] = blob
-                    group.bounds.set(blob.bounds)
                 }
+                // ═══ Membres effacés : les bounds suivent les points, jamais le blob ═══
+                groupManager?.refreshBounds(group)
             }
             redrawBitmapOnly()
             imeView?.postInvalidate()
@@ -3466,23 +3467,11 @@ class MiroirIME : InputMethodService() {
                 // Synchroniser les bounds avec la position visuelle actuelle
                 val existingGroup = groupManager?.getGroup(reactivateId)
                 if (existingGroup != null) {
-                    groupBlobs[reactivateId]?.let { blob ->
-                        existingGroup.bounds.set(blob.bounds)
-                    }
+                    // ═══ Sortie d'édition = membres changés (scrub/move) : la vérité des points ═══
+                    groupManager?.refreshBounds(existingGroup)
                     // Maintenir le groupe SELECTED pour l'absorption
                     if (existingGroup.state != GroupState.SELECTED) {
                         try { groupManager?.selectGroup(reactivateId) } catch (_: Exception) {}
-                    }
-                }
-                // ═══ Étendre les bounds du groupe pour couvrir le blob visuel (plus large que le rectangle strict) ═══
-                groupBlobs[reactivateId]?.bounds?.let { blobBounds ->
-                    val gm = groupManager
-                    val g = gm?.allGroups()?.find { it.id == reactivateId }
-                    if (g != null && !blobBounds.isEmpty) {
-                        val rx = gm?.params?.spatialDistancePx?.toFloat() ?: 40f
-                        val ry = gm?.params?.spatialDistanceY?.toFloat() ?: 40f
-                        g.bounds.union(blobBounds.left - rx, blobBounds.top - ry)
-                        g.bounds.union(blobBounds.right + rx, blobBounds.bottom + ry)
                     }
                 }
                 Log.i(TAG, "🔄 Groupe ${reactivateId.take(8)} réactivé comme SELECTED")

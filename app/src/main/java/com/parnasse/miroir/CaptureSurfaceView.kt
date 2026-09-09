@@ -782,8 +782,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         if (refreshedGroup != null) {
             engine.computeBlobPath(refreshedGroup)?.let { newBlob ->
                 engine.groupBlobs[gid] = newBlob
-                refreshedGroup.bounds.set(newBlob.bounds.left, newBlob.bounds.top, newBlob.bounds.right, newBlob.bounds.bottom)
             }
+            // ═══ Membres coupés : les bounds suivent les points, jamais le blob ═══
+            engine.groupManager?.refreshBounds(refreshedGroup)
         }
 
         val firstIdx = group.strokeIds.firstOrNull()?.let { engine.inkStrokeIdToRegistryIndex[it] }
