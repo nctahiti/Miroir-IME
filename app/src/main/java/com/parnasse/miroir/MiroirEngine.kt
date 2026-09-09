@@ -1312,6 +1312,14 @@ class MiroirEngine {
                     for (t in tokens) {
                         val isPenDown = (t.flags.toInt() and VStarTokenV2.FLAG_PEN_DOWN.toInt()) != 0
                         val isPenUp   = (t.flags.toInt() and VStarTokenV2.FLAG_PEN_UP.toInt()) != 0
+                        if (VStarTokenV2.isGroupMeta(t.flags)) {
+                            // ═══ Ancre de groupe : coordonnées ABSOLUES — réinitialise la
+                            // position reconstruite, jamais un point du trait courant.
+                            // (Sans quoi l'ancre deviendrait un delta parasite : les bounds
+                            // et les points des strokes suivants déraillaient.)
+                            rx = t.dx / scaleFactor; ry = t.dy / scaleFactor
+                            continue
+                        }
                         if (isPenDown) {
                             // Début de stroke : dx/dy = position absolue × scaleFactor
                             // FLAG_PEN_UP sur un PEN_DOWN n'est PAS une fin (juste le premier point)

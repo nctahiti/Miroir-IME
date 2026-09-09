@@ -61,15 +61,18 @@ object VStarSculptor {
 
             while (!stop && read + 14 <= raw.size) {
                 val b = raw
-                val dx = ((b[read].toInt() and 0xFF) or ((b[read + 1].toInt() and 0xFF) shl 8)).toShort()
-                val dy = ((b[read + 2].toInt() and 0xFF) or ((b[read + 3].toInt() and 0xFF) shl 8)).toShort()
-                val dt = ((b[read + 4].toInt() and 0xFF) or ((b[read + 5].toInt() and 0xFF) shl 8)).toShort()
+                // ═══ BIG-ENDIAN : le v1.1 est écrit par DataOutputStream (writeShort = BE) ═══
+                // Le sculpteur lisait little-endian : dx/dy/dt/ci étaient octets-échangés
+                // → la migration produisait un déluge de coordonnées fausses.
+                val dx = (((b[read].toInt() and 0xFF) shl 8) or (b[read + 1].toInt() and 0xFF)).toShort()
+                val dy = (((b[read + 2].toInt() and 0xFF) shl 8) or (b[read + 3].toInt() and 0xFF)).toShort()
+                val dt = (((b[read + 4].toInt() and 0xFF) shl 8) or (b[read + 5].toInt() and 0xFF)).toShort()
                 val p = b[read + 6].toInt() and 0xFF
                 val az = b[read + 7].toInt() and 0xFF
                 val i2 = b[read + 8].toInt() and 0xFF
                 val ps = b[read + 9].toInt() and 0xFF
                 val h = b[read + 10]
-                val ci = ((b[read + 12].toInt() and 0xFF) or ((b[read + 13].toInt() and 0xFF) shl 8))
+                val ci = (((b[read + 12].toInt() and 0xFF) shl 8) or (b[read + 13].toInt() and 0xFF))
 
                 // ═══ FRONTIÈRE V2 : le parse 14B sur la zone 16B casse la forme v1 —
                 // ps illégal ou ci hors séquence → la suite est v2 → laisser en trace.
@@ -82,7 +85,12 @@ object VStarSculptor {
                     penDown -> 1                                                       // DÉBUT de trait
                     else -> 0                                                          // continuation
                 }
-                penDown = (ps == PS_PENUP || ps == PS_GROUP_SEP || ps == PS_GROUP_ANCRE)
+                // ═══ La main v1.1 écrit ps=PENDOWN pour CHAQUE point posé : seul le PREMIER
+                // point du trait est absolu (flags=DN) ; les suivants sont des MOVE (flags=0).
+                // Sans ce désarmement, chaque point devenait un PEN_DOWN absolu (flags=1) : le
+                // lecteur v2 lisait les deltas comme des absolus → strokes dégénérés.
+                penDown = false
+                if (ps == PS_PENUP || ps == PS_GROUP_SEP || ps == PS_GROUP_ANCRE) penDown = true
 
                 out.write(to16(dx, dy, dt, p, az, i2, ps, h, flags, ci))
                 prevCi = ci
