@@ -719,6 +719,39 @@ class MiroirEngine {
     fun navigationTotal(): Int =
         if (navMode == NavMode.PARNASSE) parnasseTotal else countPages()
 
+    /** ⚓ MARÉE 11/09 — La marque haute du bloc : le plus grand id jamais écrit
+     *  dans ce tiroir. Persistée par savePageFull dans .ci_max — l'alignement de
+     *  l'identité se dérive du BLOC, jamais de la seule page chargée. */
+    private fun readBlocCiWatermark(bd: File): Long {
+        return try {
+            val f = File(bd, ".ci_max")
+            if (!f.exists()) 0L else (f.readText().trim().toLongOrNull() ?: 0L)
+        } catch (_: Exception) { 0L }
+    }
+
+    /** ⚓ MARÉE 11/09 — Balayage borné : le max des captureIndices des groups.json
+     *  du bloc (petits fichiers, jamais les V★). Rattrape les marques absentes
+     *  (tiroirs antérieurs à .ci_max) sans lire une seule encre. */
+    private fun scanBlocGroupsMaxCi(bd: File): Long {
+        var maxCi = 0L
+        try {
+            val pages = bd.listFiles()?.filter { it.isDirectory && it.name.startsWith("page_") } ?: return 0L
+            for (p in pages) {
+                val g = File(p, "groups.json")
+                if (!g.exists() || g.length() > 200_000) continue
+                val arr = try { org.json.JSONObject(g.readText()).optJSONArray("groups") } catch (_: Exception) { null } ?: continue
+                for (i in 0 until arr.length()) {
+                    val ciArr = arr.getJSONObject(i).optJSONArray("captureIndices") ?: continue
+                    for (j in 0 until ciArr.length()) {
+                        val inkId = ciArr.getLong(j) + 1
+                        if (inkId > maxCi) maxCi = inkId
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+        return maxCi
+    }
+
     /** Lit le note_id Parnasse gravé dans le groups.json d'une page. */
     fun readPageNoteId(pageIndex: Int): String? {
         val bd = blockDir ?: return null
@@ -1132,6 +1165,15 @@ class MiroirEngine {
                 for (t in tokens) dataRegion.append(t)
             }
             dataRegion.close()
+            // ⚓ MARÉE 11/09 — LA MARQUE HAUTE DU BLOC : elle survit aux sessions.
+            // L'alignement par page seul ramenait le compteur sous la plage brûlée
+            // du tiroir ; la marque ne redescend jamais.
+            try {
+                val f = File(bd, ".ci_max")
+                val ecrit = inkStrokeIdToRegistryIndex.keys.maxOrNull() ?: 0L
+                val ancienne = if (f.exists()) (f.readText().trim().toLongOrNull() ?: 0L) else 0L
+                if (ecrit > ancienne) f.writeText(ecrit.toString())
+            } catch (_: Exception) { }
             Log.i(TAG, "savePageFull page=$currentPageIndex vstar=${vstarFile.length()}B strokes=$allStrokes")
         } else if (vstarFile.exists() && !pageLoaded) {
             // ⚠️ GARDIEN DE L'ŒUVRE (28/08) — le registre est vide parce que la
@@ -1358,8 +1400,19 @@ class MiroirEngine {
             // l'absorption des groupes rechargés meurt — les « frères » fantômes).
             var maxInkId = 0L
             for (id in inkStrokeIdToRegistryIndex.keys) if (id > maxInkId) maxInkId = id
-            if (maxInkId >= inkStrokeIdCounter) inkStrokeIdCounter = maxInkId
-            Log.d(TAG, "Alignement identité : inkStrokeIdCounter=$inkStrokeIdCounter (max ci+1=$maxInkId)")
+            // ⚓ MARÉE 11/09 — L'ALIGNEMENT EST PAR BLOC, PAS PAR PAGE.
+            // Les captureIndices sont pérennes PAR BLOC : charger une page « basse »
+            // (ci jusqu'à 88) ne doit jamais ramener le compteur sous une plage déjà
+            // brûlée par une autre page du même tiroir (ci jusqu'à 699) — sinon les
+            // traits neufs naissent sur des ids déjà pris, les groupes évincés
+            // pointent dans le vide et l'absorption meurt.
+            // La marque est triple : la page chargée + la marque persistée du bloc
+            // (.ci_max, écrite à chaque save) + le balayage borné des groups.json.
+            val marqueBloc = readBlocCiWatermark(bd)
+            val balayage = scanBlocGroupsMaxCi(bd)
+            val maxBloc = maxOf(maxInkId, marqueBloc, balayage)
+            if (maxBloc >= inkStrokeIdCounter) inkStrokeIdCounter = maxBloc
+            Log.d(TAG, "Alignement identité (bloc) : inkStrokeIdCounter=$inkStrokeIdCounter (page=$maxInkId, marque=$marqueBloc, balayage=$balayage)")
 
             // ── Groupes & labels ──
             loadGroupsJson(dir, ciToRi)

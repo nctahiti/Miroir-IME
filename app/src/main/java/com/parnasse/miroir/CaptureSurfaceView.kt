@@ -510,6 +510,25 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         enterCorrectionMode(gid)
     }
 
+    /** ⚓ MARÉE 11/09 — Le rang de la lettre désignée par un trait de correction :
+     *  sa position X sur le mot, au prorata du label. Aucune case active n'est
+     *  requise — la plume écrit à l'endroit de la lettre à corriger, et le geste
+     *  nomme la cible. Rend null si rien ne permet de trancher (jamais de devinette). */
+    private fun plumeTargetIndex(orig: InkGroup?, temp: InkGroup?, label: String): Int? {
+        if (orig == null || temp == null || label.isEmpty()) return null
+        val b = orig.bounds
+        if (b.width() <= 0f) return null
+        val pts = temp.strokeIds.flatMap { sid ->
+            engine.inkStrokeIdToRegistryIndex[sid]?.let { ri ->
+                engine.strokeRegistry.getOrNull(ri)?.points ?: emptyList()
+            } ?: emptyList()
+        }
+        if (pts.isEmpty()) return null
+        val x = pts.map { it.first }.average().toFloat()
+        val frac = ((x - b.left) / b.width()).coerceIn(0f, 0.999f)
+        return (frac * label.length).toInt().coerceIn(0, label.length - 1)
+    }
+
     /** Applique le résultat d'inférence en mode correction (remplacement ou insertion). */
     fun applyCorrectionResult(result: String, tempGroupFirstIdx: Int) {
         if (!isCorrecting()) return
@@ -530,6 +549,11 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                                origLabel.substring(correctLetterIndex + 1)
                 engine.groupLabels[origIdx] = newLabel
                 correctionLabel = newLabel
+                // ⚓ MARÉE 11/09 — LA CORRECTION EST UNE MODIFICATION DE LA PAGE.
+                // Sans ce drapeau, un label corrigé sans nouveau trait restait en
+                // mémoire : savePageFull (conditionnel) sautait le disque et la
+                // correction ne rejoignait jamais le Parnasse.
+                engine.pageDirty = true
                 Log.i(TAG, "Correction: '$origLabel' → '$newLabel' (lettre #$correctLetterIndex: '$corrected')")
             }
         } else if (insertAtIndex >= 0) {
@@ -538,11 +562,31 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                            origLabel.substring(insertAtIndex)
             engine.groupLabels[origIdx] = newLabel
             correctionLabel = newLabel
+            engine.pageDirty = true  // ⚓ MARÉE 11/09 — l'insertion aussi est une modification
             Log.i(TAG, "Insertion: '$origLabel' → '$newLabel' (position #$insertAtIndex: '$result')")
         } else {
-            // 🛡️ MESURE 07/09 — trait orphelin (aucune case active) : le groupe
-            // temporaire est jeté tel quel — jamais de baptême d'un trait de correction.
-            Log.i(TAG, "Correction: résultat orphelin '$result' — groupe jeté, pas de label")
+            // ⚓ MARÉE 11/09 — LA PLUME DÉSIGNE SA LETTRE.
+            // Aucune case active : hier le trait était jeté sans un mot (« orphelin,
+            // groupe jeté ») — la correction écrite à la main semblait morte, et
+            // l'encre disparaissait sous les yeux. La lettre visée se déduit de la
+            // géométrie du geste : la position du trait sur le mot donne son rang.
+            val tempGroupP = gm.allGroupsFull().find { g ->
+                g.strokeIds.firstOrNull()?.let { engine.inkStrokeIdToRegistryIndex[it] == tempGroupFirstIdx } == true
+            }
+            val ciblePlume = plumeTargetIndex(gm.allGroupsFull().find { it.id == correctionGroupId }, tempGroupP, origLabel)
+            if (ciblePlume != null) {
+                val corrected = result.first().toString()
+                val newLabel = origLabel.substring(0, ciblePlume) + corrected + origLabel.substring(ciblePlume + 1)
+                engine.groupLabels[origIdx] = newLabel
+                correctionLabel = newLabel
+                engine.pageDirty = true
+                Log.i(TAG, "Correction par la plume: '$origLabel' → '$newLabel' (lettre #$ciblePlume='$corrected' désignée par le trait)")
+            } else {
+                // 🛡️ MESURE 07/09 — trait sans cible : aucune lettre désignée, le
+                // groupe temporaire est jeté tel quel — jamais de baptême d'un
+                // trait de correction.
+                Log.i(TAG, "Correction: résultat orphelin '$result' — aucune lettre désignée sous le trait, groupe jeté")
+            }
         }
         // Nettoyer les strokes de correction
         // ⚠️ allGroupsFull (pas allGroups) : le groupe temporaire est déjà ÉVINCÉ
