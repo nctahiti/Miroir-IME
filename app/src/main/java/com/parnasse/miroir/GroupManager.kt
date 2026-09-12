@@ -296,17 +296,24 @@ class GroupManager(
      *  (rien n'a changé) et jamais depuis les blobs (l'ellipse est visuelle). */
     internal fun refreshBounds(group: InkGroup) {
         val provider = pointProvider ?: return
-        group.bounds.setEmpty()
         var totalPts = 0
+        var placed = false
         for (sid in group.strokeIds) {
             val pts = provider(sid)
             if (pts == null) { Log.d(TAG, "💠 BOUNDS sid=$sid → null (introuvable)"); continue }
             if (pts.isEmpty()) { Log.d(TAG, "💠 BOUNDS sid=$sid → 0 pts"); continue }
             totalPts += pts.size
             for ((px, py) in pts) {
-                if (group.bounds.isEmpty) group.bounds.set(px, py, px, py)
+                if (!placed) { group.bounds.set(px, py, px, py); placed = true }
                 else group.bounds.union(px, py)
             }
+        }
+        // ═══ Aucun point disponible : la dérivée est indéterminée — ne pas écraser
+        //     celle qu'on connaît (strokes archivés ≠ bounds disparues).
+        if (!placed) {
+            if (group.strokeIds.isEmpty()) group.bounds.setEmpty()
+            else Log.d(TAG, "💠 BOUNDS ${group.id.take(8)}: aucun point (${group.strokeIds.size} strokes) — bounds conservées")
+            return
         }
         Log.d(TAG, "💠 BOUNDS ${group.id.take(8)}: ${group.strokeIds.size} strokes → ${totalPts} pts → ${group.bounds.toShortString()}")
     }
