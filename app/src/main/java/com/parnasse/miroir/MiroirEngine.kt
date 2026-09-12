@@ -136,12 +136,20 @@ class MiroirEngine {
             val tmpDir = File(context.filesDir, "groups"); tmpDir.mkdirs()
             it.persistence = GroupPersistence(File(tmpDir, "current.groups"))
             // ═══ Archivage des strokes quand un groupe passe LOADED→STORED ═══
-            // Les strokes sont déjà rastérisés dans le bitmap → on les marque
-            // pour que redrawBitmapInternal() les ignore.
+            // « Déjà rastérisé dans le bitmap » — le drapeau DIT que l'encre est
+            // dans le bitmap, et redrawBitmapInternal() (INCR) ne redessine jamais
+            // un archivé : il faut donc que ce soit VRAI au moment où il se lève.
+            // ⚠️ MARÉE 12/09 — sans ce geste, l'encre meurt à la première bascule
+            // qui remplace ou efface le bitmap (effigie PNG de la matrice,
+            // clearPage, scrub) : « les strokes ne s'affichent pas ». On rastérise
+            // d'abord, on archive ensuite — dans le même souffle, sur le fil de l'UI.
             it.onGroupEvicted = { group ->
-                for (sid in group.strokeIds) {
-                    val ri = inkStrokeIdToRegistryIndex[sid] ?: continue
-                    strokeRegistry.getOrNull(ri)?.isArchived = true
+                uiHandler.post {
+                    redrawBitmapInternal()   // rastériser AVANT de lever le drapeau
+                    for (sid in group.strokeIds) {
+                        val ri = inkStrokeIdToRegistryIndex[sid] ?: continue
+                        strokeRegistry.getOrNull(ri)?.isArchived = true
+                    }
                 }
                 pageDirty = true  // ⛪ MARÉE 30/08 — les états changent : le save écrira.
             }
@@ -645,6 +653,14 @@ class MiroirEngine {
                         // « cannot erase immutable bitmaps » (crash clearPage).
                         // La LECTURE pose une copie MUTABLE — la page vit encore.
                         bitmap = bmp.copy(android.graphics.Bitmap.Config.ARGB_8888, true)
+                        // ═══ LE PINCEAU SUIT LE BITMAP (MARÉE 12/09) ═══
+                        // bitmapCanvas restait posé sur l'ANCIEN bitmap : dès qu'une
+                        // effigie se posait, tous les redraws partaient dans l'orphelin
+                        // et l'écran (qui affiche le NOUVEAU bitmap) ne montrait plus
+                        // jamais l'encre — ni celle qu'on chargeait, ni celle qu'on
+                        // écrivait. Seules les étiquettes, dessinées en direct sur la
+                        // toile de la vue, restaient visibles. On repose le pinceau.
+                        bitmapCanvas = Canvas(bitmap!!)
                         redrawBitmapInternal()
                         Log.i(TAG, "🧭 MATRICE: effigie affichée (${cap.take(30)}… v=$upd)")
                     } else {
@@ -755,11 +771,19 @@ class MiroirEngine {
     /** Lit le note_id Parnasse gravé dans le groups.json d'une page. */
     fun readPageNoteId(pageIndex: Int): String? {
         val bd = blockDir ?: return null
-        val groupsFile = File(bd, "page_$pageIndex/groups.json")
-        if (!groupsFile.exists()) return null
-        return try {
-            org.json.JSONObject(groupsFile.readText()).optString("note_id", null)
+        val dir = File(bd, "page_$pageIndex")
+        // ═══ LES DEUX LIENS (MARÉE 12/09) ═══ La sentinelle les lit tous les
+        // deux depuis toujours (« les deux liens lus : groups.json + .note_id ») ;
+        // la résolution de la maison, elle, n'en lisait qu'un. Une page dont le
+        // groups.json a perdu sa lie était déclarée « sans maison » : la MATRICE
+        // (l'effigie PNG) parlait à sa place et l'encre semblait disparue — alors
+        // que la V★ et le .note_id étaient bien là. On lit le json, puis le cap.
+        val parJson = try {
+            val gf = File(dir, "groups.json")
+            if (gf.exists()) org.json.JSONObject(gf.readText()).optString("note_id", null)?.takeUnless { it.isEmpty() } else null
         } catch (_: Exception) { null }
+        if (parJson != null) return parJson
+        return File(dir, ".note_id").takeIf { it.exists() }?.readText()?.trim()?.takeUnless { it.isEmpty() }
     }
 
     /** 🧭 SENTINELLE — lit la forme des résidences (les deux liens + la matière).
@@ -1188,7 +1212,10 @@ class MiroirEngine {
         }
 
         // ── Bitmap PNG ──
-        redrawBitmapInternal()  // synchroniser avant sauvegarde
+        // ═══ L'EXPORT EST UNE DÉRIVÉE DU REGISTRE (MARÉE 12/09) : le PNG écrit
+        // doit porter TOUTE l'encre — pas ce que le cache a bien voulu garder
+        // (l'INCR saute les archivés ; un bitmap recyclé entre-temps est blanc).
+        redrawBitmapInternal(fullRedraw = true)  // synchroniser avant sauvegarde
         bitmap?.let {
             FileOutputStream(File(dir, "bitmap.png")).use { out ->
                 it.compress(Bitmap.CompressFormat.PNG, 90, out)
@@ -1522,13 +1549,18 @@ class MiroirEngine {
             }
             val groupsFile = File(dir, "groups.json")
             // ═══ Conserver le note_id du baptême (sinon écrasé au 1er save) ═══
+            // ⚠️ MARÉE 12/09 — LA LIE S'ÉCRIT AUSSI : l'identité connue de la page
+            // (parnasseNoteId) prime sur l'héritage. Sans ce geste, un groups.json
+            // né sans note_id le restait à jamais et la page devenait « sans
+            // maison » (l'effigie de la MATRICE à la place de la V★).
             val existingNoteId = try {
                 if (groupsFile.exists()) org.json.JSONObject(groupsFile.readText()).optString("note_id", null) else null
             } catch (_: Exception) { null }
+            val lie = parnasseNoteId?.takeUnless { it.isEmpty() } ?: existingNoteId
             java.io.FileWriter(groupsFile).use { w ->
                 val root = org.json.JSONObject()
                 root.put("groups", arr)
-                if (!existingNoteId.isNullOrEmpty()) root.put("note_id", existingNoteId)
+                if (!lie.isNullOrEmpty()) root.put("note_id", lie)
                 w.write(root.toString(2))
             }
             Log.i(TAG, "groups.json: ${allGroups.size} groupes sauvegardes")

@@ -145,6 +145,13 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             engine.bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             engine.bitmapCanvas = Canvas(engine.bitmap!!)
             engine.bitmap?.eraseColor(Color.WHITE)
+            // ═══ LE BITMAP EST NEUF — Y REGRAVER L'ENCRE (MARÉE 12/09) ═══
+            // Les traits archivés y étaient (« déjà rastérisés ») : le nouveau
+            // bitmap est blanc, on re-dérive donc du registre — la vérité.
+            // Sans ce geste, l'encre disparaît à chaque changement de taille de
+            // la vue (lancement, layout, bascule EPD) : « seuls les blobs
+            // apparaissent », et il fallait ouvrir une autre note pour la voir.
+            engine.redrawBitmapInternal(fullRedraw = true)
             engine.updateTemplateSpacing(context, h)
         }
     }
