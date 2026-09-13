@@ -1042,17 +1042,16 @@ class MiroirIME : InputMethodService() {
             val spacing = CalibrationActivity.getTemplateSpacing(this@MiroirIME)
             val firstLine = cachedTemplateLines.firstOrNull() ?: (spacing * 2f)
 
-            var applied = 0
+            var kept = 0
             var generated = 0
             for (mdmA in mdmAnchors) {
                 val targetLabel = mdmA.label
                 val firstIdx = groupLabels.entries.find { it.value.equals(targetLabel, ignoreCase = true) }?.key
                 if (firstIdx != null) {
-                    // Groupe existant → préserver X, ne repositionner que Y
-                    val currentAnchor = groupAnchor[firstIdx] ?: continue
-                    val newY = firstLine + mdmA.lineIndex * spacing
-                    groupAnchor[firstIdx] = Pair(currentAnchor.first, newY)
-                    applied++
+                    // Groupe existant → NE RIEN recalculer (doctrine 13/09) : l'encre est là,
+                    // l'étiquette reste sur son ancre. (Avant : l'Y était écrasé par
+                    // firstLine + lineIndex*spacing → labels sautés au rechargement.)
+                    kept++
                 } else {
                     // @mot sans groupe → générer les strokes depuis le cache
                     val strokes = generatedStrokes[targetLabel.lowercase()] ?: continue
@@ -1062,8 +1061,8 @@ class MiroirIME : InputMethodService() {
             }
 
             lastMdmApplied = modTime
-            if (applied > 0) {
-                Log.i(TAG, "MDM layout appliqué: $applied/${mdmAnchors.size} groupes repositionnés")
+            if (generated > 0) {
+                Log.i(TAG, "MDM layout appliqué: $kept déjà en place (non recalculés), $generated générés (/${mdmAnchors.size} ancres)")
                 rebuildBitmap()
                 imeView?.invalidate()
             }

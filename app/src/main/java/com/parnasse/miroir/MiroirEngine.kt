@@ -1733,7 +1733,9 @@ class MiroirEngine {
     /**
      * Charge un MDM (Geppetto ou fichier) en strokes synthétiques.
      * Pour chaque @mot :
-     *   - Si le groupe existe déjà → repositionne Y seulement
+     *   - Si le groupe existe déjà → NE PAS le recalculer (doctrine 13/09 : l'encre
+     *     est là, l'étiquette reste sur son encre ; avant, l'Y était écrasé par
+     *     firstLine + lineIndex*spacing → labels sautés au rechargement)
      *   - Sinon → génère des strokes synthétiques, crée le groupe
      *
      * Règles de positionnement :
@@ -1742,7 +1744,7 @@ class MiroirEngine {
      *   - Retour à la ligne automatique si le mot dépasse la largeur dispo
      *
      * @param mdmSrc  Texte MDM à parser et appliquer
-     * @return Nombre d'ancres appliquées (groupes repositionnés ou créés)
+     * @return Nombre d'ancres traitées (déjà en place — non recalculées — ou créées)
      */
     fun loadFromMdm(mdmSrc: String): Int {
         if (mdmSrc.isBlank()) return 0
@@ -1768,7 +1770,7 @@ class MiroirEngine {
             marginX = 60f
         )
 
-        var applied = 0
+        var kept = 0        // groupes déjà en place — NON recalculés (doctrine 13/09)
         var generated = 0
         var lineIndex = 0
         var cursorX = generator.marginX  // position X courante sur la ligne
@@ -1778,14 +1780,16 @@ class MiroirEngine {
         for (mdmA in mdmAnchors) {
             val targetLabel = mdmA.label
 
-            // ── Groupe existant ? → repositionner Y seulement ──
+            // ── Groupe existant ? → NE RIEN recalculer (doctrine 13/09) ──
+            // L'encre est là, l'ancre réelle est là : l'étiquette reste sur son encre.
+            // (Avant : newY = firstLine + lineIndex*spacing écrasait l'Y → labels sautés
+            // d'une à plusieurs lignes au rechargement, et les mots répétés (« les »,
+            // « page »…) tiraient tous le PREMIER groupe de leur nom vers la dernière
+            // occurrence. « Ne pas recalculer ce qui n'a pas changé. »)
             val existingFirstIdx = groupLabels.entries
                 .find { it.value.equals(targetLabel, ignoreCase = true) }?.key
             if (existingFirstIdx != null) {
-                val currentAnchor = groupAnchor[existingFirstIdx] ?: continue
-                val newY = firstLine + mdmA.lineIndex * spacing
-                groupAnchor[existingFirstIdx] = Pair(currentAnchor.first, newY)
-                applied++
+                kept++
                 continue
             }
 
@@ -1855,11 +1859,12 @@ class MiroirEngine {
             generated++
         }
 
-        val total = applied + generated
+        val total = kept + generated
         if (total > 0) {
-            Log.i(TAG, "MDM→strokes: $applied repositionnés, $generated générés (${total}/${mdmAnchors.size} ancres)")
-            redrawBitmapInternal(fullRedraw = true)
+            Log.i(TAG, "MDM→strokes: $kept déjà en place (non recalculés), $generated générés (${total}/${mdmAnchors.size} ancres)")
         }
+        // Rien n'a bougé s'il n'y a que des « déjà en place » : pas de redraw.
+        if (generated > 0) redrawBitmapInternal(fullRedraw = true)
         return total
     }
 
