@@ -660,6 +660,10 @@ class CaptureActivity : Activity() {
         // pendant notre absence, on la suit par identité — jamais par position. ═══
         if (engine.navMode == NavMode.PARNASSE) {
             followCoeurFocus()
+            // ⚓ La contre-gravure veille : la page affichée portera toujours la
+            // maison que le Cœur lui nomme (toutes les 5 s, sans naviguer).
+            uiHandler.removeCallbacks(contreGravure)
+            uiHandler.postDelayed(contreGravure, 5000)
         }
         // Précharger les bibliothèques et leurs blocs Parnasse en arrière-plan
         Thread {
@@ -711,8 +715,29 @@ class CaptureActivity : Activity() {
         }.start()
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // LA CONTRE-GRAVURE (marée 14/09) — « aucune capture sans identité ni place »
+    // Le Cœur a nommé une note (le focus). Si le tiroir n'a plus sa maison — lien
+    // mort, effacé, jamais gravé — la COPIE SD dit où elle habite et le Miroir
+    // regrave les DEUX liens. Zéro réseau, zéro navigation : la forme seulement.
+    // ═══════════════════════════════════════════════════════════════════
+    private val contreGravure = object : Runnable {
+        override fun run() {
+            try { veillerMaisonDuFocus() } catch (_: Exception) {}
+            uiHandler.postDelayed(this, 5000)
+        }
+    }
+
+    private fun veillerMaisonDuFocus() {
+        if (engine.navMode != NavMode.PARNASSE) return
+        val focus = engine.parnasseNoteId ?: return
+        if (engine.findPageByNoteId(focus) >= 0) return   // la maison est là — rien à faire
+        engine.healMaisonDepuisSD(focus)                  // la copie SD parle
+    }
+
     override fun onPause() {
         super.onPause()
+        uiHandler.removeCallbacks(contreGravure)
         // ═══ Export complet au départ : bitmap.png + V★ + groupes + MDM ═══
         engine.savePageFull()
     }

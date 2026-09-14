@@ -768,22 +768,46 @@ class MiroirEngine {
         return maxCi
     }
 
-    /** Lit le note_id Parnasse gravé dans le groups.json d'une page. */
+    /** Lit le note_id Parnasse gravé dans le groups.json d'une page — les DEUX
+     *  liens sont lus (json puis cap). ⚓ UNE SEULE MAIN (14/09) : la lecture vit
+     *  dans IdentitePage, partagée avec l'IME — plus deux copies. */
     fun readPageNoteId(pageIndex: Int): String? {
         val bd = blockDir ?: return null
-        val dir = File(bd, "page_$pageIndex")
-        // ═══ LES DEUX LIENS (MARÉE 12/09) ═══ La sentinelle les lit tous les
-        // deux depuis toujours (« les deux liens lus : groups.json + .note_id ») ;
-        // la résolution de la maison, elle, n'en lisait qu'un. Une page dont le
-        // groups.json a perdu sa lie était déclarée « sans maison » : la MATRICE
-        // (l'effigie PNG) parlait à sa place et l'encre semblait disparue — alors
-        // que la V★ et le .note_id étaient bien là. On lit le json, puis le cap.
-        val parJson = try {
-            val gf = File(dir, "groups.json")
-            if (gf.exists()) org.json.JSONObject(gf.readText()).optString("note_id", null)?.takeUnless { it.isEmpty() } else null
-        } catch (_: Exception) { null }
-        if (parJson != null) return parJson
-        return File(dir, ".note_id").takeIf { it.exists() }?.readText()?.trim()?.takeUnless { it.isEmpty() }
+        return IdentitePage.lire(File(bd, "page_$pageIndex"))
+    }
+
+    /** ⚓ LA CONTRE-GRAVURE (marée 14/09) — « aucune capture sans identité ni place ».
+     *  Quand une note n'a plus de maison dans le tiroir (lien mort, absent, effacé),
+     *  la COPIE SD — le pont, écrite à chaque save — dit où elle habite. On regrave
+     *  alors les DEUX liens internes (la garde des maisons habitées protège la matière).
+     *  La boucle est fermée : la contrepartie visible (le dossier) se répare seule
+     *  à chaque fois que le Miroir cherche où lire/écrire — zéro réseau. */
+    fun healMaisonDepuisSD(noteId: String): Int {
+        val bd = blockDir ?: return -1
+        val sdRoot = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
+            "parnasse/miroir/${bd.name}")
+        if (!sdRoot.exists()) return -1
+        val pages = bd.listFiles()?.filter { it.isDirectory && it.name.startsWith("page_") } ?: return -1
+        for (pageDir in pages) {
+            val idx = pageDir.name.removePrefix("page_").toIntOrNull() ?: continue
+            val sdCap = File(File(sdRoot, "page_$idx"), ".note_id")
+            val dit = try { if (sdCap.exists()) sdCap.readText().trim() else null } catch (_: Exception) { null }
+            if (!dit.isNullOrEmpty() && dit == noteId) {
+                Log.i(TAG, "🧭 Contre-gravure: la copie SD dit que ${noteId.take(8)} habite page_$idx — les deux liens regravés")
+                baptiserPage(idx, noteId)
+                return idx
+            }
+        }
+        return -1
+    }
+
+    /** Écrit l'adresse d'une note dans une page nommée (le geste du rituel, outillé). */
+    fun alignerMaison(pageIndex: Int, noteId: String) {
+        if (pageIndex < 0) return
+        if (blockDir == null) return
+        if (readPageNoteId(pageIndex) == noteId) return
+        baptiserPage(pageIndex, noteId)
     }
 
     /** 🧭 SENTINELLE — lit la forme des résidences (les deux liens + la matière).
@@ -844,7 +868,11 @@ class MiroirEngine {
             // L'identité ne bouge jamais : chaque dossier porte son note_id gravé.
             val nid = parnasseNoteId
             if (!nid.isNullOrEmpty()) {
-                val idx = findPageByNoteId(nid)
+                var idx = findPageByNoteId(nid)
+                // ⚓ LA CONTRE-GRAVURE : si le tiroir a perdu la maison, la copie SD
+                // (le pont) dit où la note habite — on regrave les deux liens, puis
+                // on relit. La lecture ne part JAMAIS sur une page sans maison.
+                if (idx < 0) idx = healMaisonDepuisSD(nid)
                 if (idx >= 0) return idx
                 // Note inconnue du tiroir (jamais visitée/écrite) → page vierge :
                 // jamais le voisin, jamais le limbe. La matière naîtra à l'écriture
@@ -866,14 +894,8 @@ class MiroirEngine {
         val bd = blockDir ?: return
         val pageDir = File(bd, "page_$pageIndex")
         if (!pageDir.exists()) return  // page vierge — baptisée à sa création
-        val groupsFile = File(pageDir, "groups.json")
         try {
-            val root = if (groupsFile.exists()) {
-                org.json.JSONObject(groupsFile.readText())
-            } else {
-                org.json.JSONObject()
-            }
-            val deja = root.optString("note_id", null)
+            val deja = IdentitePage.lire(pageDir)
             // ⚠️ MARÉE 30/08 — la course d'identité : deux dictées en rafale
             // (bascule en rafale sur la même position) font changer la maison
             // de nom — la matière du poème précédent se lie alors à la mauvaise
@@ -893,13 +915,8 @@ class MiroirEngine {
                 Log.w(TAG, "⛪ Page $pageIndex déjà baptisée avec $deja — ne pas écraser par $noteId")
                 return
             }
-            root.put("note_id", noteId)
-            groupsFile.writeText(root.toString())
-            // ═══ Le pont : le watcher du Cœur lit `.note_id` (convention SD) —
-            // une seule identité par page, lisible des deux rives. ═══
-            try {
-                File(pageDir, ".note_id").writeText(noteId)
-            } catch (_: Exception) {}
+            // ⚓ UNE SEULE MAIN (14/09) : les DEUX liens se gravent ensemble.
+            IdentitePage.graver(pageDir, noteId)
             Log.i(TAG, "⛪ Page $pageIndex baptisée: note_id=$noteId")
         } catch (e: Exception) {
             Log.w(TAG, "baptiserPage: ${e.message}")
@@ -1522,7 +1539,17 @@ class MiroirEngine {
     private fun saveGroupsJson(dir: File) {
         try {
             val gm = groupManager ?: return
-            val allGroups = gm.allGroupsFull().filter { it.strokeIds.isNotEmpty() }
+            // ⚓ MARÉE 14/09 — LA FORME SUIT LA MATIÈRE : un groupe ne s'écrit que si
+            // au moins un de ses strokes VIT dans la page chargée. Sans ce filtre,
+            // la maison d'une page sans encre recevait les groupes d'une session
+            // d'avant (28 groupes orphelins vus sur page_13, bloc vide — des
+            // fantômes dans une maison neuve, épreuve du 14/09).
+            val vivants = strokeRegistry.indices
+                .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() }
+                .toHashSet()
+            val allGroups = gm.allGroupsFull().filter { g ->
+                g.strokeIds.isNotEmpty() && g.strokeIds.any { sid -> inkStrokeIdToRegistryIndex[sid] in vivants }
+            }
             if (allGroups.isEmpty()) return
             val arr = org.json.JSONArray()
             for (g in allGroups) {

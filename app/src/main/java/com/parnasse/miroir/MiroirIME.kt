@@ -2420,20 +2420,15 @@ class MiroirIME : InputMethodService() {
         val bd = blockDir ?: return
         val pageDir = java.io.File(bd, "page_$pageIndex")
         if (!pageDir.exists()) return  // page encore vierge — baptisée à sa création (saveGroupsJson)
-        val groupsFile = java.io.File(pageDir, "groups.json")
         try {
-            val root = if (groupsFile.exists()) {
-                org.json.JSONObject(groupsFile.readText())
-            } else {
-                org.json.JSONObject()
-            }
-            val deja = root.optString("note_id", null)
+            val deja = IdentitePage.lire(pageDir)
             if (deja != null && deja.isNotEmpty() && deja != noteId) {
                 Log.w(TAG, "⛪ Page $pageIndex déjà baptisée avec $deja — ne pas écraser par $noteId")
                 return
             }
-            root.put("note_id", noteId)
-            groupsFile.writeText(root.toString())
+            // ⚓ UNE SEULE MAIN (14/09) : les DEUX liens se gravent ensemble —
+            // l'IME n'en gravait qu'un (groups.json) : la moisson ne l'apprenait pas.
+            IdentitePage.graver(pageDir, noteId)
             Log.i(TAG, "⛪ Page $pageIndex baptisée: note_id=$noteId")
         } catch (e: Exception) {
             Log.w(TAG, "baptiserPage: ${e.message}")
@@ -4429,17 +4424,11 @@ class MiroirIME : InputMethodService() {
     /** TRANSMUTATION — Pousse le texte complet vers le Cœur après le pipeline d'inférence.
      *  Appelé quand le timer d'inactivité a expiré et tous les groupes sont reconnus.
      *  Le Cœur stocke le texte dans miroirState → Flutter le lit et met à jour la note. */
-    /** Lit le note_id depuis le groups.json d'une page spécifique. */
+    /** Lit le note_id d'une page — ⚓ UNE SEULE MAIN (14/09) : la lecture des DEUX
+     *  liens vit dans IdentitePage, partagée avec le Moteur (plus deux copies). */
     private fun readPageNoteId(pageIndex: Int): String? {
         val dir = blockDir ?: return null
-        val pageDir = java.io.File(dir, "page_$pageIndex")
-        if (!pageDir.exists()) return null
-        val groupsFile = java.io.File(pageDir, "groups.json")
-        if (!groupsFile.exists()) return null
-        return try {
-            val json = org.json.JSONObject(groupsFile.readText())
-            json.optString("note_id", null)
-        } catch (_: Exception) { null }
+        return IdentitePage.lire(java.io.File(dir, "page_$pageIndex"))
     }
 
     /** Fetch immédiat du note_id depuis le Cœur — évite le délai d'idle de 3s après restart. */
