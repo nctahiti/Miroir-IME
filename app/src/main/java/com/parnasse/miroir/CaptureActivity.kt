@@ -357,7 +357,8 @@ class CaptureActivity : Activity() {
                             }
                         }
                         if (!engine.groupLabels.containsKey(firstIdx)) {
-                            engine.groupLabels[firstIdx] = result
+                            // ⚖️ La sentinelle : l'inférence pose — jamais sur un corrigé.
+                            engine.relecture.poserLabelInfere(firstIdx, result)
                             val anchor = registrySnapshot.getOrNull(firstIdx)?.points?.firstOrNull()
                             if (anchor != null) engine.groupAnchor[firstIdx] = anchor
                             Log.i(TAG, "Reconnu: '$result' (groupe ${groupId.take(8)}, ${indices.size} strokes)")

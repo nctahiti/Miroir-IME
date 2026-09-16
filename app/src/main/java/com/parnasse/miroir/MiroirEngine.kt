@@ -93,7 +93,10 @@ class MiroirEngine {
 
     // ── Groupes ────────────────────────────────────────────────────────
     var groupManager: GroupManager? = null; private set
-    val groupLabels = mutableMapOf<Int, String>()
+    // ── La relecture — l'encre et le sens ont deux régimes (voir Relecture.kt) ──
+    // Une seule source : le label du groupe (nominal + courant) vit dans la sentinelle.
+    val relecture = Relecture()
+    val groupLabels get() = relecture.labels
     val groupAnchor = mutableMapOf<Int, Pair<Float, Float>>()
     val groupBlobs = mutableMapOf<String, BlobData>()
     val inferredGroupFirstIdxs = mutableSetOf<Int>()
@@ -252,7 +255,7 @@ class MiroirEngine {
             if (group.strokeIds.size > 1) {
                 val firstIdx = group.strokeIds.firstOrNull()
                     ?.let { inkStrokeIdToRegistryIndex[it] }
-                if (firstIdx != null) groupLabels.remove(firstIdx)
+                if (firstIdx != null) relecture.retirer(firstIdx)
             }
         }
         return group
@@ -435,7 +438,7 @@ class MiroirEngine {
         groupBlobs.clear()
         strokeRegistry.clear()
         inkStrokeIdToRegistryIndex.clear()
-        groupLabels.clear()
+        relecture.oublier()
         groupAnchor.clear()
         blockDir = null
     }
@@ -1017,7 +1020,7 @@ class MiroirEngine {
         groupBlobs.clear()
         strokeRegistry.clear()
         inkStrokeIdToRegistryIndex.clear()
-        groupLabels.clear()
+        relecture.oublier()
         groupAnchor.clear()
         // Effacer le bitmap sans le détruire (reste utilisable pour redrawBitmapOnly)
         bitmap?.eraseColor(android.graphics.Color.WHITE)
@@ -1135,7 +1138,7 @@ class MiroirEngine {
         if (!dir.exists()) return false
         groupManager?.clearAll()
         groupBlobs.clear(); strokeRegistry.clear(); inkStrokeIdToRegistryIndex.clear()
-        groupLabels.clear(); groupAnchor.clear()
+        relecture.oublier(); groupAnchor.clear()
         val vstarFile = File(dir, "page.vstar")
         if (!vstarFile.exists()) return false
         // V★ load — minimal
@@ -1366,7 +1369,7 @@ class MiroirEngine {
             groupBlobs.clear()
             strokeRegistry.clear()
             inkStrokeIdToRegistryIndex.clear()
-            groupLabels.clear()
+            relecture.oublier()
             groupAnchor.clear()
 
             // ── Bitmap : reconstruit depuis les strokes (pas depuis PNG) ──

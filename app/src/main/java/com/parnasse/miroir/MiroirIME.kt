@@ -109,12 +109,14 @@ class MiroirIME : InputMethodService() {
 
     // ── GroupManager — groupement spatial par blob ─────────────────────
     private var groupManager: GroupManager? = null
-    // Map firstIdx → texte reconnu (labels) — firstIdx = index stable dans strokeRegistry (tombstones)
-    private val groupLabels = mutableMapOf<Int, String>()
+    // ── La relecture — l'encre et le sens ont deux régimes (voir Relecture.kt) ──
+    // Une seule source : le label du groupe (courant + nominal) vit dans la sentinelle.
+    // `groupLabels` et `originalLabels` n'en sont que les vues — personne n'en garde copie.
+    private val relecture = Relecture()
+    private val groupLabels get() = relecture.labels
+    private val originalLabels get() = relecture.nominaux
     private val controlledLabels = mutableSetOf<Int>()  // labels marqués comme contrôlés (📌)
     private val personalLabels = mutableSetOf<Int>()   // labels exclus du dataset (🔒)
-    // Map firstIdx → label original (avant correction)
-    private val originalLabels = mutableMapOf<Int, String>()
     private val labelPaint = Paint().apply {
         color = Color.BLACK  // noir pur pour mode DU
         textSize = 42f
@@ -367,10 +369,9 @@ class MiroirIME : InputMethodService() {
     /** Efface la page active (sans sauvegarde). */
     private fun clearPage() {
         strokeRegistry.clear()
-        groupLabels.clear()
+        relecture.oublier()
         controlledLabels.clear()
         personalLabels.clear()
-        originalLabels.clear()
         inkStrokeIdToRegistryIndex.clear()
         inkStrokeIdCounter = 0L
         groupAnchor.clear()
@@ -1106,7 +1107,8 @@ class MiroirIME : InputMethodService() {
         if (newIndices.isEmpty()) return
 
         val firstIdx = newIndices.first()
-        groupLabels[firstIdx] = label
+        // ⚖️ La sentinelle : la machine pose son label — jamais sur un corrigé.
+        relecture.poserLabelInfere(firstIdx, label)
         groupAnchor[firstIdx] = Pair(anchorX, anchorY)
         val group = com.parnasse.miroir.InkGroup(
             id = java.util.UUID.randomUUID().toString(),
@@ -1155,10 +1157,9 @@ class MiroirIME : InputMethodService() {
             // ═══ Reconstruire strokeRegistry depuis les tokens ═══
             strokeRegistry.clear()
             inkStrokeIdToRegistryIndex.clear()
-            groupLabels.clear()
+            relecture.oublier()
             controlledLabels.clear()
         personalLabels.clear()
-            originalLabels.clear()
             groupAnchor.clear()
 
             // Grouper les tokens par captureIndex + mapper offset → ci (TOUS les tokens)
@@ -1334,7 +1335,7 @@ class MiroirIME : InputMethodService() {
                 }
                 // Labels (clés = inkId, convertir en firstIdx via inkStrokeIdToRegistryIndex)
                 val labelsObj = json.optJSONObject("labels")
-                groupLabels.clear()
+                relecture.oublier()
                 controlledLabels.clear()
         personalLabels.clear()
                 if (labelsObj != null) {
@@ -1346,7 +1347,6 @@ class MiroirIME : InputMethodService() {
                 }
                 // Labels originaux (avant correction)
                 val origLabelsObj = json.optJSONObject("originalLabels")
-                originalLabels.clear()
                 if (origLabelsObj != null) {
                     for (key in origLabelsObj.keys()) {
                         val inkId = key.toLongOrNull() ?: key.toIntOrNull()?.toLong() ?: continue
@@ -1400,10 +1400,9 @@ class MiroirIME : InputMethodService() {
                             inkStrokeIdCounter = maxInkId + 1
                         }
                         // ═══ Nettoyer les labels/ancres (seront rechargés depuis labels.json) ═══
-                        groupLabels.clear()
+                        relecture.oublier()
                         controlledLabels.clear()
         personalLabels.clear()
-                        originalLabels.clear()
                         groupAnchor.clear()
                         // ═══ NE PAS enregistrer les groupes du décodeur (flat encoding) ═══
                         // Les groupes sont dans groups.json unifié
@@ -1415,7 +1414,7 @@ class MiroirIME : InputMethodService() {
                             val lj = org.json.JSONObject(labelsFile.readText())
                             val labelsObj = lj.optJSONObject("labels")
                             if (labelsObj != null) {
-                                groupLabels.clear()
+                                relecture.oublier()
                                 controlledLabels.clear()
         personalLabels.clear()
                                 for (key in labelsObj.keys()) {
@@ -2050,7 +2049,7 @@ class MiroirIME : InputMethodService() {
                 val label = groupLabels[firstIdx] ?: ""
                 controlledLabels.add(firstIdx)
                 // Restaurer le label original (annuler toute correction en cours)
-                groupLabels[correctionGroupFirstIdx] = correctionOriginalLabel
+                relecture.rendre(correctionGroupFirstIdx, correctionOriginalLabel)
                 Log.i(TAG, "Label annoté (contrôlé): '$label'")
                 correctionOriginalLabel = ""
                 correctLetterIndex = -1
@@ -2896,7 +2895,7 @@ class MiroirIME : InputMethodService() {
                                         groupManager?.deselectGroup(it.id)
                                     }
                                     val newLabel = origLabel.removeRange(minusIdx, minusIdx + 1)
-                                    groupLabels[origFirstIdx] = newLabel
+                                    relecture.corriger(origFirstIdx, newLabel)
                                     correctLetterIndex = -1
                                     insertAtIndex = -1
                                     correctionPaths.clear()  // nettoyer les strokes de correction
@@ -3402,8 +3401,7 @@ class MiroirIME : InputMethodService() {
                         sr.isDeleted = true  // ═══ Marquer supprimé (exclu du V★ et des groupes) ═══
                         erasedSids.add(sid)
                         // ═══ Nettoyer le label du groupe (avant de retirer de la map) ═══
-                        groupLabels.remove(idx)
-                        originalLabels.remove(idx)
+                        relecture.retirer(idx)
                         inferredGroupFirstIdxs.remove(idx)
                         groupStrokeCountAtInference.remove(idx)
                         inkStrokeIdToRegistryIndex.remove(sid)
@@ -3443,8 +3441,7 @@ class MiroirIME : InputMethodService() {
                     for (sid in erasedSids) {
                         val firstIdxInMap = inkStrokeIdToRegistryIndex[sid]
                         if (firstIdxInMap != null) {
-                            groupLabels.remove(firstIdxInMap)
-                            originalLabels.remove(firstIdxInMap)
+                            relecture.retirer(firstIdxInMap)
                             inferredGroupFirstIdxs.remove(firstIdxInMap)
                             groupStrokeCountAtInference.remove(firstIdxInMap)
                         }
@@ -4204,7 +4201,7 @@ class MiroirIME : InputMethodService() {
                             val corrected = result.first().toString()
                             val newLabel = origLabel.substring(0, correctLetterIndex) + corrected +
                                            origLabel.substring(correctLetterIndex + 1)
-                            groupLabels[origFirstIdx] = newLabel
+                            relecture.corriger(origFirstIdx, newLabel)
                             Log.i(TAG, "Correction: '$origLabel' → '$newLabel' (lettre #$correctLetterIndex: '$corrected')")
                             // Supprimer le groupe temporaire et ses strokes du strokeRegistry
                             val gm = groupManager
@@ -4247,7 +4244,7 @@ class MiroirIME : InputMethodService() {
                         val origLabel = groupLabels[origFirstIdx] ?: return@post
                         val newLabel = origLabel.substring(0, insertAtIndex) + result +
                                        origLabel.substring(insertAtIndex)
-                        groupLabels[origFirstIdx] = newLabel
+                        relecture.corriger(origFirstIdx, newLabel)
                         Log.i(TAG, "Insertion: '$origLabel' → '$newLabel' (position #$insertAtIndex: '$result')")
                         // Supprimer le groupe temporaire et ses strokes du strokeRegistry
                         val gm = groupManager
@@ -4280,9 +4277,12 @@ class MiroirIME : InputMethodService() {
                         return@post
                     }
 
-                    groupLabels[firstIdx] = result
-                    originalLabels[firstIdx] = result  // sauvegarder l'original (avant toute correction)
-                    Log.i(TAG, "LABEL set: firstIdx=$firstIdx -> '$result' (${groupLabels.size} labels total)")
+                    // ⚖️ La sentinelle : l'inférence pose — mais elle ne touche jamais un corrigé.
+                    if (relecture.poserLabelInfere(firstIdx, result)) {
+                        Log.i(TAG, "LABEL set: firstIdx=$firstIdx -> '$result' (${groupLabels.size} labels total)")
+                    } else {
+                        Log.i(TAG, "LABEL retenu: firstIdx=$firstIdx reste '${groupLabels[firstIdx]}' — corrigé non ratifié")
+                    }
                     cachedGMCacheSize = -1
                     // Conduit V★ — marquer la séparation de groupe avec son ancre
                     val grpAnchor = groupAnchor[firstIdx]
@@ -5218,7 +5218,7 @@ class MiroirIME : InputMethodService() {
                 // Marquer comme contrôlé sans modifier le label
                 controlledLabels.add(firstIdx)
                 // Restaurer le label original (annuler toute correction en cours)
-                groupLabels[correctionGroupFirstIdx] = correctionOriginalLabel
+                relecture.rendre(correctionGroupFirstIdx, correctionOriginalLabel)
                 Log.i(TAG, "Label annoté (contrôlé): '$label'")
                 correctionOriginalLabel = ""
                 correctLetterIndex = -1
@@ -5233,7 +5233,7 @@ class MiroirIME : InputMethodService() {
             text = "✕"; textSize = 20f; setTextColor(Color.DKGRAY); setBackgroundColor(Color.TRANSPARENT)
             setOnClickListener {
                 // Restaurer le label original
-                groupLabels[correctionGroupFirstIdx] = correctionOriginalLabel
+                relecture.rendre(correctionGroupFirstIdx, correctionOriginalLabel)
                 correctLetterIndex = -1
                 insertAtIndex = -1
                 imeView?.exitEditMode()

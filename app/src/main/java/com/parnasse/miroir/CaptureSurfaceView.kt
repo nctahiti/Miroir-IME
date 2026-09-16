@@ -554,7 +554,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 val corrected = result.first().toString()
                 val newLabel = origLabel.substring(0, correctLetterIndex) + corrected +
                                origLabel.substring(correctLetterIndex + 1)
-                engine.groupLabels[origIdx] = newLabel
+                engine.relecture.corriger(origIdx, newLabel)
                 correctionLabel = newLabel
                 // ⚓ MARÉE 11/09 — LA CORRECTION EST UNE MODIFICATION DE LA PAGE.
                 // Sans ce drapeau, un label corrigé sans nouveau trait restait en
@@ -567,7 +567,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             // Insérer à la position
             val newLabel = origLabel.substring(0, insertAtIndex) + result +
                            origLabel.substring(insertAtIndex)
-            engine.groupLabels[origIdx] = newLabel
+            engine.relecture.corriger(origIdx, newLabel)
             correctionLabel = newLabel
             engine.pageDirty = true  // ⚓ MARÉE 11/09 — l'insertion aussi est une modification
             Log.i(TAG, "Insertion: '$origLabel' → '$newLabel' (position #$insertAtIndex: '$result')")
@@ -584,7 +584,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             if (ciblePlume != null) {
                 val corrected = result.first().toString()
                 val newLabel = origLabel.substring(0, ciblePlume) + corrected + origLabel.substring(ciblePlume + 1)
-                engine.groupLabels[origIdx] = newLabel
+                engine.relecture.corriger(origIdx, newLabel)
                 correctionLabel = newLabel
                 engine.pageDirty = true
                 Log.i(TAG, "Correction par la plume: '$origLabel' → '$newLabel' (lettre #$ciblePlume='$corrected' désignée par le trait)")
@@ -677,7 +677,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     private fun exitEditMode() {
         // Appliquer le label corrige
         if (correctionGroupFirstIdx >= 0 && correctionLabel.isNotEmpty()) {
-            engine.groupLabels[correctionGroupFirstIdx] = correctionLabel
+            // Tenir — le corrigé devient nominal : la dette de révision s'éteint.
+            engine.relecture.corriger(correctionGroupFirstIdx, correctionLabel)
+            engine.relecture.tenir(correctionGroupFirstIdx)
             Log.i(TAG, "Label corrige: '$correctionLabel'")
         }
         editMode = EditMode.NONE
@@ -839,7 +841,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         }
 
         val firstIdx = group.strokeIds.firstOrNull()?.let { engine.inkStrokeIdToRegistryIndex[it] }
-        if (firstIdx != null) engine.groupLabels.remove(firstIdx)
+        if (firstIdx != null) engine.relecture.retirer(firstIdx)
 
         engine.redrawBitmapInternal(fullRedraw = true)
         scrubCutRatio = -1f
