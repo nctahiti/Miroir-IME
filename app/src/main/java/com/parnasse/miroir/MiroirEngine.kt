@@ -232,6 +232,18 @@ class MiroirEngine {
                 }
                 pageDirty = true  // ⛪ MARÉE 30/08 — les états changent : le save écrira.
             }
+            // 🛡️ LA PLACE TIENT (UXK 19/09/2026) — l'effacement retire l'encre,
+            // jamais la place : un groupe dont la correction vit (une
+            // proposition l'attend) ne s'évince pas. L'effacement classique
+            // garde donc le droit d'ôter les strokes, mais la maison reste
+            // debout — son ancre, son label, sa proposition — et le geste peut
+            // y revenir écrire. « Il reste un point qui ne peut pas être
+            // supprimé tant que le groupe est dans l'état de correction. »
+            it.peutEvincer = { group ->
+                group.strokeIds.none { sid ->
+                    inkStrokeIdToRegistryIndex[sid]?.let { ri -> propositions.containsKey(ri) } == true
+                }
+            }
         }
     }
 
