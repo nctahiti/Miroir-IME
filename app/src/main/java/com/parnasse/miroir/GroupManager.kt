@@ -13,7 +13,7 @@ class GroupManager(
     /** Appelé quand un groupe est évincé du cache (LOADED→STORED→persistence).
      *  Permet au MiroirEngine d'archiver les strokes correspondants. */
     var onGroupEvicted: ((InkGroup) -> Unit)? = null
-
+) {
     /** 🛡️ VETO D'ÉVICTION (UXK 19/09/2026) — « le groupe peut être effacé par
      *  l'effacement classique, mais le groupe n'est pas évincé : il reste un
      *  point qui ne peut pas être supprimé tant que le groupe est dans l'état
@@ -21,7 +21,7 @@ class GroupManager(
      *  droit d'ôter la place. Rend false → l'éviction est suspendue, le groupe
      *  reste (son ancre, son label, sa proposition) et le geste peut y revenir. */
     var peutEvincer: ((InkGroup) -> Boolean)? = null
-) {
+
     companion object {
         private const val TAG = "GroupManager"
         const val DEFAULT_TRANSCRIPTION_TIMEOUT_MS = 2000L
