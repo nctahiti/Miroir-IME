@@ -28,6 +28,7 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.Instant
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Deux maîtres de navigation : le Miroir (LOCAL) ou Parnasse (viewport). */
@@ -97,6 +98,81 @@ class MiroirEngine {
     // Une seule source : le label du groupe (nominal + courant) vit dans la sentinelle.
     val relecture = Relecture()
     val groupLabels get() = relecture.labels
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🎙️ LA VOIX DU CORRIGÉ (19/09/2026) — le pont (le Cœur) PROPOSE, le
+    // Miroir AFFICHE, le Capitaine RATIFIE. Le pont ne touche RIEN : ni la
+    // page, ni la V★, ni le label. Il n'a pas de plume — seulement une voix.
+    //
+    //   propositions      firstIdx → le mot proposé (le sommet de la liste)
+    //   propositionsListe firstIdx → la liste FERMÉE (pour les puces de navigation)
+    //
+    // Elles se demandent UNE fois par page chargée, en arrière-plan (jamais sur
+    // le fil d'interface) ; une ratification retire la sienne, la sentinelle
+    // garde le nominal, et le pont n'en saura rien tant qu'on ne le lui dira pas.
+    // ═══════════════════════════════════════════════════════════════════
+    val propositions = mutableMapOf<Int, String>()
+    val propositionsListe = mutableMapOf<Int, List<String>>()
+
+    /** Demande au pont ses propositions pour la page courante. */
+    fun demanderPropositions(onDone: () -> Unit = {}) {
+        val uuid = parnasseBlockUuid ?: return
+        val groupes = JSONArray()
+        for ((firstIdx, label) in groupLabels) {
+            if (label.isBlank()) continue
+            groupes.put(JSONObject().apply {
+                put("id", firstIdx.toString())
+                put("label", label)
+                put("rang", firstIdx)
+            })
+        }
+        if (groupes.length() == 0) return
+        val corps = JSONObject().apply {
+            put("block_id", uuid)
+            parnasseNoteId?.let { if (it.isNotEmpty()) put("note_id", it) }
+            put("groupes", groupes)
+        }.toString()
+
+        Log.i(TAG, "▸ Correcteur: demande de propositions — ${groupes.length()} groupes")
+        Thread {
+            try {
+                val conn = URL("$coeurUrl/api/correcteur/proposer").openConnection() as HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 20000
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write(corps.toByteArray(Charsets.UTF_8)) }
+                if (conn.responseCode == 200) {
+                    val json = JSONObject(BufferedReader(InputStreamReader(conn.inputStream)).readText())
+                    val props = json.optJSONArray("propositions") ?: JSONArray()
+                    var n = 0
+                    for (i in 0 until props.length()) {
+                        val p = props.getJSONObject(i)
+                        if (p.optBoolean("silence", false)) continue
+                        val corrige = p.optString("corrige")
+                        if (corrige.isEmpty()) continue
+                        val idx = p.optString("groupe").toIntOrNull() ?: continue
+                        val liste = mutableListOf<String>()
+                        p.optJSONArray("candidats")?.let { cs ->
+                            for (k in 0 until cs.length()) liste.add(cs.getJSONObject(k).optString("mot"))
+                        }
+                        propositions[idx] = corrige
+                        propositionsListe[idx] = liste.ifEmpty { listOf(corrige) }
+                        n++
+                    }
+                    val voix = json.optJSONObject("moteur")?.optString("mode") ?: "?"
+                    Log.i(TAG, "▸ Correcteur: $n propositions pour la page ($voix)")
+                } else {
+                    Log.w(TAG, "▸ Correcteur: réponse ${conn.responseCode}")
+                }
+                conn.disconnect()
+            } catch (e: Exception) {
+                Log.w(TAG, "▸ Correcteur: ${e.javaClass.simpleName}: ${e.message}")
+            }
+            uiHandler.post { onDone() }
+        }.start()
+    }
     val groupAnchor = mutableMapOf<Int, Pair<Float, Float>>()
     val groupBlobs = mutableMapOf<String, BlobData>()
     val inferredGroupFirstIdxs = mutableSetOf<Int>()
@@ -1495,6 +1571,10 @@ class MiroirEngine {
             Log.i(TAG, "loadPageFull page=$currentPageIndex: ${strokeRegistry.size} strokes, ${groupLabels.size} labels")
             pageLoaded = true
             pageDirty = false  // ⚓ MARÉE 30/08 — la mémoire parle comme le disque
+            // 🎙️ LA VOIX DU CORRIGÉ (19/09/2026) — la page est chargée, ses groupes
+            // sont connus : on demande les propositions au pont. Elles ne touchent
+            // rien — elles attendent d'être AFFICHÉES, puis ratifiées au geste.
+            demanderPropositions()
             return true
         } catch (e: Exception) {
             Log.e(TAG, "loadPageFull: ${e.message}", e)

@@ -486,10 +486,16 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         val firstRI = engine.inkStrokeIdToRegistryIndex[firstSid] ?: return
         val label = engine.groupLabels[firstRI] ?: ""
 
+        // 🎙️ LA VOIX DU CORRIGÉ (19/09/2026) — si le pont a proposé un mot pour ce
+        // groupe, c'est LUI qui prend la place du transcrit : la correction est
+        // PROPOSÉE (le tampon s'ouvre dessus), jamais imposée — la sortie du mode
+        // correction la ratifie (« tenir »), et un retour la rend au nominal.
+        val propose = engine.propositions[firstRI]
+
         editMode = EditMode.CORRECT_TRANSCRIPTION
         correctionGroupId = gid
         correctionGroupFirstIdx = firstRI
-        correctionLabel = label
+        correctionLabel = propose ?: label
         correctLetterIndex = -1
         insertAtIndex = -1
         correctionPaths.clear()
@@ -498,7 +504,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         //      créent des groupes SÉPARÉS (pas absorbés) ═══
         savedSelectedGroupId = selectedGroupId
         deselectGroupInternal()
-        Log.i(TAG, "Mode correction: '$label' (groupe ${gid.take(8)}) — groupe désélectionné")
+        Log.i(TAG, "Mode correction: '$label'" + (propose?.let { " → proposition « $it »" } ?: "") +
+            " (groupe ${gid.take(8)}) — groupe désélectionné")
         correctionOriginalStrokeCount = group.strokeIds.size
         invalidate()
     }
@@ -681,6 +688,11 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             engine.relecture.corriger(correctionGroupFirstIdx, correctionLabel)
             engine.relecture.tenir(correctionGroupFirstIdx)
             Log.i(TAG, "Label corrige: '$correctionLabel'")
+            // 🎙️ La proposition a été jugée (ratifiée, ajustée ou rendue) : elle est
+            // consommée. Le pont repose la question à la prochaine page chargée —
+            // et c'est la ratification qui nourrira la table des couples de lettres.
+            engine.propositions.remove(correctionGroupFirstIdx)
+            engine.propositionsListe.remove(correctionGroupFirstIdx)
         }
         editMode = EditMode.NONE
         correctionGroupId = null
