@@ -10,8 +10,8 @@ android {
         applicationId = "com.parnasse.miroir.v4"
         minSdk = 29
         targetSdk = 29  // Onyx SDK nécessite targetSdk<=29 pour les hidden API
-        versionCode = 5
-        versionName = "0.5.3-l-incitation"
+        versionCode = 6
+        versionName = "0.5.4-les-puces"
 
         ndk {
             abiFilters += listOf("arm64-v8a")  // Boox uniquement

@@ -178,6 +178,11 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 tapStartX = event.x; tapStartY = event.y
                 tapStartTime = System.currentTimeMillis()
                 tapMoved = false
+                // ⛪ LES QUATRE PUCES (UXK 19/09/2026) — elles vivent dans la vue
+                // classique COMME dans le mode correction : la correction est une
+                // couche posée sur la page, pas un écran. Le toucher des puces
+                // passe avant tout le reste, et consomme le geste.
+                if (traiterPuceProposition(event.x, event.y)) return true
                 if (longPressArmed) {
                     // Déjà en mode long-press, le DOWN est le début du geste
                     return true
@@ -1160,18 +1165,111 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             canvas.drawRoundRect(bgRect, 6f, 6f, Paint().apply { color = bgColor; style = Paint.Style.FILL })
             canvas.drawText(texte, labelX, labelY, labelPaint)
             if (propose != null) {
-                // ⛪ LE POINT — la marque de la proposition, au-dessus du mot.
-                canvas.drawCircle(
-                    labelX + textW / 2f, bgRect.top - 5f, 4.5f,
-                    Paint().apply { color = Color.rgb(46, 125, 50); style = Paint.Style.FILL }
-                )
+                // ⛪ LE TRAIT ET LE POINT (19/09, e-ink) — la couleur ne suffit pas
+                // sur l'encre électronique : la proposition se marque par la
+                // STRUCTURE. Un trait sous le mot (« ce mot est proposé ») et un
+                // point au-dessus (« la correction vit ici »). Le mot tenu reste
+                // nu : le doute se voit, la certitude se tait.
+                val marque = Paint().apply { color = Color.rgb(46, 125, 50); style = Paint.Style.FILL }
+                canvas.drawRect(labelX - 4f, labelY + 4f, labelX + textW + 8f, labelY + 8f, marque)
+                canvas.drawCircle(labelX + textW / 2f, bgRect.top - 9f, 6.5f, marque)
+                // ── LES QUATRE PUCES (la correction est une couche, jamais un mode) ──
+                val puces = pucesDuMot(texte, labelX, labelY)
+                val trait = Paint().apply { color = marque.color; style = Paint.Style.STROKE; strokeWidth = 4f; isAntiAlias = true }
+                for (i in 0 until 4) {
+                    val px = puces[i * 2]; val py = puces[i * 2 + 1]
+                    when (i) {
+                        0 -> canvas.drawPath(Path().apply {
+                            moveTo(px, py - 8f); lineTo(px - 9f, py + 6f); lineTo(px + 9f, py + 6f); close()
+                        }, marque)
+                        1 -> canvas.drawPath(Path().apply {
+                            moveTo(px, py + 8f); lineTo(px - 9f, py - 6f); lineTo(px + 9f, py - 6f); close()
+                        }, marque)
+                        2 -> {   // ✗ rendre
+                            canvas.drawLine(px - 8f, py - 8f, px + 8f, py + 8f, trait)
+                            canvas.drawLine(px - 8f, py + 8f, px + 8f, py - 8f, trait)
+                        }
+                        3 -> canvas.drawCircle(px, py, 9f, marque)   // ● ratifier
+                    }
+                }
             }
         }
+    }
+
+    /** ⛪ LES QUATRE PUCES d'un mot à proposition (UXK 19/09/2026). Le Capitaine :
+     *  « les deux puces de validation et de rejet à droite et à gauche du mot, et
+     *  au-dessus et en dessous du mot les puces pour naviguer dans les différents
+     *  mots proposés… qui s'afficheraient comme étant le label du groupe ».
+     *  Rendues PROCHES du mot pour ne pas superposer les puces des mots voisins.
+     *  Positions partagées par le dessin et le toucher :
+     *   [0,1] haut = proposition suivante · [2,3] bas = précédente ·
+     *   [4,5] gauche = rendre · [6,7] droite = ratifier. */
+    private fun pucesDuMot(texte: String, labelX: Float, labelY: Float): FloatArray {
+        val w = labelPaint.measureText(texte)
+        val cx = labelX + w / 2f
+        return floatArrayOf(
+            cx, labelY - 36f,               // ▲ suivante
+            cx, labelY + 36f,               // ▼ précédente
+            labelX - 30f, labelY - 6f,      // ✗ rendre
+            labelX + w + 30f, labelY - 6f   // ● ratifier
+        )
     }
 
     // ═══════════════════════════════════════════════════════════════════
     // HELPERS
     // ═══════════════════════════════════════════════════════════════════
+
+    /** ⛪ LE TOUCHER DES PUCES (UXK 19/09/2026) — rend true si une puce a été
+     *  touchée (le geste est consommé). ▲ = proposition suivante, ▼ = précédente,
+     *  ✗ = rendre (le nominal revient, la dette s'éteint), ● = ratifier (le
+     *  corrigé devient nominal — les verbes de la sentinelle). */
+    private fun traiterPuceProposition(x: Float, y: Float): Boolean {
+        val rayon = 34f
+        var vise: Int = -1
+        var num: Int = -1
+        var liste: List<String> = emptyList()
+        var texte: String = ""
+        for ((firstIdx, proposition) in engine.propositions) {
+            val anchor = engine.groupAnchor[firstIdx] ?: continue
+            val listeI = engine.propositionsListe[firstIdx] ?: continue
+            val labelY = engine.snapToLine(anchor.second) + 18f
+            val puces = pucesDuMot(proposition, anchor.first, labelY)
+            for (i in 0 until 4) {
+                val dx = x - puces[i * 2]; val dy = y - puces[i * 2 + 1]
+                if (dx * dx + dy * dy <= rayon * rayon) { vise = firstIdx; num = i; break }
+            }
+            if (vise >= 0) { liste = listeI; texte = proposition; break }
+        }
+        if (vise < 0) return false
+        when (num) {
+            0, 1 -> {   // naviguer dans la liste fermée — le mot proposé change de rang
+                val n = liste.size
+                if (n > 1) {
+                    val i0 = liste.indexOf(texte).takeIf { it >= 0 } ?: 0
+                    val suivant = if (num == 0) (i0 + 1) % n else (i0 - 1 + n) % n
+                    engine.propositions[vise] = liste[suivant]
+                    Log.i(TAG, "Puce ${if (num == 0) "▲" else "▼"}: « $texte » → « ${liste[suivant]} » (${suivant + 1}/$n)")
+                } else {
+                    Log.i(TAG, "Puce ${if (num == 0) "▲" else "▼"}: liste fermée d'un seul mot — rien à parcourir")
+                }
+            }
+            2 -> {      // rendre — le nominal revient ; la place s'éteint
+                engine.relecture.rendre(vise, engine.groupLabels[vise])
+                engine.propositions.remove(vise)
+                engine.propositionsListe.remove(vise)
+                Log.i(TAG, "Puce ✗: « $texte » rendu — la dette s'éteint, le nominal parle")
+            }
+            3 -> {      // ratifier — le corrigé est gravé (corriger + tenir)
+                engine.relecture.corriger(vise, texte)
+                engine.relecture.tenir(vise)
+                engine.propositions.remove(vise)
+                engine.propositionsListe.remove(vise)
+                Log.i(TAG, "Puce ●: « $texte » tenu — le nominal est gravé")
+            }
+        }
+        post { invalidate() }
+        return true
+    }
 
     fun clearCanvas() {
         engine.bitmap?.eraseColor(Color.WHITE)
