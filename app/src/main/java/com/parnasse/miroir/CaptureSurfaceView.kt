@@ -54,6 +54,14 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         textAlign = Paint.Align.LEFT
     }
 
+    // 🎙️ LA VOIX VISIBLE (19/09/2026) — « l'affichage est l'incitation » : quand
+    // les propositions arrivent du pont (asynchrones), l'écran se redessine — le
+    // mot proposé prend la place du transcrit, et le point dit où vit une
+    // correction. Sans ce signal, la voix restait invisible.
+    init {
+        engine.onPropositionsArrivees = { post { invalidate() } }
+    }
+
     // ── État ──────────────────────────────────────────────────────────
     private var isStylusDown = false
     private var touchHelper: com.onyx.android.sdk.pen.TouchHelper? = null
@@ -1130,17 +1138,34 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         }
         entries.sortWith(compareBy<LabelEntry> { it.snapY }.thenBy { it.anchorX })
 
-        for ((_, label, anchorX, snapY, isSel) in entries) {
-            val textW = labelPaint.measureText(label)
+        for ((firstIdx, label, anchorX, snapY, isSel) in entries) {
+            // 🎙️ LA VOIX VISIBLE (19/09/2026) — « l'affichage est l'incitation » :
+            // le mot PROPOSÉ prend la place du transcrit (le Capitaine ne doit pas
+            // avoir à toucher un mot pour savoir où vit une correction), et un
+            // point le désigne — la place tient tant que la correction vit.
+            val propose = engine.propositions[firstIdx]
+            val texte = propose ?: label
+            val textW = labelPaint.measureText(texte)
             val labelX = anchorX  // position de l'encre (premier point du groupe)
             val labelY = snapY + 18f
             val bgRect = android.graphics.RectF(
                 labelX - 4f, labelY - 24f,
                 labelX + textW + 8f, labelY + 10f
             )
-            val bgColor = if (isSel) Color.argb(220, 220, 235, 255) else Color.argb(180, 255, 255, 255)
+            val bgColor = when {
+                propose != null -> Color.argb(215, 228, 244, 230)  // une proposition habite ici
+                isSel -> Color.argb(220, 220, 235, 255)
+                else -> Color.argb(180, 255, 255, 255)
+            }
             canvas.drawRoundRect(bgRect, 6f, 6f, Paint().apply { color = bgColor; style = Paint.Style.FILL })
-            canvas.drawText(label, labelX, labelY, labelPaint)
+            canvas.drawText(texte, labelX, labelY, labelPaint)
+            if (propose != null) {
+                // ⛪ LE POINT — la marque de la proposition, au-dessus du mot.
+                canvas.drawCircle(
+                    labelX + textW / 2f, bgRect.top - 5f, 4.5f,
+                    Paint().apply { color = Color.rgb(46, 125, 50); style = Paint.Style.FILL }
+                )
+            }
         }
     }
 

@@ -114,6 +114,11 @@ class MiroirEngine {
     val propositions = mutableMapOf<Int, String>()
     val propositionsListe = mutableMapOf<Int, List<String>>()
 
+    /** 🎙️ Prévenir l'écran quand la voix est arrivée (l'affichage est
+     *  l'incitation : sans ce signal, les propositions restent invisibles
+     *  jusqu'au prochain hasard de rafraîchissement). */
+    var onPropositionsArrivees: (() -> Unit)? = null
+
     /** Demande au pont ses propositions pour la page courante. */
     fun demanderPropositions(onDone: () -> Unit = {}) {
         val uuid = parnasseBlockUuid ?: return
@@ -170,7 +175,10 @@ class MiroirEngine {
             } catch (e: Exception) {
                 Log.w(TAG, "▸ Correcteur: ${e.javaClass.simpleName}: ${e.message}")
             }
-            uiHandler.post { onDone() }
+            uiHandler.post {
+                onDone()
+                onPropositionsArrivees?.invoke()   // 🎙️ l'écran peut montrer la voix
+            }
         }.start()
     }
     val groupAnchor = mutableMapOf<Int, Pair<Float, Float>>()
