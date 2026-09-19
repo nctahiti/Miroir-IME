@@ -1270,9 +1270,17 @@ class MiroirEngine {
         val allStrokes = strokeRegistry.count { !it.isDeleted && it.points.isNotEmpty() }
 
         // ── V★ : reecriture propre avec tous les strokes (archivés inclus) ──
+        // 🛡️ ÉCRITURE ATOMIQUE (19/09/2026) — la leçon de la tuerie du nettoyeur :
+        //   `delete()` puis écriture laissait un fichier COURT quand l'app mourait
+        //   en route (578 Ko écrits sur ~1,24 Mo → 211 strokes perdus, aucune copie
+        //   nulle part). Le plein ne doit jamais céder la place avant que le neuf
+        //   soit complet. On écrit donc dans `page.vstar.neuf`, et la page ne
+        //   change de main que par un RENOMMAGE — atomique sur le même volume.
+        //   Une interruption ne peut plus détruire : au pire le neuf reste à côté.
         if (allStrokes > 0) {
-            if (vstarFile.exists()) vstarFile.delete()
-            val dataRegion = VStarDataRegion(vstarFile)
+            val neufFile = File(dir, "page.vstar.neuf")
+            if (neufFile.exists()) neufFile.delete()
+            val dataRegion = VStarDataRegion(neufFile)
             dataRegion.open()
             val allIndices = strokeRegistry.indices
                 .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() }
@@ -1285,6 +1293,29 @@ class MiroirEngine {
                 for (t in tokens) dataRegion.append(t)
             }
             dataRegion.close()
+            // Le neuf est écrit en entier : la page peut céder la place.
+            // La précédente reste comme TÉMOIN (`page.vstar.bak`) jusqu'à la
+            // prochaine écriture — jamais plus d'une génération de retard.
+            var remplacee = false
+            if (neufFile.length() > 0) {
+                val bakFile = File(dir, "page.vstar.bak")
+                try {
+                    if (vstarFile.exists()) {
+                        if (bakFile.exists()) bakFile.delete()
+                        remplacee = vstarFile.renameTo(bakFile)
+                    } else {
+                        remplacee = true
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "savePageFull: témoin .bak impossible: ${e.message}")
+                }
+                if (neufFile.renameTo(vstarFile)) {
+                    Log.i(TAG, "savePageFull page=$currentPageIndex vstar atomique: ${vstarFile.length()}B" +
+                            " (témoin ${if (remplacee) "gardé" else "absent"})")
+                } else {
+                    Log.w(TAG, "savePageFull page=$currentPageIndex: renommage du neuf REFUSÉ — la page précédente est intacte")
+                }
+            }
             // ⚓ MARÉE 11/09 — LA MARQUE HAUTE DU BLOC : elle survit aux sessions.
             // L'alignement par page seul ramenait le compteur sous la plage brûlée
             // du tiroir ; la marque ne redescend jamais.
@@ -1454,7 +1485,30 @@ class MiroirEngine {
             // Le bitmap doit être initialisé avant (onSizeChanged dans la View).
 
             // ── V★ → strokes (format V2, 16 bytes/token, scaleFactor=8) ──
-            val vstarFile = File(dir, "page.vstar")
+            // 🛡️ LE TÉMOIN PARLE (19/09/2026) — suite de l'écriture atomique : si
+            // l'app est morte entre les deux renommages, la page n'a pas atterri.
+            // Le neuf COMPLET attend alors à côté (`page.vstar.neuf`), ou le
+            // témoin de la génération précédente (`page.vstar.bak`, la même loi
+            // que le Sculpteur). Une interruption ne doit jamais rendre une page
+            // vide : on reprend ce qui est là, et on le dit.
+            val vstarFile = File(dir, "page.vstar").let { f ->
+                if (f.exists() && f.length() > 0) f
+                else {
+                    val neuf = File(dir, "page.vstar.neuf")
+                    val bak = File(dir, "page.vstar.bak")
+                    when {
+                        neuf.exists() && neuf.length() > 0 -> {
+                            Log.w(TAG, "loadPageFull page_$pdi: page.vstar absente — le NEUF complet est repris")
+                            neuf.renameTo(f); f
+                        }
+                        bak.exists() && bak.length() > 0 -> {
+                            Log.w(TAG, "loadPageFull page_$pdi: page.vstar absente — le TÉMOIN (.bak) est repris")
+                            bak.renameTo(f); f
+                        }
+                        else -> f
+                    }
+                }
+            }
             // ═══ LA SENTINELLE VEILLE — le sculpteur façonne la forme ancienne ═══
             // « Quand une note vit mal, façonner la forme, jamais le sens. »
             // Un .vstar v1.1 (header JSON + 14 B/token) est mal lu par le décodeur v2 :
