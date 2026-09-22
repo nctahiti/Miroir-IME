@@ -128,6 +128,12 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                         if (!hit) {
                             // Stylet hors du cadre de correction → ignorer ce stroke
                             ignoreStrokeForCorrection = true
+                            // ⛪ MARÉE 20/09 — plume posée hors zone : STYLUS_DOWN, et le
+                            // long-press (inactivité) est armé ici aussi — le maintien
+                            // immobile dans le VIDE sortira du focus.
+                            isStylusDown = true
+                            lastLPX = tp.x; lastLPY = tp.y
+                            armLongPressTimer(tp.x, tp.y)
                             return
                         }
                         ignoreStrokeForCorrection = false
@@ -150,20 +156,30 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                 }
 
                 override fun onRawDrawingTouchPointMoveReceived(tp: com.onyx.android.sdk.data.note.TouchPoint?) {
+                    // ⛪ MARÉE 20/09 — la distance s'accumule AVANT tout (même si le stroke
+                    // est ignoré) : le long-press ne tire que si la plume est IMMOBILE.
+                    if (tp != null) {
+                        lpTotalDist += Math.hypot((tp.x - lastLPX).toDouble(), (tp.y - lastLPY).toDouble()).toFloat()
+                        lastLPX = tp.x; lastLPY = tp.y
+                    }
                     if (ignoreStrokeForCorrection) return
                     if (modeInteraction && !correctionWriteActive) {
                         if (tp != null) handleGestureMove(tp.x, tp.y)
                         return  // sauf correction de label
                     }
                     keepRawDrawingActive()
-                    if (tp != null) {
-                        if (!strokeStarted) startDeferredStroke()
-                        lpTotalDist += Math.hypot((tp.x - lastLPX).toDouble(), (tp.y - lastLPY).toDouble()).toFloat()
-                        lastLPX = tp.x; lastLPY = tp.y
-                    }
+                    if (tp != null && !strokeStarted) startDeferredStroke()
                 }
 
                 override fun onRawDrawingTouchPointListReceived(list: com.onyx.android.sdk.pen.data.TouchPointList?) {
+                    // ⛪ MARÉE 20/09 — distance avant tout (même stroke ignoré) pour le long-press immobile.
+                    if (list != null) {
+                        for (i in 0 until list.size()) {
+                            val pt = list.get(i) ?: continue
+                            lpTotalDist += Math.hypot((pt.x - lastLPX).toDouble(), (pt.y - lastLPY).toDouble()).toFloat()
+                            lastLPX = pt.x; lastLPY = pt.y
+                        }
+                    }
                     if (ignoreStrokeForCorrection) return
                     if (modeInteraction && !correctionWriteActive) {
                         for (i in 0 until (list?.size() ?: 0)) {
@@ -180,8 +196,6 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                             handleGestureMove(pt.x, pt.y)
                         } else {
                             if (!strokeStarted) startDeferredStroke()
-                            lpTotalDist += Math.hypot((pt.x - lastLPX).toDouble(), (pt.y - lastLPY).toDouble()).toFloat()
-                            lastLPX = pt.x; lastLPY = pt.y
                             if (addPoint(pt)) {
                                 engine.addStrokePoint(pt.x, pt.y, normalizePressure(pt.pressure))
                             }
@@ -231,6 +245,12 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                             engine.pageDirty = true
                             Log.d(TAG, "Stroke annulé ($ptCount pts, dist=${lpTotalDist.toInt()}px) — pas de groupe fantôme")
                         } else if (ri >= 0 && (ptCount >= 10 || (correctionWriteActive && lpTotalDist >= 8f))) {
+                            // ⛪ MARÉE 20/09 — le blob du mot focalisé se rafraîchit après
+                            // chaque absorption : l'encadré déplacé libère l'espace, le
+                            // contour se redessine sur la fontaine.
+                            if (correctionWriteActive) {
+                                (touchForwardTarget as? CaptureSurfaceView)?.redrawBlobCorrection()
+                            }
                             // 🛡️ MESURE 07/09 — en correction, un trait ≥ 8px EST une
                             // lettre (même 2-6 points, ex. un 'i') : l'inférer aussitôt,
                             // isolée — sinon il s'accumule en groupe composite et la
@@ -502,6 +522,29 @@ class FontaineOverlay(context: Context, private val engine: MiroirEngine) : Surf
                 canvas.drawPath(path, borderPaint)
             }
         } catch (_: Exception) {} finally {
+            try { canvas?.let { holder.unlockCanvasAndPost(it) } } catch (_: Exception) {}
+        }
+    }
+
+    /** ⛪ MARÉE 20/09 — dessine le CONTOUR du blob SANS effacer la surface
+     *  (contrairement à dessinerBlob qui pose un fond blanc). Pour le blob
+     *  vivant pendant le focus de correction : l'ellipse se pose par-dessus
+     *  les strokes fraîchement écrits, sans les effacer. */
+    fun dessinerBlobContour(path: android.graphics.Path, borderPaint: android.graphics.Paint) {
+        Log.i(TAG, "Fontaine: dessinerBlobContour surfaceReady=$surfaceReady lockCanvas=${holder != null}")
+        if (!surfaceReady) return
+        var canvas: Canvas? = null
+        try {
+            canvas = holder.lockCanvas()
+            if (canvas != null) {
+                canvas.drawPath(path, borderPaint)
+                Log.i(TAG, "Fontaine: contour dessiné (canvas OK)")
+            } else {
+                Log.w(TAG, "Fontaine: lockCanvas a rendu null — contour NON dessiné")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Fontaine: dessinerBlobContour échoué: ${e.message}")
+        } finally {
             try { canvas?.let { holder.unlockCanvasAndPost(it) } } catch (_: Exception) {}
         }
     }

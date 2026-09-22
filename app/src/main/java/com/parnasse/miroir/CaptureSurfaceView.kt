@@ -214,19 +214,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                         Log.i(TAG, "Correction: lettre #$letterIdx sélectionnée → prêt à écrire")
                         rafraichirCorrectionUI(); return true
                     }
-                    // Tap hors cadre → armer un long-press (500ms) pour sortir
-                    Log.i(TAG, "Correction: tap hors cadre → maintien pour sortir")
-                    correctionExitTimer = java.lang.Runnable {
-                        Log.i(TAG, "Correction: long-press 400ms → vue effacée, attente PEN_UP")
-                        engine.cancelStroke()  // annuler le stroke du long-press en cours
-                        exitEditMode()
-                        fontaineOverlay?.desactiver()
-                        correctionExitTriggered = true
-                        invalidate()
-                    }
-                    postDelayed(correctionExitTimer!!, 400)
+                    // ⛪ MARÉE 20/09 — hors de la boîte de lettres : le tap ne fait rien ici.
+                    // L'absorption (blob) est le raw drawing ; la sortie est le LONG-PRESS
+                    // immobile (armLongPressTimer → handleLongPress → exitCorrectionByLongPress).
                     correctionTapConsumed = true
-                    invalidate()
                     return true
                 }
             }
@@ -282,9 +273,15 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         val caseW = spacing * 0.7f
         val totalW = caseW * correctionLabel.length
         val chipR = maxOf(caseW * 0.3f, 14f)
-        val snapY = engine.snapToLine(anchor.second)
+        // ⛪ MARÉE 20/09 — l'encadré s'ancre sur le BLOB du mot (plus la ligne) :
+        // au-dessus de sa limite supérieure, décalé de quelques dizaines de
+        // pixels adaptés à la hauteur d'affichage — la vue du groupe sélectionné
+        // reste dégagée et les puces restent dans le champ.
+        val blobTop = correctionGroupId?.let { engine.groupBlobs[it]?.bounds?.top }
+            ?: engine.snapToLine(anchor.second)
+        val offset = (height * 0.04f).coerceIn(18f, 48f)
         var sx = anchor.first - totalW / 2f
-        var sy = snapY - spacing * 0.8f
+        var sy = blobTop - caseW - chipR - offset
         // Cases + puces +/− restent DANS la vue (marges 24px, puces en haut/bas)
         sx = sx.coerceIn(24f, maxOf(24f, width - totalW - 24f))
         sy = sy.coerceIn(chipR + 16f, maxOf(chipR + 16f, height - caseW - chipR - 30f))
@@ -492,6 +489,25 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         fontaine?.dessinerBlob(blob.path, blob.bounds, selectedBlobPaint, selectedBlobPaint)
     }
 
+    /** ⛪ MARÉE 20/09 — le blob du mot focalisé se redessine après chaque absorption :
+     *  l'encadré déplacé (vers 3) libère l'espace au-dessus ; le contour du blob se
+     *  rafraîchit sur la fontaine, SANS fond blanc (qui effacerait les strokes). */
+    private val blobRefreshRunnable = Runnable {
+        Log.i(TAG, "🖌 blobRefreshRunnable: cycle EPD (silence stylet)")
+        fontaineOverlay?.desactiver()
+        invalidate()
+        fontaineOverlay?.activer()
+    }
+
+    fun redrawBlobCorrection() {
+        val gid = correctionGroupId ?: return
+        if (engine.groupBlobs[gid] == null) return
+        // ⛪ MARÉE 20/09 — le blob se rafraîchit au SILENCE du stylet (700 ms d'inactivité
+        // après le dernier trait), jamais pendant l'écriture : la plume reste imperturbable.
+        removeCallbacks(blobRefreshRunnable)
+        postDelayed(blobRefreshRunnable, 700L)
+    }
+
     private fun enterCorrectionMode(gid: String) {
         val gm = engine.groupManager ?: return
         val group = gm.allGroupsFull().find { it.id == gid } ?: return
@@ -663,9 +679,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         insertAtIndex = -1
         // ⚠️ Ne pas désactiver correctionWriteActive ni la fontaine —
         // on reste en mode correction, prêt pour la prochaine lettre.
-        // Cycle desactiver/activer pour forcer la fontaine à effacer sa surface
-        rafraichirCorrectionUI()
-        Log.i(TAG, "applyCorrectionResult: correctionLabel='$correctionLabel' → rafraîchi")
+        // ⛪ MARÉE 20/09 — le cycle attend le SILENCE du stylet (débounce 700 ms) :
+        // écrire lettre à lettre ne fait plus battre l'écran à chaque trait.
+        rafraichirCorrectionUIDebounce()
+        Log.i(TAG, "applyCorrectionResult: correctionLabel='$correctionLabel' → rafraîchi (débouncé)")
     }
 
     /** 🛡️ SENTINELLE D'AFFICHAGE (07/09/2026) — expose l'ordre de la danse, ne corrige pas. */
@@ -685,13 +702,41 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
      *  la SurfaceView de la Fontaine masque la vue tant qu'elle n'est pas vidée ;
      *  donc : vider la surface, peindre (invalidate), PUIS rallumer le canal.
      *  Une seule fonction du cycle — trois appelants (clic −, clic +, lettre, firmware). */
-    fun rafraichirCorrectionUI() {
+    /** Le cycle complet de la correction — déplacé dans un Runnable pour pouvoir être
+     *  débouncé au silence du stylet. */
+    private val correctionUiRefreshRunnable = Runnable {
         fontaineOverlay?.desactiver()
         engine.redrawBitmapInternal(fullRedraw = true)
         fontaineOverlay?.effacerSurface()
         sentinelleAffichage("rafraichirCorrectionUI", listOf("desactiver", "redraw", "effacer", "invalidate", "activer"))
         invalidate()
         fontaineOverlay?.activer()  // réactive la fontaine (raw drawing + rendu)
+    }
+
+    /** Cycle immédiat — les puces (−/+/lettre) répondent à un tap discret, pas à l'écriture. */
+    fun rafraichirCorrectionUI() {
+        correctionUiRefreshRunnable.run()
+    }
+
+    /** ⛪ MARÉE 20/09 — la correction par la plume (lettre réécrite) ne rafraîchit l'écran
+     *  qu'au SILENCE du stylet (700 ms) : écrire lettre à lettre ne doit pas faire
+     *  battre l'écran à chaque trait. */
+    fun rafraichirCorrectionUIDebounce() {
+        removeCallbacks(correctionUiRefreshRunnable)
+        postDelayed(correctionUiRefreshRunnable, 700L)
+    }
+
+    /** ⛪ MARÉE 20/09 — le long-press immobile (inactivité) sort du focus. La sortie naît
+     *  du silence du stylet, jamais de la pose : écrire n'arme rien, seul le maintien
+     *  immobile (armLongPressTimer → handleLongPress) appelle ceci. */
+    fun exitCorrectionByLongPress() {
+        if (!isCorrecting()) return
+        Log.i(TAG, "Correction: long-press immobile → sortie du focus")
+        engine.cancelStroke()
+        exitEditMode()
+        fontaineOverlay?.desactiver()
+        correctionExitTriggered = true  // le retour écriture attend le PEN_UP (comme avant)
+        invalidate()
     }
 
     private fun exitEditMode() {
@@ -727,6 +772,18 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
      *  Sélectionne automatiquement la lettre sous (x,y). */
     fun hitTestCorrectionTarget(x: Float, y: Float): Boolean {
         if (!isCorrecting()) return false
+        // ⛪ LA PARENTHÈSE À DEUX ZONES (20/09/2026) — une seule plume, deux
+        // destinées : dans le BLOB du mot focalisé → absorption (le trait
+        // rejoint le mot, l'inférence repart) ; dans la BOÎTE de lettres →
+        // trait isolé de correction. Le lieu du contact tranche.
+        if (correctionGroupId != null && hitTestBlob(x, y) == correctionGroupId) {
+            engine.groupManager?.selectGroup(correctionGroupId!!)
+            Log.i(TAG, "Correction: ⛪ absorption dans le blob — groupe ${correctionGroupId!!.take(8)} re-sélectionné")
+            return true
+        }
+        // Hors du blob → le trait de correction doit rester isolé du mot :
+        // le groupe focalisé demeure désélectionné (pas d'absorption parasite).
+        correctionGroupId?.let { engine.groupManager?.deselectGroup(it) }
         val minusIdx = hitTestMinus(x, y)
         if (minusIdx >= 0 && minusIdx < correctionLabel.length) {
             correctionLabel = correctionLabel.removeRange(minusIdx, minusIdx + 1)
@@ -968,6 +1025,20 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         if (realSelectedId != null) {
             engine.groupBlobs[realSelectedId]?.let { blob ->
                 canvas.drawPath(blob.path, selectedBlobPaint)
+            }
+        }
+
+        // 2b. ⛪ MARÉE 20/09 — pendant le focus de correction, le blob du mot
+        // focalisé est TOUJOURS affiché (même désélectionné par la boîte de
+        // lettres), pour guider l'édition du groupe locké. Il grandit à chaque
+        // absorption (groupBlobs est à jour dans onStrokeSealed).
+        if (isCorrecting()) {
+            correctionGroupId?.let { gid ->
+                if (gid != realSelectedId) {
+                    engine.groupBlobs[gid]?.let { blob ->
+                        canvas.drawPath(blob.path, selectedBlobPaint)
+                    }
+                }
             }
         }
 

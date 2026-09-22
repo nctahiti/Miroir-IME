@@ -877,6 +877,10 @@ class CaptureActivity : Activity() {
         val displayDelay = CalibrationActivity.getDisplayDelay(this)
         uiHandler.removeCallbacks(inferenceRunnable)
         uiHandler.postDelayed(inferenceRunnable, inferDelay)
+        // ⛪ MARÉE 20/09 — pendant le focus, le plein cycle EPD se TAIT : le blob ne doit
+        // se rafraîchir qu'au silence du stylet (redrawBlobCorrection), jamais à chaque
+        // stroke. Le refresh global reviendra au retour écriture.
+        if (captureView?.isCorrecting() == true) return
         uiHandler.removeCallbacks(displayRefreshRunnable)
         uiHandler.postDelayed(displayRefreshRunnable, displayDelay)
     }
@@ -916,6 +920,12 @@ class CaptureActivity : Activity() {
 
     private fun handleLongPress(x: Float, y: Float) {
         cancelTimers()
+        // ⛪ MARÉE 20/09 — pendant le focus, le long-press (immobile) SORT du focus :
+        // le silence du stylet, pas un geste.
+        if (captureView?.isCorrecting() == true) {
+            captureView?.exitCorrectionByLongPress()
+            return
+        }
         captureView?.selectGroupAt(x, y)
         fontaineOverlay?.modeInteraction = true
         fontaineOverlay?.desactiver()
