@@ -170,6 +170,15 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return false
+        // ⛪ LES QUATRE PUCES (UXK 19/09/2026) — elles vivent dans la vue classique
+        // COMME dans le mode correction : la correction est une couche posée sur la
+        // page, pas un écran. Le toucher des puces passe avant tout le reste et
+        // consomme le geste.
+        // ⛪ MARÉE 22/09 — le test passe AVANT la garde d'écriture : en focus, la
+        // fontaine pose isStylusDown au BEGIN du contact, et l'ordre firmware /
+        // MotionEvent variait → le tap de puce était parfois ignoré (« parfois les
+        // flèches ne répondent pas »). Ici, la puce répond toujours.
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && traiterPuceProposition(event.x, event.y)) return true
         // Si la fontaine est en train d'écrire, ignorer les taps
         if (fontaineOverlay?.isStylusDown == true && !longPressArmed) return false
 
@@ -178,11 +187,6 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 tapStartX = event.x; tapStartY = event.y
                 tapStartTime = System.currentTimeMillis()
                 tapMoved = false
-                // ⛪ LES QUATRE PUCES (UXK 19/09/2026) — elles vivent dans la vue
-                // classique COMME dans le mode correction : la correction est une
-                // couche posée sur la page, pas un écran. Le toucher des puces
-                // passe avant tout le reste, et consomme le geste.
-                if (traiterPuceProposition(event.x, event.y)) return true
                 if (longPressArmed) {
                     // Déjà en mode long-press, le DOWN est le début du geste
                     return true
@@ -732,20 +736,33 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     fun exitCorrectionByLongPress() {
         if (!isCorrecting()) return
         Log.i(TAG, "Correction: long-press immobile → sortie du focus")
+        quitterFocus(appliquer = true)
+    }
+
+    /** ⛪ MARÉE 22/09 — la sortie du focus est UNE, deux verdicts : appliquer (● ou
+     *  long-press) grave le label affiché ; refuser (✗) rend le nominal. Le retour
+     *  écriture attend le PEN_UP, comme avant. */
+    private fun quitterFocus(appliquer: Boolean) {
         engine.cancelStroke()
-        exitEditMode()
+        exitEditMode(appliquer)
         fontaineOverlay?.desactiver()
         correctionExitTriggered = true  // le retour écriture attend le PEN_UP (comme avant)
         invalidate()
     }
 
-    private fun exitEditMode() {
-        // Appliquer le label corrige
-        if (correctionGroupFirstIdx >= 0 && correctionLabel.isNotEmpty()) {
-            // Tenir — le corrigé devient nominal : la dette de révision s'éteint.
-            engine.relecture.corriger(correctionGroupFirstIdx, correctionLabel)
-            engine.relecture.tenir(correctionGroupFirstIdx)
-            Log.i(TAG, "Label corrige: '$correctionLabel'")
+    private fun exitEditMode(appliquer: Boolean = true) {
+        // Le verdict — appliquer ou rendre, jamais les deux.
+        if (correctionGroupFirstIdx >= 0) {
+            if (appliquer && correctionLabel.isNotEmpty()) {
+                // Tenir — le corrigé devient nominal : la dette de révision s'éteint.
+                engine.relecture.corriger(correctionGroupFirstIdx, correctionLabel)
+                engine.relecture.tenir(correctionGroupFirstIdx)
+                Log.i(TAG, "Label corrige: '$correctionLabel'")
+            } else if (!appliquer) {
+                // ✗ — le nominal reprend sa place, la dette s'éteint sans graver.
+                engine.relecture.rendre(correctionGroupFirstIdx, engine.groupLabels[correctionGroupFirstIdx])
+                Log.i(TAG, "Label rendu — le nominal reprend sa place")
+            }
             // 🎙️ La proposition a été jugée (ratifiée, ajustée ou rendue) : elle est
             // consommée. Le pont repose la question à la prochaine page chargée —
             // et c'est la ratification qui nourrira la table des couples de lettres.
@@ -1193,6 +1210,13 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             Paint().apply { color = Color.argb(100, 200, 160, 100); style = Paint.Style.STROKE; strokeWidth = 1.5f; isAntiAlias = true })
         val lockText = Paint().apply { color = Color.argb(220, 200, 160, 100); textSize = chipRadius * 1.0f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
         canvas.drawText("\uD83D\uDD12", lockCX, lockCY + chipRadius * 0.35f, lockText)
+
+        // ⛪ MARÉE 22/09 — les quatre puces ▲▼✗● entourent l'encadré pendant le focus :
+        // l'encadré EST le label de correction (lettre par lettre), les puces de
+        // proposition viennent vivre autour de lui (le label du mot redevient nu).
+        if (correctionGroupFirstIdx >= 0 && engine.propositions[correctionGroupFirstIdx] != null) {
+            drawQuatrePuces(canvas, pucesDuCadre(l), Paint().apply { color = Color.rgb(46, 125, 50); style = Paint.Style.FILL }, s = 2.0f)
+        }
     }
 
     private fun drawLabels(canvas: Canvas) {
@@ -1245,26 +1269,55 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 canvas.drawRect(labelX - 4f, labelY + 4f, labelX + textW + 8f, labelY + 8f, marque)
                 canvas.drawCircle(labelX + textW / 2f, bgRect.top - 9f, 6.5f, marque)
                 // ── LES QUATRE PUCES (la correction est une couche, jamais un mode) ──
-                val puces = pucesDuMot(texte, labelX, labelY)
-                val trait = Paint().apply { color = marque.color; style = Paint.Style.STROKE; strokeWidth = 4f; isAntiAlias = true }
-                for (i in 0 until 4) {
-                    val px = puces[i * 2]; val py = puces[i * 2 + 1]
-                    when (i) {
-                        0 -> canvas.drawPath(Path().apply {
-                            moveTo(px, py - 8f); lineTo(px - 9f, py + 6f); lineTo(px + 9f, py + 6f); close()
-                        }, marque)
-                        1 -> canvas.drawPath(Path().apply {
-                            moveTo(px, py + 8f); lineTo(px - 9f, py - 6f); lineTo(px + 9f, py - 6f); close()
-                        }, marque)
-                        2 -> {   // ✗ rendre
-                            canvas.drawLine(px - 8f, py - 8f, px + 8f, py + 8f, trait)
-                            canvas.drawLine(px - 8f, py + 8f, px + 8f, py - 8f, trait)
-                        }
-                        3 -> canvas.drawCircle(px, py, 9f, marque)   // ● ratifier
-                    }
+                // ⛪ MARÉE 22/09 — pendant le focus, les puces du mot focalisé quittent
+                // le label (il redevient nu, souligné seulement) pour entourer
+                // l'encadré ; elles y sont dessinées par drawCorrectionFrame.
+                if (!(isCorrecting() && firstIdx == correctionGroupFirstIdx)) {
+                    drawQuatrePuces(canvas, pucesDuMot(texte, labelX, labelY), marque)
                 }
             }
         }
+    }
+
+    /** ⛪ LES QUATRE PUCES — dessin partagé (label en vue classique, encadré en focus).
+     *  [0,1] ▲▼ navigation · [2] ✗ rendre · [3] ● ratifier. */
+    private fun drawQuatrePuces(canvas: Canvas, puces: FloatArray, marque: Paint, s: Float = 1f) {
+        val trait = Paint().apply { color = marque.color; style = Paint.Style.STROKE; strokeWidth = 4f * s; isAntiAlias = true }
+        for (i in 0 until 4) {
+            val px = puces[i * 2]; val py = puces[i * 2 + 1]
+            when (i) {
+                0 -> canvas.drawPath(Path().apply {
+                    moveTo(px, py - 8f * s); lineTo(px - 9f * s, py + 6f * s); lineTo(px + 9f * s, py + 6f * s); close()
+                }, marque)
+                1 -> canvas.drawPath(Path().apply {
+                    moveTo(px, py + 8f * s); lineTo(px - 9f * s, py - 6f * s); lineTo(px + 9f * s, py - 6f * s); close()
+                }, marque)
+                2 -> {   // ✗ rendre
+                    canvas.drawLine(px - 8f * s, py - 8f * s, px + 8f * s, py + 8f * s, trait)
+                    canvas.drawLine(px - 8f * s, py + 8f * s, px + 8f * s, py - 8f * s, trait)
+                }
+                3 -> canvas.drawCircle(px, py, 9f * s, marque)   // ● ratifier
+            }
+        }
+    }
+
+    /** ⛪ MARÉE 22/09 — les quatre puces autour de l'ENCRADRÉ (pendant le focus).
+     *  L'encadré EST le label de correction (lettre par lettre) : les puces de
+     *  proposition l'entourent — ▲▼ en haut/bas, ✗● à gauche/droite, au-delà
+     *  des +/−/🔒 qui touchent les cases. */
+    private fun pucesDuCadre(l: CorrectionLayout): FloatArray {
+        val centerX = l.startX + l.caseW * correctionLabel.length / 2f
+        val centerY = l.startY + l.caseW / 2f
+        val left = l.startX - 20f
+        val right = l.startX + l.caseW * correctionLabel.length + 20f
+        val top = l.startY - 10f
+        val bottom = l.startY + l.caseW + 10f
+        return floatArrayOf(
+            centerX, top - 60f,               // ▲ suivante (au-dessus de l'encadré, au-delà des +)
+            centerX, bottom + 60f,            // ▼ précédente (en dessous, au-delà des −)
+            left - 60f, centerY - 26f,        // ✗ rendre (à gauche, au-dessus du 🔒)
+            right + 60f, centerY - 6f         // ● ratifier (à droite)
+        )
     }
 
     /** ⛪ LES QUATRE PUCES d'un mot à proposition (UXK 19/09/2026). Le Capitaine :
@@ -1290,6 +1343,31 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     // HELPERS
     // ═══════════════════════════════════════════════════════════════════
 
+    /** ⛪ MARÉE 22/09 — la navigation ▲▼ du focus. Le pool est [nominal] + la liste
+     *  des propositions ; ▼ descend (proposition suivante), ▲ remonte vers le nominal
+     *  (le label original, éditable dans le focus). La vérité de l'encadré est
+     *  correctionLabel : naviguer, c'est la changer. */
+    private fun naviguerFocusProposition(num: Int) {
+        val idx = correctionGroupFirstIdx
+        if (idx < 0) return
+        val liste = engine.propositionsListe[idx] ?: emptyList()
+        val nominal = engine.relecture.nominaux[idx] ?: engine.groupLabels[idx] ?: ""
+        val pool = listOf(nominal) + liste
+        if (pool.size <= 1) {
+            Log.i(TAG, "Puce ${if (num == 1) "▼" else "▲"} (focus): une seule maison — rien à parcourir")
+            return
+        }
+        val cur = pool.indexOf(correctionLabel).takeIf { it >= 0 } ?: 0
+        val suivant = if (num == 1) (cur + 1).coerceAtMost(pool.size - 1)
+                      else (cur - 1).coerceAtLeast(0)
+        if (suivant == cur) return
+        correctionLabel = pool[suivant]
+        correctLetterIndex = -1
+        insertAtIndex = -1
+        Log.i(TAG, "Puce ${if (num == 1) "▼" else "▲"} (focus): « ${pool[cur]} » → « ${pool[suivant]} » (${suivant + 1}/${pool.size})")
+        rafraichirCorrectionUI()
+    }
+
     /** ⛪ LE TOUCHER DES PUCES (UXK 19/09/2026) — rend true si une puce a été
      *  touchée (le geste est consommé). ▲ = proposition suivante, ▼ = précédente,
      *  ✗ = rendre (le nominal revient, la dette s'éteint), ● = ratifier (le
@@ -1300,11 +1378,22 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         var num: Int = -1
         var liste: List<String> = emptyList()
         var texte: String = ""
+        val focusLayout = if (isCorrecting()) correctionLayout() else null
         for ((firstIdx, proposition) in engine.propositions) {
-            val anchor = engine.groupAnchor[firstIdx] ?: continue
+            // ⛪ MARÉE 22/09 — le focus est une parenthèse sur UN mot : ses puces seules
+            // parlent ; les puces des autres mots attendent le retour à l'écriture.
+            if (focusLayout != null && firstIdx != correctionGroupFirstIdx) continue
             val listeI = engine.propositionsListe[firstIdx] ?: continue
-            val labelY = engine.snapToLine(anchor.second) + 18f
-            val puces = pucesDuMot(proposition, anchor.first, labelY)
+            val puces: FloatArray
+            if (focusLayout != null && firstIdx == correctionGroupFirstIdx) {
+                // ⛪ MARÉE 22/09 — pendant le focus, les puces du mot focalisé
+                // entourent l'encadré (leur nouvelle demeure), plus le label.
+                puces = pucesDuCadre(focusLayout)
+            } else {
+                val anchor = engine.groupAnchor[firstIdx] ?: continue
+                val labelY = engine.snapToLine(anchor.second) + 18f
+                puces = pucesDuMot(proposition, anchor.first, labelY)
+            }
             for (i in 0 until 4) {
                 val dx = x - puces[i * 2]; val dy = y - puces[i * 2 + 1]
                 if (dx * dx + dy * dy <= rayon * rayon) { vise = firstIdx; num = i; break }
@@ -1312,32 +1401,54 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             if (vise >= 0) { liste = listeI; texte = proposition; break }
         }
         if (vise < 0) return false
-        when (num) {
-            0, 1 -> {   // naviguer dans la liste fermée — le mot proposé change de rang
-                val n = liste.size
-                if (n > 1) {
-                    val i0 = liste.indexOf(texte).takeIf { it >= 0 } ?: 0
-                    val suivant = if (num == 0) (i0 + 1) % n else (i0 - 1 + n) % n
-                    engine.propositions[vise] = liste[suivant]
-                    Log.i(TAG, "Puce ${if (num == 0) "▲" else "▼"}: « $texte » → « ${liste[suivant]} » (${suivant + 1}/$n)")
-                } else {
-                    Log.i(TAG, "Puce ${if (num == 0) "▲" else "▼"}: liste fermée d'un seul mot — rien à parcourir")
+        val enFocus = focusLayout != null && vise == correctionGroupFirstIdx
+        if (enFocus) {
+            // ⛪ MARÉE 22/09 — pendant le focus, les quatre puces agissent sur l'encadré :
+            // ▲▼ naviguent dans [nominal]+liste (correctionLabel change), ✗ rend le
+            // nominal et sort, ● grave le label affiché et sort.
+            when (num) {
+                0, 1 -> naviguerFocusProposition(num)
+                2 -> {
+                    Log.i(TAG, "Puce ✗ (focus): « $correctionLabel » refusé — le nominal reprend sa place")
+                    quitterFocus(appliquer = false)
+                }
+                3 -> {
+                    Log.i(TAG, "Puce ● (focus): « $correctionLabel » tenu — le nominal est gravé")
+                    quitterFocus(appliquer = true)
                 }
             }
-            2 -> {      // rendre — le nominal revient ; la place s'éteint
-                engine.relecture.rendre(vise, engine.groupLabels[vise])
-                engine.propositions.remove(vise)
-                engine.propositionsListe.remove(vise)
-                Log.i(TAG, "Puce ✗: « $texte » rendu — la dette s'éteint, le nominal parle")
-            }
-            3 -> {      // ratifier — le corrigé est gravé (corriger + tenir)
-                engine.relecture.corriger(vise, texte)
-                engine.relecture.tenir(vise)
-                engine.propositions.remove(vise)
-                engine.propositionsListe.remove(vise)
-                Log.i(TAG, "Puce ●: « $texte » tenu — le nominal est gravé")
+        } else {
+            when (num) {
+                0, 1 -> {   // naviguer dans la liste fermée — le mot proposé change de rang
+                    val n = liste.size
+                    if (n > 1) {
+                        val i0 = liste.indexOf(texte).takeIf { it >= 0 } ?: 0
+                        val suivant = if (num == 0) (i0 + 1) % n else (i0 - 1 + n) % n
+                        engine.propositions[vise] = liste[suivant]
+                        Log.i(TAG, "Puce ${if (num == 0) "▲" else "▼"}: « $texte » → « ${liste[suivant]} » (${suivant + 1}/$n)")
+                    } else {
+                        Log.i(TAG, "Puce ${if (num == 0) "▲" else "▼"}: liste fermée d'un seul mot — rien à parcourir")
+                    }
+                }
+                2 -> {      // rendre — le nominal revient ; la place s'éteint
+                    engine.relecture.rendre(vise, engine.groupLabels[vise])
+                    engine.propositions.remove(vise)
+                    engine.propositionsListe.remove(vise)
+                    Log.i(TAG, "Puce ✗: « $texte » rendu — la dette s'éteint, le nominal parle")
+                }
+                3 -> {      // ratifier — le corrigé est gravé (corriger + tenir)
+                    engine.relecture.corriger(vise, texte)
+                    engine.relecture.tenir(vise)
+                    engine.propositions.remove(vise)
+                    engine.propositionsListe.remove(vise)
+                    Log.i(TAG, "Puce ●: « $texte » tenu — le nominal est gravé")
+                }
             }
         }
+        // ⛪ MARÉE 22/09 — une puce consommée l'est jusqu'au bout : l'UP ne doit pas
+        // retomber sur handleTap (qui sélectionnerait un autre mot, ou re-basculerait
+        // le focus). Le verrou de l'attention — le tap de puce ne sélectionne rien d'autre.
+        correctionTapConsumed = true
         post { invalidate() }
         return true
     }
