@@ -747,7 +747,12 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         exitEditMode(appliquer)
         fontaineOverlay?.desactiver()
         correctionExitTriggered = true  // le retour écriture attend le PEN_UP (comme avant)
-        invalidate()
+        // ⛪ MARÉE 23/09 — le dédoublement : le cadre (vue) et le contour du blob
+        // (fontaine) vivent sur deux surfaces. Ici on essuie la fontaine (desactiver),
+        // puis on POSTE le redessin de la vue — la surface a le temps de se taire
+        // avant que le cadre ne s'ôte. Sans ce battement, la course trop serrée
+        // laissait UN des deux exemplaires gravé.
+        post { invalidate() }
     }
 
     private fun exitEditMode(appliquer: Boolean = true) {
