@@ -893,6 +893,15 @@ class CaptureActivity : Activity() {
             Log.i(TAG, "refreshDisplay: modeInteraction → REFRESH_PENDING consigné")
             return
         }
+        // ⛪ MARÉE 23/09 — la plume est posée : ne pas couper le canal raw mid-trait,
+        // ne pas laver l'encre vive. Le témoin attend le silence — le prochain
+        // scheduleInference (PEN_UP) relancera le refresh.
+        if (fontaineOverlay?.isStylusDown == true) {
+            uiHandler.removeCallbacks(displayRefreshRunnable)
+            uiHandler.postDelayed(displayRefreshRunnable, 250)
+            Log.i(TAG, "refreshDisplay: stylet posé → témoin différé 250ms")
+            return
+        }
         engine.groupManager?.evictInactive()
         // 🔬 SÉMATOGRAMME CACHE
         val gm = engine.groupManager

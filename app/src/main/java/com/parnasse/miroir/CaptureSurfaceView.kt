@@ -1268,13 +1268,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 val marque = Paint().apply { color = Color.rgb(46, 125, 50); style = Paint.Style.FILL }
                 canvas.drawRect(labelX - 4f, labelY + 4f, labelX + textW + 8f, labelY + 8f, marque)
                 canvas.drawCircle(labelX + textW / 2f, bgRect.top - 9f, 6.5f, marque)
-                // ── LES QUATRE PUCES (la correction est une couche, jamais un mode) ──
-                // ⛪ MARÉE 22/09 — pendant le focus, les puces du mot focalisé quittent
-                // le label (il redevient nu, souligné seulement) pour entourer
-                // l'encadré ; elles y sont dessinées par drawCorrectionFrame.
-                if (!(isCorrecting() && firstIdx == correctionGroupFirstIdx)) {
-                    drawQuatrePuces(canvas, pucesDuMot(texte, labelX, labelY), marque)
-                }
+                // ⛪ MARÉE 23/09 — les puces ne vivent plus qu'autour de l'encadré
+                // (drawCorrectionFrame), pendant le focus. Le label ne porte que le
+                // trait et le point — la marque de la proposition, pas son clavier.
             }
         }
     }
@@ -1373,76 +1369,36 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
      *  ✗ = rendre (le nominal revient, la dette s'éteint), ● = ratifier (le
      *  corrigé devient nominal — les verbes de la sentinelle). */
     private fun traiterPuceProposition(x: Float, y: Float): Boolean {
+        // ⛪ MARÉE 23/09 — les puces ne vivent plus qu'autour de l'encadré, en focus.
+        // Hors focus, aucune puce à toucher : le geste retombe sur le reste (blob,
+        // label). L'ancien clavier du mot (▲▼✗● autour du label) s'est retiré.
+        val focusLayout = if (isCorrecting()) correctionLayout() else null
+        if (focusLayout == null) return false
         val rayon = 34f
         var vise: Int = -1
         var num: Int = -1
-        var liste: List<String> = emptyList()
-        var texte: String = ""
-        val focusLayout = if (isCorrecting()) correctionLayout() else null
-        for ((firstIdx, proposition) in engine.propositions) {
-            // ⛪ MARÉE 22/09 — le focus est une parenthèse sur UN mot : ses puces seules
-            // parlent ; les puces des autres mots attendent le retour à l'écriture.
-            if (focusLayout != null && firstIdx != correctionGroupFirstIdx) continue
-            val listeI = engine.propositionsListe[firstIdx] ?: continue
-            val puces: FloatArray
-            if (focusLayout != null && firstIdx == correctionGroupFirstIdx) {
-                // ⛪ MARÉE 22/09 — pendant le focus, les puces du mot focalisé
-                // entourent l'encadré (leur nouvelle demeure), plus le label.
-                puces = pucesDuCadre(focusLayout)
-            } else {
-                val anchor = engine.groupAnchor[firstIdx] ?: continue
-                val labelY = engine.snapToLine(anchor.second) + 18f
-                puces = pucesDuMot(proposition, anchor.first, labelY)
-            }
+        for (firstIdx in engine.propositions.keys) {
+            if (firstIdx != correctionGroupFirstIdx) continue
+            val puces = pucesDuCadre(focusLayout)
             for (i in 0 until 4) {
                 val dx = x - puces[i * 2]; val dy = y - puces[i * 2 + 1]
                 if (dx * dx + dy * dy <= rayon * rayon) { vise = firstIdx; num = i; break }
             }
-            if (vise >= 0) { liste = listeI; texte = proposition; break }
+            if (vise >= 0) break
         }
         if (vise < 0) return false
-        val enFocus = focusLayout != null && vise == correctionGroupFirstIdx
-        if (enFocus) {
-            // ⛪ MARÉE 22/09 — pendant le focus, les quatre puces agissent sur l'encadré :
-            // ▲▼ naviguent dans [nominal]+liste (correctionLabel change), ✗ rend le
-            // nominal et sort, ● grave le label affiché et sort.
-            when (num) {
-                0, 1 -> naviguerFocusProposition(num)
-                2 -> {
-                    Log.i(TAG, "Puce ✗ (focus): « $correctionLabel » refusé — le nominal reprend sa place")
-                    quitterFocus(appliquer = false)
-                }
-                3 -> {
-                    Log.i(TAG, "Puce ● (focus): « $correctionLabel » tenu — le nominal est gravé")
-                    quitterFocus(appliquer = true)
-                }
+        // ⛪ MARÉE 22/09 — pendant le focus, les quatre puces agissent sur l'encadré :
+        // ▲▼ naviguent dans [nominal]+liste (correctionLabel change), ✗ rend le
+        // nominal et sort, ● grave le label affiché et sort.
+        when (num) {
+            0, 1 -> naviguerFocusProposition(num)
+            2 -> {
+                Log.i(TAG, "Puce ✗ (focus): « $correctionLabel » refusé — le nominal reprend sa place")
+                quitterFocus(appliquer = false)
             }
-        } else {
-            when (num) {
-                0, 1 -> {   // naviguer dans la liste fermée — le mot proposé change de rang
-                    val n = liste.size
-                    if (n > 1) {
-                        val i0 = liste.indexOf(texte).takeIf { it >= 0 } ?: 0
-                        val suivant = if (num == 0) (i0 + 1) % n else (i0 - 1 + n) % n
-                        engine.propositions[vise] = liste[suivant]
-                        Log.i(TAG, "Puce ${if (num == 0) "▲" else "▼"}: « $texte » → « ${liste[suivant]} » (${suivant + 1}/$n)")
-                    } else {
-                        Log.i(TAG, "Puce ${if (num == 0) "▲" else "▼"}: liste fermée d'un seul mot — rien à parcourir")
-                    }
-                }
-                2 -> {      // rendre — le nominal revient ; la place s'éteint
-                    engine.relecture.rendre(vise, engine.groupLabels[vise])
-                    engine.propositions.remove(vise)
-                    engine.propositionsListe.remove(vise)
-                    Log.i(TAG, "Puce ✗: « $texte » rendu — la dette s'éteint, le nominal parle")
-                }
-                3 -> {      // ratifier — le corrigé est gravé (corriger + tenir)
-                    engine.relecture.corriger(vise, texte)
-                    engine.relecture.tenir(vise)
-                    engine.propositions.remove(vise)
-                    engine.propositionsListe.remove(vise)
-                    Log.i(TAG, "Puce ●: « $texte » tenu — le nominal est gravé")
-                }
+            3 -> {
+                Log.i(TAG, "Puce ● (focus): « $correctionLabel » tenu — le nominal est gravé")
+                quitterFocus(appliquer = true)
             }
         }
         // ⛪ MARÉE 22/09 — une puce consommée l'est jusqu'au bout : l'UP ne doit pas
