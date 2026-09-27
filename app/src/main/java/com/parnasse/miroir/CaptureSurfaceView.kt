@@ -519,16 +519,16 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         val firstRI = engine.inkStrokeIdToRegistryIndex[firstSid] ?: return
         val label = engine.groupLabels[firstRI] ?: ""
 
-        // 🎙️ LA VOIX DU CORRIGÉ (19/09/2026) — si le pont a proposé un mot pour ce
-        // groupe, c'est LUI qui prend la place du transcrit : la correction est
-        // PROPOSÉE (le tampon s'ouvre dessus), jamais imposée — la sortie du mode
-        // correction la ratifie (« tenir »), et un retour la rend au nominal.
+        // 🎙️ LA VOIX DU CORRIGÉ (19/09/2026) — le pont propose, le TRANSCRIT reste
+        // le label officiel : le tampon s'ouvre sur lui, et la proposition n'est
+        // que le SECOND CHOIX (les puces ▲▼ du focus la rejoignent) — jamais
+        // imposée. La sortie ratifie (« tenir »), un retour rend au nominal.
         val propose = engine.propositions[firstRI]
 
         editMode = EditMode.CORRECT_TRANSCRIPTION
         correctionGroupId = gid
         correctionGroupFirstIdx = firstRI
-        correctionLabel = propose ?: label
+        correctionLabel = label   // le transcrit d'abord ; le proposé est le second choix (▼)
         correctLetterIndex = -1
         insertAtIndex = -1
         correctionPaths.clear()
@@ -1122,14 +1122,17 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             canvas.drawLine(0f, ly, width.toFloat(), ly, Template.GUIDE_PAINT)
         }
 
-        // 4. Mode correction : cadre + puces
-        if (isCorrecting()) {
-            drawCorrectionFrame(canvas)
-        }
-
-        // 5. Labels (toujours visibles, même en mode correction)
+        // 4. Labels (toujours visibles, même en mode correction)
         if (showLabels && engine.groupLabels.isNotEmpty()) {
             drawLabels(canvas)
+        }
+
+        // 5. Mode correction : cadre + puces — PAR-DESSUS les labels : l'encadré
+        //    (son fond blanc, ses lettres, ses puces ▲▼✗●) est le label du mot
+        //    focalisé, il couvre les labels voisins au lieu d'être couvert —
+        //    c'est ce qui garde lisibles les caractères et les puces.
+        if (isCorrecting()) {
+            drawCorrectionFrame(canvas)
         }
 
         // 6. Stroke en cours
@@ -1244,12 +1247,13 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         entries.sortWith(compareBy<LabelEntry> { it.snapY }.thenBy { it.anchorX })
 
         for ((firstIdx, label, anchorX, snapY, isSel) in entries) {
-            // 🎙️ LA VOIX VISIBLE (19/09/2026) — « l'affichage est l'incitation » :
-            // le mot PROPOSÉ prend la place du transcrit (le Capitaine ne doit pas
-            // avoir à toucher un mot pour savoir où vit une correction), et un
-            // point le désigne — la place tient tant que la correction vit.
+            // 🎙️ LA VOIX VISIBLE (19/09/2026) — « l'affichage est l'incitation »,
+            // mais le TRANSCRIT reste le label officiel : la page l'affiche tel
+            // quel, et un SOULIGNEMENT dit seul où vit une correction. La
+            // proposition, elle, est le second choix — on la rejoint par les
+            // puces ▲▼ du focus (jamais par substitution).
             val propose = engine.propositions[firstIdx]
-            val texte = propose ?: label
+            val texte = label
             val textW = labelPaint.measureText(texte)
             val labelX = anchorX  // position de l'encre (premier point du groupe)
             val labelY = snapY + 18f
@@ -1258,24 +1262,18 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 labelX + textW + 8f, labelY + 10f
             )
             val bgColor = when {
-                propose != null -> Color.argb(215, 228, 244, 230)  // une proposition habite ici
                 isSel -> Color.argb(220, 220, 235, 255)
                 else -> Color.argb(180, 255, 255, 255)
             }
             canvas.drawRoundRect(bgRect, 6f, 6f, Paint().apply { color = bgColor; style = Paint.Style.FILL })
             canvas.drawText(texte, labelX, labelY, labelPaint)
             if (propose != null) {
-                // ⛪ LE TRAIT ET LE POINT (19/09, e-ink) — la couleur ne suffit pas
-                // sur l'encre électronique : la proposition se marque par la
-                // STRUCTURE. Un trait sous le mot (« ce mot est proposé ») et un
-                // point au-dessus (« la correction vit ici »). Le mot tenu reste
-                // nu : le doute se voit, la certitude se tait.
+                // ⛪ LE SOULIGNEMENT SEUL (27/09, e-ink) — le transcrit reste nu,
+                // un trait sous le mot dit « une correction vit ici ». Ni couleur
+                // de fond, ni point, ni substitution : le doute se voit, la
+                // certitude se tait.
                 val marque = Paint().apply { color = Color.rgb(46, 125, 50); style = Paint.Style.FILL }
                 canvas.drawRect(labelX - 4f, labelY + 4f, labelX + textW + 8f, labelY + 8f, marque)
-                canvas.drawCircle(labelX + textW / 2f, bgRect.top - 9f, 6.5f, marque)
-                // ⛪ MARÉE 23/09 — les puces ne vivent plus qu'autour de l'encadré
-                // (drawCorrectionFrame), pendant le focus. Le label ne porte que le
-                // trait et le point — la marque de la proposition, pas son clavier.
             }
         }
     }
