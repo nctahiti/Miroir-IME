@@ -1100,10 +1100,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             }
         }
 
-        // 2b. Preview scrub : surbrillance des points conservés
-        if (scrubCutRatio >= 0f && scrubCutRatio < 1f && selectedGroupId != null) {
+        // 2b. Preview scrub : surbrillance des points conservés — la CIBLE, pas la sélection
+        if (scrubCutRatio >= 0f && scrubCutRatio < 1f && targetGroupId != null) {
             val gm = engine.groupManager
-            val group = gm?.allGroupsFull()?.find { it.id == selectedGroupId }
+            val group = gm?.allGroupsFull()?.find { it.id == targetGroupId }
             if (group != null) {
                 val strokes = group.strokeIds.mapNotNull { sid ->
                     val idx = engine.inkStrokeIdToRegistryIndex[sid]
@@ -1167,7 +1167,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         //    (son fond blanc, ses lettres, ses puces ▲▼✗●) est le label du mot
         //    focalisé, il couvre les labels voisins au lieu d'être couvert —
         //    c'est ce qui garde lisibles les caractères et les puces.
-        if (isCorrecting()) {
+        // ⛪ la CIBLE, pas le mode : l'encadré tient pendant le scrub (ERASE).
+        if (correctionGroupId != null) {
             drawCorrectionFrame(canvas)
         }
 
