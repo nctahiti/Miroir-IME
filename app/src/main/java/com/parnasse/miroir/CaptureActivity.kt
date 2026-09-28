@@ -937,6 +937,11 @@ class CaptureActivity : Activity() {
             captureView?.selectGroupAt(x, y)
         }
         fontaineOverlay?.modeInteraction = true
+        // ⛪ MARÉE 28/09 — le geste prend la main : couper correctionWriteActive,
+        // sinon le garde-fou du firmware (modeInteraction && !correctionWriteActive)
+        // reste muet et keepRawDrawingActive() rallume le raw drawing → le glissement
+        // trace un stroke au lieu d'être forwardé comme geste.
+        fontaineOverlay?.correctionWriteActive = false
         fontaineOverlay?.desactiver()
         captureView?.armLongPressGesture(x, y)
         fontaineOverlay?.touchForwardTarget = captureView
