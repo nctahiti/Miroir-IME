@@ -929,13 +929,13 @@ class CaptureActivity : Activity() {
 
     private fun handleLongPress(x: Float, y: Float) {
         cancelTimers()
-        // ⛪ MARÉE 20/09 — pendant le focus, le long-press (immobile) SORT du focus :
-        // le silence du stylet, pas un geste.
-        if (captureView?.isCorrecting() == true) {
-            captureView?.exitCorrectionByLongPress()
-            return
+        // ⛪ MARÉE 28/09 — le long-press ARME le geste, focus ou pas. Le geste
+        // donne la direction ; l'immobilité sortira du focus, ← effacera le mot
+        // focalisé. On saute seulement la sélection : en focus, le mot est déjà
+        // focalisé (correctionGroupId), pas besoin d'en choisir un autre.
+        if (captureView?.isCorrecting() != true) {
+            captureView?.selectGroupAt(x, y)
         }
-        captureView?.selectGroupAt(x, y)
         fontaineOverlay?.modeInteraction = true
         fontaineOverlay?.desactiver()
         captureView?.armLongPressGesture(x, y)

@@ -366,49 +366,58 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     // GESTES
     // ═══════════════════════════════════════════════════════════════════
 
-    /** MOVE pendant un long-press armé → détecter la direction ou continuer le geste. */
+    /** MOVE pendant un long-press armé → la direction du geste est son seul
+     *  vocabulaire : ← effacer (universel, focus ou non), ↓ déplacer, → absorber,
+     *  ↑ corriger (hors focus). En focus, seule ← parle. */
     private fun handleLongPressMove(x: Float, y: Float) {
-        if (editMode == EditMode.NONE) {
-            val dx = x - gestureStartX
-            val dy = y - gestureStartY
-            if (dx < -SWIPE_THRESHOLD) {
-                enterEraseMode(x)
-                Log.i(TAG, "→ Mode EFFACEMENT (←)")
-            } else if (dy > SWIPE_THRESHOLD) {
-                enterMoveMode(x, y)
-                Log.i(TAG, "→ Mode DÉPLACEMENT (↓)")
-            } else if (dx > SWIPE_THRESHOLD) {
+        when (editMode) {
+            EditMode.ERASE -> { scrubGroup(x); return }
+            EditMode.MOVE -> { moveGroup(x - gestureStartX, y - gestureStartY); gestureStartX = x; gestureStartY = y; return }
+            else -> {}   // NONE / CORRECT_TRANSCRIPTION : on lit la direction ci-dessous
+        }
+        val dx = x - gestureStartX
+        val dy = y - gestureStartY
+        when {
+            dx < -SWIPE_THRESHOLD -> { enterEraseMode(x); Log.i(TAG, "→ Mode EFFACEMENT (←)") }
+            dy > SWIPE_THRESHOLD && !isCorrecting() -> { enterMoveMode(x, y); Log.i(TAG, "→ Mode DÉPLACEMENT (↓)") }
+            dx > SWIPE_THRESHOLD && !isCorrecting() -> {
                 // → absorption : annuler le long-press, réactiver la fontaine
-                exitGestureMode()
-                longPressArmed = false
-                onReturnToWriting?.invoke()
+                exitGestureMode(); longPressArmed = false; onReturnToWriting?.invoke()
                 Log.i(TAG, "→ Absorption (→) — retour écriture")
-            } else if (dy < -SWIPE_THRESHOLD) {
-                enterCorrectionMode()
-                Log.i(TAG, "→ Mode CORRECTION (↑)")
             }
-        } else if (editMode == EditMode.ERASE) {
-            scrubGroup(x)
-        } else if (editMode == EditMode.MOVE) {
-            moveGroup(x - gestureStartX, y - gestureStartY)
-            gestureStartX = x; gestureStartY = y
+            dy < -SWIPE_THRESHOLD && !isCorrecting() -> { enterCorrectionMode(); Log.i(TAG, "→ Mode CORRECTION (↑)") }
         }
     }
 
-    /** UP après un long-press → appliquer la coupe scrub, sortir du mode édition. */
+    /** UP après un long-press → le geste a tranché, on applique. Trois destins :
+     *  l'effacement coupe (et reste en focus si on y était) ; l'immobilité sort
+     *  du focus ; le reste retourne à l'écriture. */
     private fun handleLongPressUp() {
-        // Appliquer la coupe scrub si active (PEN_UP en mode ERASE)
-        if (editMode == EditMode.ERASE) applyScrubCut()
-        val wasCorrecting = editMode == EditMode.CORRECT_TRANSCRIPTION
-        longPressArmed = false
-        if (!wasCorrecting) {
-            exitGestureMode()
-            onReturnToWriting?.invoke()
-        } else {
-            // Mode correction : activer l'écriture pour les strokes de correction
-            fontaineOverlay?.correctionWriteActive = true
-            fontaineOverlay?.reactiver()
-            Log.i(TAG, "Mode correction: écriture activée pour correction")
+        when (editMode) {
+            EditMode.ERASE -> {
+                applyScrubCut()
+                longPressArmed = false
+                if (correctionGroupId != null) {
+                    // On a effacé le mot focalisé — on reste en focus pour continuer.
+                    editMode = EditMode.CORRECT_TRANSCRIPTION
+                    fontaineOverlay?.correctionWriteActive = true
+                    fontaineOverlay?.reactiver()
+                    Log.i(TAG, "Mode correction: écriture réactivée après effacement")
+                } else {
+                    exitGestureMode()
+                    onReturnToWriting?.invoke()
+                }
+            }
+            EditMode.CORRECT_TRANSCRIPTION -> {
+                // L'immobilité (long-press sans direction) confirme la sortie.
+                longPressArmed = false
+                exitCorrectionByLongPress()
+            }
+            else -> {
+                longPressArmed = false
+                exitGestureMode()
+                onReturnToWriting?.invoke()
+            }
         }
         invalidate()
     }
@@ -870,10 +879,15 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     /** Ligne de coupe verticale affichée pendant le scrub. */
     private var scrubCutX: Float = 0f
 
+    /** Le groupe que le geste vise — le mot focalisé en focus, la sélection sinon.
+     *  Une seule source de vérité : le scrub et la coupe parlent à ce groupe,
+     *  quel que soit le mode. C'est l'interlocuteur qui change, jamais le geste. */
+    private val targetGroupId: String? get() = if (isCorrecting()) correctionGroupId else selectedGroupId
+
     /** Scrub : preview seule — trait rouge + zone qui sera coupée.
      *  La coupe réelle est appliquée au PEN_UP via applyScrubCut(). */
     fun scrubGroup(currentX: Float) {
-        val gid = selectedGroupId ?: return
+        val gid = targetGroupId ?: return
         val gm = engine.groupManager ?: return
         val group = gm.allGroupsFull().find { it.id == gid } ?: return
         if (group.strokeIds.isEmpty()) return
@@ -891,7 +905,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     /** Applique la coupe au PEN_UP. */
     fun applyScrubCut() {
         if (scrubCutRatio < 0f) return
-        val gid = selectedGroupId ?: return
+        val gid = targetGroupId ?: return
         val gm = engine.groupManager ?: return
         val group = gm.allGroupsFull().find { it.id == gid } ?: return
 
