@@ -74,6 +74,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     private var selectedGroupId: String? = null
     private var selectedGroupLabel: String? = null
     private var longPressArmed = false  // true après un long-press → en attente de swipe
+    /** Était-on en focus au moment du long-press ? Distingue l'entrée (swipe ↑)
+     *  de la sortie (immobilité) : le même UP ne doit pas sortir le focus qu'il
+     *  vient d'ouvrir. */
+    private var wasInFocusAtLongPress = false
 
     // ── Correction ────────────────────────────────────────────────────
     internal var correctionGroupId: String? = null
@@ -409,9 +413,16 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 }
             }
             EditMode.CORRECT_TRANSCRIPTION -> {
-                // L'immobilité (long-press sans direction) confirme la sortie.
                 longPressArmed = false
-                exitCorrectionByLongPress()
+                if (wasInFocusAtLongPress) {
+                    // Immobilité pendant un focus déjà ouvert → la sortie.
+                    exitCorrectionByLongPress()
+                } else {
+                    // Le swipe ↑ vient d'OUVRIR le focus → on y reste.
+                    fontaineOverlay?.correctionWriteActive = true
+                    fontaineOverlay?.reactiver()
+                    Log.i(TAG, "Mode correction: écriture activée pour correction")
+                }
             }
             else -> {
                 longPressArmed = false
@@ -478,6 +489,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     /** Appelé après un long-press → arme la détection de swipe dans onTouchEvent. */
     fun armLongPressGesture(startX: Float, startY: Float) {
         longPressArmed = true
+        // ⛪ MARÉE 28/09 — mémoriser l'état AVANT le geste : le même UP ne doit
+        // pas sortir le focus que le swipe ↑ vient d'ouvrir (entrée ≠ sortie).
+        wasInFocusAtLongPress = isCorrecting()
         gestureStartX = startX
         gestureStartY = startY
         tapStartX = startX
