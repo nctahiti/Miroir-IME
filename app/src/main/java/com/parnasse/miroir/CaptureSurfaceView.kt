@@ -893,10 +893,11 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     /** Ligne de coupe verticale affichée pendant le scrub. */
     private var scrubCutX: Float = 0f
 
-    /** Le groupe que le geste vise — le mot focalisé en focus, la sélection sinon.
-     *  Une seule source de vérité : le scrub et la coupe parlent à ce groupe,
-     *  quel que soit le mode. C'est l'interlocuteur qui change, jamais le geste. */
-    private val targetGroupId: String? get() = if (isCorrecting()) correctionGroupId else selectedGroupId
+    /** Le groupe que le geste vise — le mot focalisé s'il existe, la sélection
+     *  sinon. Une seule source de vérité, indépendante du MODE : pendant le scrub
+     *  (editMode=ERASE), le mot focalisé (correctionGroupId) demeure la cible —
+     *  isCorrecting() mentirait, car il lit le mode, pas la cible. */
+    private val targetGroupId: String? get() = correctionGroupId ?: selectedGroupId
 
     /** Scrub : preview seule — trait rouge + zone qui sera coupée.
      *  La coupe réelle est appliquée au PEN_UP via applyScrubCut(). */
