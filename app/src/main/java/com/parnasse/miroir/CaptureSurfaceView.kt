@@ -90,6 +90,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     private var correctionExitTimer: java.lang.Runnable? = null  // long-press pour sortir du mode correction
     private var correctionExitTriggered: Boolean = false  // true → sortie faite, attend PEN_UP pour retour écriture
     internal var correctionOriginalStrokeCount: Int = 0  // strokes du groupe original avant correction
+    /** ⛪ position verticale figée à l'entrée en focus : l'encadré est une boîte
+     *  de dialogue — il tient sa place pendant que le blob grossit. */
+    private var correctionBlobTop: Float? = null
     private var savedSelectedGroupId: String? = null  // groupe à restaurer à la sortie
     internal var lastCorrectionExitTime: Long = 0  // anti-rebond long-press après sortie
 
@@ -285,7 +288,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         // au-dessus de sa limite supérieure, décalé de quelques dizaines de
         // pixels adaptés à la hauteur d'affichage — la vue du groupe sélectionné
         // reste dégagée et les puces restent dans le champ.
-        val blobTop = correctionGroupId?.let { engine.groupBlobs[it]?.bounds?.top }
+        val blobTop = correctionBlobTop
+            ?: correctionGroupId?.let { engine.groupBlobs[it]?.bounds?.top }
             ?: engine.snapToLine(anchor.second)
         val offset = (height * 0.04f).coerceIn(18f, 48f)
         var sx = anchor.first - totalW / 2f
@@ -417,6 +421,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 if (wasInFocusAtLongPress) {
                     // Immobilité pendant un focus déjà ouvert → la sortie.
                     exitCorrectionByLongPress()
+                    // On est déjà au PEN_UP : le retour écriture se fait ici, pas
+                    // au stroke suivant (sinon correctionExitTriggered l'avale).
+                    correctionExitTriggered = false
+                    onReturnToWriting?.invoke()
                 } else {
                     // Le swipe ↑ vient d'OUVRIR le focus → on y reste.
                     fontaineOverlay?.correctionWriteActive = true
@@ -554,6 +562,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         correctionGroupId = gid
         correctionGroupFirstIdx = firstRI
         correctionLabel = label   // le transcrit d'abord ; le proposé est le second choix (▼)
+        // ⛪ figer la hauteur de l'encadré une fois pour toutes : il ne suit pas le blob.
+        correctionBlobTop = engine.groupBlobs[gid]?.bounds?.top
+            ?: engine.groupAnchor[firstRI]?.second?.let { engine.snapToLine(it) }
         correctLetterIndex = -1
         insertAtIndex = -1
         correctionPaths.clear()
@@ -808,6 +819,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         correctionGroupId = null
         correctionGroupFirstIdx = -1
         correctionLabel = ""
+        correctionBlobTop = null
         correctLetterIndex = -1
         insertAtIndex = -1
         correctionPaths.clear()
