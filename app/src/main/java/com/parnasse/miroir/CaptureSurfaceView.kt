@@ -500,7 +500,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         Log.i(TAG, "🖌 blobRefreshRunnable: cycle EPD (silence stylet)")
         fontaineOverlay?.desactiver()
         invalidate()
-        fontaineOverlay?.activer()
+        // ⛪ MARÉE 28/09 — idem cycle de correction : la peinture part au frame
+        // suivant, on rallume la fontaine après elle.
+        post { fontaineOverlay?.activer() }
     }
 
     fun redrawBlobCorrection() {
@@ -714,7 +716,12 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         fontaineOverlay?.effacerSurface()
         sentinelleAffichage("rafraichirCorrectionUI", listOf("desactiver", "redraw", "effacer", "invalidate", "activer"))
         invalidate()
-        fontaineOverlay?.activer()  // réactive la fontaine (raw drawing + rendu)
+        // ⛪ MARÉE 28/09 — la peinture (invalidate) est asynchrone : onDraw ne part
+        // qu'au frame suivant. On rallume la fontaine APRÈS elle, jamais collée en
+        // synchrone au invalidate — sinon la surface se rallume pendant que la vue
+        // n'a pas encore peint (décalage mesuré : onDraw 1-30 ms après activer).
+        // Même battement que quitterFocus (post { invalidate() }).
+        post { fontaineOverlay?.activer() }  // réactive la fontaine (raw drawing + rendu)
     }
 
     /** Cycle immédiat — les puces (−/+/lettre) répondent à un tap discret, pas à l'écriture. */
