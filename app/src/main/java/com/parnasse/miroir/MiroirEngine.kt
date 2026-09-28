@@ -83,6 +83,20 @@ class MiroirEngine {
     val strokeRegistry = mutableListOf<StrokeRecord>()
     val inkStrokeIdToRegistryIndex = mutableMapOf<Long, Int>()
     private var inkStrokeIdCounter: Long = 0
+
+    // ⛪ MARÉE 28/09 — l'archivage en lot : les strokes des groupes évincés
+    // s'accumulent ici, puis le flush les grave UNE fois (rasterizeStrokes)
+    // et les marque archivés — jamais un redraw par groupe.
+    private val pendingArchive = mutableSetOf<Int>()
+    private val archiveFlushRunnable = Runnable {
+        val ids = pendingArchive.toList()
+        if (ids.isNotEmpty()) {
+            rasterizeStrokes(ids)   // graver UNE fois, seulement eux
+            for (ri in ids) strokeRegistry.getOrNull(ri)?.isArchived = true
+            pendingArchive.clear()
+            Log.d(TAG, "Archive en lot: ${ids.size} strokes gravés et archivés")
+        }
+    }
     var currentStrokeRecord: StrokeRecord? = null; private set
     var currentPath = Path(); private set
 
@@ -231,14 +245,18 @@ class MiroirEngine {
             // clearPage, scrub) : « les strokes ne s'affichent pas ». On rastérise
             // d'abord, on archive ensuite — dans le même souffle, sur le fil de l'UI.
             it.onGroupEvicted = { group ->
-                uiHandler.post {
-                    redrawBitmapInternal()   // rastériser AVANT de lever le drapeau
-                    for (sid in group.strokeIds) {
-                        val ri = inkStrokeIdToRegistryIndex[sid] ?: continue
-                        strokeRegistry.getOrNull(ri)?.isArchived = true
-                    }
+                // ⛪ MARÉE 28/09 — l'archivage en lot : on COLLECTE les strokes,
+                // on ne grave pas par groupe. Le flush (archiveFlushRunnable) les
+                // rastérisera UNE fois, en un seul geste — jamais un redraw par
+                // éviction (cascade de N redrawBitmapInternal qui regravait
+                // l'encre encore vive des voisins).
+                for (sid in group.strokeIds) {
+                    val ri = inkStrokeIdToRegistryIndex[sid] ?: continue
+                    pendingArchive.add(ri)
                 }
                 pageDirty = true  // ⛪ MARÉE 30/08 — les états changent : le save écrira.
+                uiHandler.removeCallbacks(archiveFlushRunnable)
+                uiHandler.post(archiveFlushRunnable)
             }
             // 🛡️ LA PLACE TIENT (UXK 19/09/2026) — l'effacement retire l'encre,
             // jamais la place : un groupe dont la correction vit (une
@@ -425,18 +443,40 @@ class MiroirEngine {
         Log.i(TAG, "rebuildAllBlobs: ${groupBlobs.size} blobs reconstruits")
     }
 
+    /** Le pinceau d'encre — une seule source de vérité (noir, sans anti-alias EPD). */
+    private val inkPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.BLACK; strokeWidth = 3f
+        style = android.graphics.Paint.Style.STROKE
+        strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
+        isAntiAlias = false  // EPD : pas d'anti-aliasing (coûteux, inutile sur e-ink)
+    }
+
+    /** ⛪ MARÉE 28/09 — grave UNIQUEMENT les strokes donnés dans le bitmap.
+     *  L'invariant de l'archivage : un stroke est rastérisé exactement une fois,
+     *  au moment où son groupe s'évince. On ne touche pas aux voisins — ni
+     *  parcours global du registre, ni re-gravure de l'encre encore vive. */
+    fun rasterizeStrokes(registryIndices: List<Int>) {
+        val canvas = bitmapCanvas ?: return
+        var drawn = 0
+        for (ri in registryIndices) {
+            val sr = strokeRegistry.getOrNull(ri) ?: continue
+            if (sr.isDeleted || sr.points.size < 2) continue
+            val path = android.graphics.Path()
+            path.moveTo(sr.points[0].first, sr.points[0].second)
+            for (i in 1 until sr.points.size) path.lineTo(sr.points[i].first, sr.points[i].second)
+            canvas.drawPath(path, inkPaint)
+            drawn++
+        }
+        if (drawn > 0) Log.d(TAG, "rasterizeStrokes: $drawn strokes gravés (lot)")
+    }
+
     /** Redessine les strokes dans le bitmap interne.
      *  @param fullRedraw si true, efface tout et redessine TOUS les strokes (chargement).
      *                    si false (défaut), préserve les strokes archivés (déjà dans le bitmap),
      *                    efface seulement les supprimés, et redessine les actifs. */
     fun redrawBitmapInternal(fullRedraw: Boolean = false) {
         val canvas = bitmapCanvas ?: return
-        val paint = android.graphics.Paint().apply {
-            color = android.graphics.Color.BLACK; strokeWidth = 3f
-            style = android.graphics.Paint.Style.STROKE
-            strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
-            isAntiAlias = false  // EPD : pas d'anti-aliasing (coûteux, inutile sur e-ink)
-        }
+        val paint = inkPaint   // le pinceau partagé (une seule source de vérité)
         val erasePaint = android.graphics.Paint().apply {
             color = android.graphics.Color.WHITE
             style = android.graphics.Paint.Style.STROKE; strokeWidth = 4f
