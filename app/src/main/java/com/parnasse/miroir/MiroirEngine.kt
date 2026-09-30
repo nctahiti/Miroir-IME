@@ -1664,6 +1664,12 @@ class MiroirEngine {
             // On ne charge plus bitmap.png (peut contenir des artéfacts).
             // Les strokes viennent d'être chargés depuis .vstar → on les rasterise.
             redrawBitmapInternal(fullRedraw = true)
+            // ⛪ MARÉE 30/09 — l'encre chargée est DANS le bitmap : on la marque
+            // archivée. Le régime incrémental des cycles de correction ne redessine
+            // plus que les strokes qui ont réellement bougé — les strokes d'une
+            // page chargée ne sont plus recalculés à chaque lettre corrigée.
+            // (Le drapeau n'est lu que par redrawBitmapInternal.)
+            for (sr in strokeRegistry) sr.isArchived = true
 
             // Diagnostic : bounding box des strokes
             var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
