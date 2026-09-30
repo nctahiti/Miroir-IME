@@ -939,12 +939,11 @@ class MiroirIME : InputMethodService() {
                 val cleanLabel = cleanLabelForMdm(label)
                 if (cleanLabel.isEmpty()) continue
                 val lineIdx = if (cachedTemplateLines.isNotEmpty()) {
-                    var best = 0; var bestD = Float.MAX_VALUE
-                    for ((i, ly) in cachedTemplateLines.withIndex()) {
-                        val d = Math.abs(anchor.second - ly)
-                        if (d < bestD) { bestD = d; best = i }
-                    }
-                    best
+                    // ⛪ MARÉE 30/09 — une seule source : la ligne de l'AFFICHAGE
+                    // (snapToLine, seuil 20 %), jamais un second calcul (50 %).
+                    // Même ver que MiroirEngine.savePageMdm — corrigé là-bas aussi.
+                    cachedTemplateLines.indexOf(snapToLine(anchor.second))
+                        .takeIf { it >= 0 } ?: 0
                 } else 0
                 items.add(LineAnchor(cleanLabel, lineIdx, anchor.first))
             }

@@ -1657,6 +1657,20 @@ class MiroirEngine {
             // ── MDM ──
             loadPageMdm(dir)
 
+            // ⛪ MARÉE 30/09 — le mdm est une FONCTION DÉRIVÉE des ancres (source
+            // unique) : le régénérer à chaque chargement. Un mdm écrit par une
+            // règle ancienne reste fautif tant que la page n'est pas modifiée —
+            // la note Parnasse gardait les mots qui sautent d'interligne. Si la
+            // règle du jour change quelque chose, on exporte (le reflet suit la
+            // source) ; sinon rien ne bouge — pas de clapot de relève.
+            val ancienMdm = File(dir, "page.mdm").takeIf { it.exists() }?.readText() ?: ""
+            savePageMdm(dir)
+            val nouveauMdm = File(dir, "page.mdm").takeIf { it.exists() }?.readText() ?: ""
+            if (nouveauMdm != ancienMdm) {
+                Log.i(TAG, "loadPageFull: mdm régénéré (règle du jour) — export vers la SD")
+                exportCurrentPage()
+            }
+
             // Reconstruire les blobs visuels
             rebuildAllBlobs()
 
@@ -1889,12 +1903,13 @@ class MiroirEngine {
                 val cleanLabel = cleanLabelForMdm(label)
                 if (cleanLabel.isEmpty()) continue
                 val lineIdx = if (cachedTemplateLines.isNotEmpty()) {
-                    var best = 0; var bestD = Float.MAX_VALUE
-                    for ((idx, ly) in cachedTemplateLines.withIndex()) {
-                        val d = Math.abs(anchor.second - ly)
-                        if (d < bestD) { bestD = d; best = idx }
-                    }
-                    best
+                    // ⛪ MARÉE 30/09 — une seule source : la ligne que l'AFFICHAGE a
+                    // choisie (snapToLine, seuil 20 %), pas un second calcul « la
+                    // plus proche » (seuil 50 %). Les deux seuils divergeaient
+                    // pour une ancre entre 20 % et 50 % sous l'interligne : le mot
+                    // affiché sur sa ligne sautait d'une interligne dans la note.
+                    cachedTemplateLines.indexOf(snapToLine(anchor.second))
+                        .takeIf { it >= 0 } ?: 0
                 } else 0
                 // Trouver le groupe correspondant pour les compteurs
                 var sc = 0; var pc = 0
