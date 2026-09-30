@@ -66,6 +66,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     private var isStylusDown = false
     private var touchHelper: com.onyx.android.sdk.pen.TouchHelper? = null
     var showLabels: Boolean = true
+    /** ⛪ MARÉE 30/09 — l'œil fermé (⌣) masque aussi les blobs : écrire à l'aveugle
+     *  ne regarde pas le regroupement — l'écran reste nu, l'encre seule. */
+    var showBlobs: Boolean = true
 
     // ── Tap / selection ───────────────────────────────────────────────
     private var tapStartX = 0f; private var tapStartY = 0f
@@ -87,6 +90,19 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     internal var insertAtIndex: Int = -1
     private val correctionPaths = mutableListOf<Path>()
     private var correctionTapConsumed = false  // évite handleTap() au UP quand le DOWN a traité une puce/lettre
+    /** ⛪ MARÉE 30/09 — un tap de sélection a eu lieu : le cycle de gravure naîtra
+     *  au PEN_UP (le trait du tap a vécu), jamais à l'ACTION_DOWN. */
+    private var correctionCyclePending = false
+    /** ⛪ MARÉE 30/09 — la fontaine se rallume À LA FIN de l'onDraw (même passe
+     *  que la peinture) : strokes, blob et encadré partent dans une seule
+     *  gravure. Un post{} pouvait précéder la peinture de 1-30 ms — deux
+     *  gravures successives, le décalage « presque imperceptible » perçu
+     *  entre l'encre et le blob. */
+    private var reactivateAfterDraw = false
+    /** ⛪ MARÉE 30/09 — le délai du cycle au PEN_UP selon la nature du tap :
+     *  puce −/+ = 150 ms (l'étiquette change, cycle rapide) ; lettre = 600 ms
+     *  (la sélection ne modifie rien — la reco de la lettre réécrite absorbe). */
+    private var correctionCycleDelay = 150L
     private var correctionExitTimer: java.lang.Runnable? = null  // long-press pour sortir du mode correction
     private var correctionExitTriggered: Boolean = false  // true → sortie faite, attend PEN_UP pour retour écriture
     internal var correctionOriginalStrokeCount: Int = 0  // strokes du groupe original avant correction
@@ -206,7 +222,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                         correctLetterIndex = -1; insertAtIndex = -1
                         correctionTapConsumed = true
                         Log.i(TAG, "Correction: ─ #$minusIdx → '${correctionLabel}'")
-                        rafraichirCorrectionUI(); return true
+                        correctionCycleDelay = 150L; correctionCyclePending = true; return true
                     }
                     val plusIdx = hitTestPlus(event.x, event.y)
                     if (plusIdx >= 0 && plusIdx <= correctionLabel.length) {
@@ -216,14 +232,17 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                         correctionTapConsumed = true
                         fontaineOverlay?.correctionWriteActive = true
                         Log.i(TAG, "Correction: + @$plusIdx → '$correctionLabel' (case #$plusIdx sélectionnée)")
-                        rafraichirCorrectionUI(); return true
+                        correctionCycleDelay = 150L; correctionCyclePending = true; return true
                     }
                     val letterIdx = hitTestLetter(event.x, event.y)
                     if (letterIdx >= 0 && letterIdx < correctionLabel.length) {
                         correctLetterIndex = letterIdx; insertAtIndex = -1
                         correctionTapConsumed = true
                         Log.i(TAG, "Correction: lettre #$letterIdx sélectionnée → prêt à écrire")
-                        rafraichirCorrectionUI(); return true
+                        // ⛪ MARÉE 30/09 — la sélection seule ne modifie rien : le cycle
+                        // attend 600 ms — si la plume réécrit la lettre, la reco arme
+                        // son propre cycle et ABSORBE celui-ci (un seul battement).
+                        correctionCycleDelay = 600L; correctionCyclePending = true; return true
                     }
                     // ⛪ MARÉE 20/09 — hors de la boîte de lettres : le tap ne fait rien ici.
                     // L'absorption (blob) est le raw drawing ; la sortie est le LONG-PRESS
@@ -260,6 +279,13 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 correctionExitTimer = null
                 if (correctionTapConsumed) {
                     correctionTapConsumed = false
+                    // ⛪ MARÉE 30/09 — le cycle naît au PEN_UP : le trait du tap a
+                    // vécu (visible), la sélection est posée. La garde du runnable
+                    // attend encore l'END du canal raw s'il est en retard.
+                    if (correctionCyclePending) {
+                        correctionCyclePending = false
+                        rafraichirCorrectionUI(correctionCycleDelay)
+                    }
                 } else if (!tapMoved) {
                     handleTap(event.x, event.y)
                 }
@@ -532,8 +558,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         fontaineOverlay?.desactiver()
         invalidate()
         // ⛪ MARÉE 28/09 — idem cycle de correction : la peinture part au frame
-        // suivant, on rallume la fontaine après elle.
-        post { fontaineOverlay?.activer() }
+        // suivant, on rallume la fontaine après elle (fin d'onDraw).
+        reactivateAfterDraw = true
     }
 
     fun redrawBlobCorrection() {
@@ -744,29 +770,56 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
      *  Une seule fonction du cycle — trois appelants (clic −, clic +, lettre, firmware). */
     /** Le cycle complet de la correction — déplacé dans un Runnable pour pouvoir être
      *  débouncé au silence du stylet. */
-    private val correctionUiRefreshRunnable = Runnable {
-        fontaineOverlay?.desactiver()
-        engine.redrawBitmapInternal(fullRedraw = true)
-        fontaineOverlay?.effacerSurface()
-        sentinelleAffichage("rafraichirCorrectionUI", listOf("desactiver", "redraw", "effacer", "invalidate", "activer"))
-        invalidate()
-        // ⛪ MARÉE 28/09 — la peinture (invalidate) est asynchrone : onDraw ne part
-        // qu'au frame suivant. On rallume la fontaine APRÈS elle, jamais collée en
-        // synchrone au invalidate — sinon la surface se rallume pendant que la vue
-        // n'a pas encore peint (décalage mesuré : onDraw 1-30 ms après activer).
-        // Même battement que quitterFocus (post { invalidate() }).
-        post { fontaineOverlay?.activer() }  // réactive la fontaine (raw drawing + rendu)
+    private lateinit var correctionUiRefreshRunnable: Runnable
+
+    init {
+        correctionUiRefreshRunnable = Runnable {
+            // ⛪ MARÉE 30/09 — la plume est posée (le trait du tap est en cours) :
+            // re-différer au silence du stylet — le cycle n'avale plus le trait
+            // qu'il sert. Même patron que refreshDisplay (« stylet posé → différé »).
+            if (fontaineOverlay?.isStylusDown == true) {
+                removeCallbacks(correctionUiRefreshRunnable)
+                postDelayed(correctionUiRefreshRunnable, 150)
+                return@Runnable
+            }
+            fontaineOverlay?.desactiver()
+            // ⛪ MARÉE 30/09 — régime incrémental : les strokes archivés sont déjà
+            // gravés dans le bitmap (rasterizeStrokes) — on ne les recalcule pas.
+            // Un tap de sélection (rien ne change) ne redessine rien ; une lettre
+            // réécrite ne redessine que ses propres strokes.
+            engine.redrawBitmapInternal()
+            fontaineOverlay?.effacerSurface()
+            sentinelleAffichage("rafraichirCorrectionUI", listOf("desactiver", "redraw", "effacer", "invalidate", "activer (fin d'onDraw)"))
+            invalidate()
+            // ⛪ MARÉE 28/09 — la peinture (invalidate) est asynchrone : onDraw ne part
+            // qu'au frame suivant. ⛪ MARÉE 30/09 — le rallumage attend la FIN de
+            // l'onDraw (reactivateAfterDraw) : jamais avant la peinture, jamais une
+            // seconde gravure séparée — l'encre et le blob partent ensemble.
+            reactivateAfterDraw = true
+        }
     }
 
     /** Cycle immédiat — les puces (−/+/lettre) répondent à un tap discret, pas à l'écriture. */
-    fun rafraichirCorrectionUI() {
-        correctionUiRefreshRunnable.run()
+    fun rafraichirCorrectionUI(delay: Long = 150L) {
+        // ⛪ MARÉE 30/09 — le cycle des taps attend le délai de leur nature :
+        // puce = 150 ms, lettre = 600 ms (la reco de la lettre réécrite arme
+        // son propre cycle entre-temps et absorbe celui-ci). L'ACTION_DOWN
+        // forwardée précède la pose du flag raw — le trait du tap naît et
+        // meurt pendant le délai ; la garde du runnable re-diffère encore
+        // si la plume est toujours posée.
+        removeCallbacks(correctionUiRefreshRunnable)
+        postDelayed(correctionUiRefreshRunnable, delay)
     }
 
     /** ⛪ MARÉE 20/09 — la correction par la plume (lettre réécrite) ne rafraîchit l'écran
      *  qu'au SILENCE du stylet (700 ms) : écrire lettre à lettre ne doit pas faire
      *  battre l'écran à chaque trait. */
     fun rafraichirCorrectionUIDebounce() {
+        // ⛪ MARÉE 30/09 — le cycle complet absorbe le cycle léger du blob :
+        // l'absorption a armé le blobRefresh (700 ms), la reco arme celui-ci —
+        // UNE seule désactivation quand la matière change (la note du Capitaine :
+        // « plusieurs refresh successifs alors qu'un seul suffirait »).
+        removeCallbacks(blobRefreshRunnable)
         removeCallbacks(correctionUiRefreshRunnable)
         postDelayed(correctionUiRefreshRunnable, 700L)
     }
@@ -1092,7 +1145,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         // 2. Blob du groupe SELECTED uniquement (comme l'IME)
         val gm = engine.groupManager
         val realSelectedId = gm?.groupsInState(GroupState.SELECTED)?.firstOrNull()?.id
-        if (realSelectedId != null) {
+        if (showBlobs && realSelectedId != null) {
             engine.groupBlobs[realSelectedId]?.let { blob ->
                 canvas.drawPath(blob.path, selectedBlobPaint)
             }
@@ -1102,7 +1155,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         // focalisé est TOUJOURS affiché (même désélectionné par la boîte de
         // lettres), pour guider l'édition du groupe locké. Il grandit à chaque
         // absorption (groupBlobs est à jour dans onStrokeSealed).
-        if (isCorrecting()) {
+        if (showBlobs && isCorrecting()) {
             correctionGroupId?.let { gid ->
                 if (gid != realSelectedId) {
                     engine.groupBlobs[gid]?.let { blob ->
@@ -1187,6 +1240,14 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         // 6. Stroke en cours
         if (isStylusDown && engine.currentStrokeRecord != null) {
             canvas.drawPath(engine.currentPath, strokePaint)
+        }
+
+        // ⛪ MARÉE 30/09 — la fontaine se rallume À LA FIN de la peinture : le
+        // cycle (correction ou blob) a peint strokes, blob et encadré dans CE
+        // frame — le rallumage part avec eux, une seule gravure.
+        if (reactivateAfterDraw) {
+            reactivateAfterDraw = false
+            fontaineOverlay?.activer()
         }
     }
 

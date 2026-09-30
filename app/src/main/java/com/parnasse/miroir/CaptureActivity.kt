@@ -472,6 +472,7 @@ class CaptureActivity : Activity() {
             setOnClickListener {
                 val cv = captureView ?: return@setOnClickListener
                 cv.showLabels = !cv.showLabels
+                cv.showBlobs = cv.showLabels  // ⛪ MARÉE 30/09 — l'œil fermé = écran nu : ni labels ni blobs
                 text = if (cv.showLabels) "\uD83D\uDC41" else "\u2323"
                 cv.invalidate()
             }
