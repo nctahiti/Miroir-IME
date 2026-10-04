@@ -1910,6 +1910,12 @@ class MiroirEngine {
                 val firstRI = firstSid?.let { inkStrokeIdToRegistryIndex[it] }
                 if (firstRI != null) {
                     groupLabels[firstRI]?.let { obj.put("label", it) }
+                    // ⛪ LES DEUX HÉMISPHÈRES — le nominal gravé part aussi :
+                    // la page rechargée retrouve les deux états, la sentinelle
+                    // garde sa mémoire (le courant tenu + le nominal gravé).
+                    relecture.nominaux[firstRI]?.let {
+                        if (it != groupLabels[firstRI]) obj.put("nominal", it)
+                    }
                     groupAnchor[firstRI]?.let { a ->
                         obj.put("anchorX", a.first.toDouble())
                         obj.put("anchorY", a.second.toDouble())
@@ -1999,12 +2005,19 @@ class MiroirEngine {
                 val firstSid = inkGroup.strokeIds.firstOrNull()
                 if (firstSid != null) groupManager?.reactivateGroup(firstSid)
                 val label = obj.optString("label", "").takeIf { it.isNotEmpty() }
+                val nominal = obj.optString("nominal", "").takeIf { it.isNotEmpty() }
                 val ax = obj.optDouble("anchorX", Double.NaN)
                 val ay = obj.optDouble("anchorY", Double.NaN)
                 if (label != null || !ax.isNaN()) {
                     val firstRI = firstSid?.let { inkStrokeIdToRegistryIndex[it] }
                     if (firstRI != null) {
-                        if (label != null) groupLabels[firstRI] = label
+                        if (label != null) {
+                            groupLabels[firstRI] = label
+                            // ⛪ LES DEUX HÉMISPHÈRES — le nominal gravé revient
+                            // avec le courant : la sentinelle recharge son
+                            // cerveau entier, l'inférence se tait sur le tenu.
+                            relecture.nominaux[firstRI] = nominal ?: label
+                        }
                         if (!ax.isNaN()) groupAnchor[firstRI] = Pair(ax.toFloat(), ay.toFloat())
                     }
                 }
