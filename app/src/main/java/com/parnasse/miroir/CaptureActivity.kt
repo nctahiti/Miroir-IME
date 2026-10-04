@@ -322,6 +322,9 @@ class CaptureActivity : Activity() {
     // ═══════════════════════════════════════════════════════════════════
 
     private fun runGroupInference() {
+        // ⛪ La main travaille — la machine se tait. Pendant la session de
+        // correction (focus), AUCUNE inférence : la main tient la vérité.
+        if (captureView?.isCorrecting() == true) return
         val gm = engine.groupManager ?: return
         val groups = gm.allGroupsFull()
         Log.i(TAG, "runGroupInference: ${groups.size} groupes, isCorrecting=${captureView?.isCorrecting() ?: false}, correctLetterIndex=${captureView?.correctLetterIndex ?: -1}, insertAtIndex=${captureView?.insertAtIndex ?: -1}")
@@ -353,8 +356,8 @@ class CaptureActivity : Activity() {
                             if (firstIdx != cv.correctionGroupFirstIdx) {
                                 cv.applyCorrectionResult(result, firstIdx)
                                 Log.i(TAG, "Correction appliquée: '$result' (mode correction, firstIdx=$firstIdx)")
-                                return@post
                             }
+                            return@post
                         }
                         if (!engine.groupLabels.containsKey(firstIdx)) {
                             // ⚖️ La sentinelle : l'inférence pose — jamais sur un corrigé.
