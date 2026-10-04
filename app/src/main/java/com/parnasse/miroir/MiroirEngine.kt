@@ -140,11 +140,16 @@ class MiroirEngine {
         // L'ORDRE DE LA PAGE — les groupes partent triés par position (le rang),
         // et chacun porte SA LIGNE (la vérité du dessin : snapToLine sur l'ancre).
         // Le modèle reçoit la page telle qu'elle est, pas une carte à reconstruire.
+        // ⛪ LES DEUX ÉTATS — le nominal part en « label » (ce que l'inférence a
+        // entendu, gravé) et le corrigé part en « courant » quand la main a parlé :
+        // l'oracle respecte la main, il ne re-propose jamais un mot déjà corrigé.
         for ((firstIdx, label) in groupLabels.entries.sortedBy { it.key }) {
             if (label.isBlank()) continue
+            val nominal = relecture.nominaux[firstIdx] ?: label
             groupes.put(JSONObject().apply {
                 put("id", firstIdx.toString())
-                put("label", label)
+                put("label", nominal)
+                if (nominal != label) put("courant", label)
                 put("rang", firstIdx)
                 put("ligne", ligneDe(firstIdx))
             })
@@ -221,11 +226,16 @@ class MiroirEngine {
         // L'ORDRE DE LA PAGE — les groupes partent triés par position (le rang),
         // et chacun porte SA LIGNE (la vérité du dessin : snapToLine sur l'ancre).
         // Le modèle reçoit la page telle qu'elle est, pas une carte à reconstruire.
+        // ⛪ LES DEUX ÉTATS — le nominal part en « label » (ce que l'inférence a
+        // entendu, gravé) et le corrigé part en « courant » quand la main a parlé :
+        // l'oracle respecte la main, il ne re-propose jamais un mot déjà corrigé.
         for ((firstIdx, label) in groupLabels.entries.sortedBy { it.key }) {
             if (label.isBlank()) continue
+            val nominal = relecture.nominaux[firstIdx] ?: label
             groupes.put(JSONObject().apply {
                 put("id", firstIdx.toString())
-                put("label", label)
+                put("label", nominal)
+                if (nominal != label) put("courant", label)
                 put("rang", firstIdx)
                 put("ligne", ligneDe(firstIdx))
             })
