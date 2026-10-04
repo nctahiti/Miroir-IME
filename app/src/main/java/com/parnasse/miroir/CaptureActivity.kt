@@ -404,6 +404,21 @@ class CaptureActivity : Activity() {
         // ── Espace pousseur gauche ──
         toolbar.addView(View(this), LinearLayout.LayoutParams(0, 0, 0.15f))
 
+        // ═══ ✓ LA COCHE (04/10/2026) — la correction sémantique ═══
+        // Clic : l'arbitre corrige la page, les corrections passent aux
+        // labels (le nominal reste gravé — la main peut encore rendre).
+        // Clic long : la ratification — la dette s'éteint, la page est couchée.
+        val cocheBtn = makeToolBtn("\u2713", Color.argb(200, 0, 110, 40)) {
+            engine.demanderCorrectionCoche()
+            captureView?.invalidate()
+        }
+        cocheBtn.setOnLongClickListener {
+            engine.ratifierCoche()
+            captureView?.invalidate()
+            true
+        }
+        toolbar.addView(cocheBtn)
+
         // ── ◄ Navigation gauche (carnet affillié : accepte pages négatives) ──
         toolbar.addView(makeToolBtn("\u25C0", Color.argb(200, 80, 80, 160)) {
             engine.goToPageFull(engine.currentPageIndex - 1, navDelta = -1) {

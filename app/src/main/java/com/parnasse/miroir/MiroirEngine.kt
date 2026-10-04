@@ -195,6 +195,106 @@ class MiroirEngine {
             }
         }.start()
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ✓ LA COCHE (04/10/2026) — la correction sémantique à la demande
+    // ═══════════════════════════════════════════════════════════════════
+    //
+    // Clic sur la coche : la voix ARBITRE est appelée (l'oracle, l'étage
+    // au-dessus — la demande le nomme par « voix »), et chaque correction
+    // PROPAGE au label : le courant porte le corrigé, le nominal reste
+    // gravé (la sentinelle garde la dette — rien n'est perdu, rien n'est
+    // imposé : la main peut encore rendre ou tenir).
+    //
+    // Clic long : la RATIFICATION — la dette s'éteint (tenir) et la page
+    // est couchée. Les paires (nominal, courant) attendent leur récolte :
+    // le verdict est consigné au geste.
+
+    /** La coche — l'arbitre corrige la page, les corrections passent aux labels. */
+    fun demanderCorrectionCoche(onDone: () -> Unit = {}) {
+        val uuid = parnasseBlockUuid ?: return
+        val groupes = JSONArray()
+        for ((firstIdx, label) in groupLabels) {
+            if (label.isBlank()) continue
+            groupes.put(JSONObject().apply {
+                put("id", firstIdx.toString())
+                put("label", label)
+                put("rang", firstIdx)
+            })
+        }
+        if (groupes.length() == 0) return
+        val corps = JSONObject().apply {
+            put("block_id", uuid)
+            parnasseNoteId?.let { if (it.isNotEmpty()) put("note_id", it) }
+            put("voix", "arbitre")
+            put("groupes", groupes)
+        }.toString()
+
+        Log.i(TAG, "▸ Correcteur: la coche appelle l'arbitre — ${groupes.length()} groupes")
+        Thread {
+            // Les corrections, appliquées sur le fil de l'UI (la sentinelle
+            // ne se touche que là) : rien ne propage avant d'être complet.
+            val aPropager = mutableListOf<Pair<Int, String>>()
+            try {
+                val conn = URL("$coeurUrl/api/correcteur/proposer").openConnection() as HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 30000
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write(corps.toByteArray(Charsets.UTF_8)) }
+                if (conn.responseCode == 200) {
+                    val json = JSONObject(BufferedReader(InputStreamReader(conn.inputStream)).readText())
+                    val props = json.optJSONArray("propositions") ?: JSONArray()
+                    for (i in 0 until props.length()) {
+                        val p = props.getJSONObject(i)
+                        if (p.optBoolean("silence", false)) continue
+                        val corrige = p.optString("corrige")
+                        if (corrige.isEmpty()) continue
+                        val idx = p.optString("groupe").toIntOrNull() ?: continue
+                        aPropager.add(idx to corrige)
+                    }
+                    val voix = json.optJSONObject("moteur")?.optString("mode") ?: "?"
+                    Log.i(TAG, "▸ Correcteur: la coche a récolté ${aPropager.size} corrections ($voix)")
+                } else {
+                    Log.w(TAG, "▸ Correcteur: la coche — réponse ${conn.responseCode}")
+                }
+                conn.disconnect()
+            } catch (e: Exception) {
+                Log.w(TAG, "▸ Correcteur: la coche — ${e.javaClass.simpleName}: ${e.message}")
+            }
+            uiHandler.post {
+                for ((idx, corrige) in aPropager) {
+                    propositions[idx] = corrige
+                    propositionsListe[idx] = propositionsListe[idx]?.let { it } ?: listOf(corrige)
+                    // ⛪ LA PROPAGATION — la correction passe sur le label :
+                    // le courant porte le corrigé, le nominal reste gravé.
+                    relecture.corriger(idx, corrige)
+                }
+                if (aPropager.isNotEmpty()) pageDirty = true
+                onDone()
+                onPropositionsArrivees?.invoke()
+            }
+        }.start()
+    }
+
+    /** Le clic long sur la coche — la ratification : la dette s'éteint, la
+     *  page est couchée. Les paires attendent leur récolte au geste. */
+    fun ratifierCoche() {
+        var n = 0
+        for (idx in relecture.labels.keys.toList()) {
+            if (relecture.estCorrige(idx)) {
+                relecture.tenir(idx)
+                n++
+            }
+        }
+        if (n > 0) {
+            pageDirty = true
+            Log.i(TAG, "▸ Correcteur: $n labels tenus — la dette s'éteint")
+        }
+        savePageFull()
+        pageDirty = false  // ⚓ la mémoire parle comme le disque
+    }
     val groupAnchor = mutableMapOf<Int, Pair<Float, Float>>()
     val groupBlobs = mutableMapOf<String, BlobData>()
     val inferredGroupFirstIdxs = mutableSetOf<Int>()
