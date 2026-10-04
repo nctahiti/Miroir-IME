@@ -137,12 +137,16 @@ class MiroirEngine {
     fun demanderPropositions(onDone: () -> Unit = {}) {
         val uuid = parnasseBlockUuid ?: return
         val groupes = JSONArray()
-        for ((firstIdx, label) in groupLabels) {
+        // L'ORDRE DE LA PAGE — les groupes partent triés par position (le rang),
+        // et chacun porte SA LIGNE (la vérité du dessin : snapToLine sur l'ancre).
+        // Le modèle reçoit la page telle qu'elle est, pas une carte à reconstruire.
+        for ((firstIdx, label) in groupLabels.entries.sortedBy { it.key }) {
             if (label.isBlank()) continue
             groupes.put(JSONObject().apply {
                 put("id", firstIdx.toString())
                 put("label", label)
                 put("rang", firstIdx)
+                put("ligne", ligneDe(firstIdx))
             })
         }
         if (groupes.length() == 0) return
@@ -214,12 +218,16 @@ class MiroirEngine {
     fun demanderCorrectionCoche(onDone: () -> Unit = {}) {
         val uuid = parnasseBlockUuid ?: return
         val groupes = JSONArray()
-        for ((firstIdx, label) in groupLabels) {
+        // L'ORDRE DE LA PAGE — les groupes partent triés par position (le rang),
+        // et chacun porte SA LIGNE (la vérité du dessin : snapToLine sur l'ancre).
+        // Le modèle reçoit la page telle qu'elle est, pas une carte à reconstruire.
+        for ((firstIdx, label) in groupLabels.entries.sortedBy { it.key }) {
             if (label.isBlank()) continue
             groupes.put(JSONObject().apply {
                 put("id", firstIdx.toString())
                 put("label", label)
                 put("rang", firstIdx)
+                put("ligne", ligneDe(firstIdx))
             })
         }
         if (groupes.length() == 0) return
@@ -1341,6 +1349,14 @@ class MiroirEngine {
         }
         if (upper == lower) return upper
         return if (y <= upper + (lower - upper) * 0.2f) upper else lower
+    }
+
+    /** L'indice de l'interligne d'un groupe (0 = la première ligne) — la même
+     *  vérité que le dessin : snapToLine sur l'ancre. -1 = pas d'ancre. */
+    fun ligneDe(firstIdx: Int): Int {
+        val a = groupAnchor[firstIdx] ?: return -1
+        val y = snapToLine(a.second)
+        return cachedTemplateLines.indexOfFirst { kotlin.math.abs(it - y) < 1f }
     }
 
     // ═══════════════════════════════════════════════════════════════════
