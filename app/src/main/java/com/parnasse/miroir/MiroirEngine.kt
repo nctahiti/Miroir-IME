@@ -1831,10 +1831,13 @@ class MiroirEngine {
             Log.i(TAG, "loadPageFull page=$currentPageIndex: ${strokeRegistry.size} strokes, ${groupLabels.size} labels")
             pageLoaded = true
             pageDirty = false  // ⚓ MARÉE 30/08 — la mémoire parle comme le disque
-            // 🎙️ LA VOIX DU CORRIGÉ (19/09/2026) — la page est chargée, ses groupes
-            // sont connus : on demande les propositions au pont. Elles ne touchent
-            // rien — elles attendent d'être AFFICHÉES, puis ratifiées au geste.
-            demanderPropositions()
+            // 🎙️ LE PONT EN SOMMEIL (05/10/2026) — la voie montée se tait.
+            // Le pont phonétique ne propose plus au chargement : la voix de
+            // correction est l'oracle (la coche), appelé par la main seule.
+            // Le pont renaîtra en CALQUE TEXTUEL — un voile posé sur le texte
+            // brut, par syllabes et phonétique (sténo, musique, traductions,
+            // code) — jamais plus comme correcteur silencieux qui souligne.
+            // demanderPropositions()
             return true
         } catch (e: Exception) {
             Log.e(TAG, "loadPageFull: ${e.message}", e)

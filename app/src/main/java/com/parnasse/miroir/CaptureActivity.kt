@@ -322,9 +322,15 @@ class CaptureActivity : Activity() {
     // ═══════════════════════════════════════════════════════════════════
 
     private fun runGroupInference() {
-        // ⛪ La main travaille — la machine se tait. Pendant la session de
-        // correction (focus), AUCUNE inférence : la main tient la vérité.
-        if (captureView?.isCorrecting() == true) return
+        // ⛪ MARÉE 05/10 — la machine entend la MAIN QUI VIENT D'ÉCRIRE, pas la
+        // page établie. Pendant le focus, la reco ne tourne QUE pour les traits
+        // NEUFS (nés depuis l'entrée en correction) : le trait de la boîte de
+        // lettres est reconnu, appliqué à la case, et son groupe est JETÉ après
+        // (l'intention est ponctuelle — une lettre ; la voix ne laisse que son
+        // interprétation). Les fragments anciens sans label se taisent — le
+        // bavement ne revient pas. La garde aveugle est transmutée en filtre.
+        val cv = captureView
+        val focusSeuil = if (cv?.isCorrecting() == true) cv.correctionStartRegistrySize else -1
         val gm = engine.groupManager ?: return
         val groups = gm.allGroupsFull()
         Log.i(TAG, "runGroupInference: ${groups.size} groupes, isCorrecting=${captureView?.isCorrecting() ?: false}, correctLetterIndex=${captureView?.correctLetterIndex ?: -1}, insertAtIndex=${captureView?.insertAtIndex ?: -1}")
@@ -337,6 +343,9 @@ class CaptureActivity : Activity() {
             val firstIdx = group.strokeIds.firstOrNull()
                 ?.let { engine.inkStrokeIdToRegistryIndex[it] } ?: continue
             if (engine.groupLabels.containsKey(firstIdx)) continue
+            // ⛪ MARÉE 05/10 — le focus n'entend que la main : un groupe né
+            // avant l'entrée en correction (fragment ancien sans label) se tait.
+            if (focusSeuil >= 0 && firstIdx < focusSeuil) continue
 
             val indices = group.strokeIds.mapNotNull { engine.inkStrokeIdToRegistryIndex[it] }
             if (indices.isEmpty()) continue
@@ -411,11 +420,17 @@ class CaptureActivity : Activity() {
         // Clic : l'arbitre corrige la page, les corrections passent aux
         // labels (le nominal reste gravé — la main peut encore rendre).
         // Clic long : la ratification — la dette s'éteint, la page est couchée.
+        // ⛪ MARÉE 05/10 — pendant le focus, la coche SE TAIT (clic comme clic
+        // long) : la main tient la vérité dans la parenthèse, l'oracle attend
+        // la sortie — jamais de correction posée pendant que l'encadré vit
+        // (le label de l'encadré ne serait pas resynchronisé, l'écran non gravé).
         val cocheBtn = makeToolBtn("\u2713", Color.argb(200, 0, 110, 40)) {
+            if (captureView?.isCorrecting() == true) return@makeToolBtn
             engine.demanderCorrectionCoche()
             captureView?.invalidate()
         }
         cocheBtn.setOnLongClickListener {
+            if (captureView?.isCorrecting() == true) return@setOnLongClickListener true
             engine.ratifierCoche()
             captureView?.invalidate()
             true

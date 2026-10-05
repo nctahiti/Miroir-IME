@@ -106,6 +106,12 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     private var correctionExitTimer: java.lang.Runnable? = null  // long-press pour sortir du mode correction
     private var correctionExitTriggered: Boolean = false  // true → sortie faite, attend PEN_UP pour retour écriture
     internal var correctionOriginalStrokeCount: Int = 0  // strokes du groupe original avant correction
+    /** ⛪ MARÉE 05/10 — le repère de la main : la taille du registre à l'entrée
+     *  en focus. Pendant la correction, la reco n'entend que les groupes NEUFS
+     *  (premier stroke ≥ ce repère) — le trait de la boîte de lettres est
+     *  reconnu, appliqué à la case, et son groupe est JETÉ (l'intention est
+     *  ponctuelle : une lettre ; la voix ne laisse que son interprétation). */
+    internal var correctionStartRegistrySize: Int = -1
     /** ⛪ position verticale figée à l'entrée en focus : l'encadré est une boîte
      *  de dialogue — il tient sa place pendant que le blob grossit. */
     private var correctionBlobTop: Float? = null
@@ -602,6 +608,7 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         Log.i(TAG, "Mode correction: '$label'" + (propose?.let { " → proposition « $it »" } ?: "") +
             " (groupe ${gid.take(8)}) — groupe désélectionné")
         correctionOriginalStrokeCount = group.strokeIds.size
+        correctionStartRegistrySize = engine.strokeRegistry.size  // ⛪ le repère de la main (05/10)
         invalidate()
     }
 
@@ -937,6 +944,10 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     private val erasedStrokes = mutableSetOf<Int>()
     private var gestureStartX = 0f
     private var gestureStartY = 0f
+    /** ⛪ MARÉE 05/10 — la place d'origine du mot pendant le déplacement :
+     *  l'onDraw la masque (fond blanc) et dessine le mot à sa place courante ;
+     *  le bitmap, lui, attend le PEN_UP. Une seule gravure par geste. */
+    private var moveOrigBounds: android.graphics.RectF? = null
 
     /** Active le mode effacement. Appelé par CaptureActivity après détection du geste. */
     fun enterEraseMode(startX: Float) {
@@ -950,6 +961,15 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         editMode = EditMode.MOVE
         gestureStartX = startX
         gestureStartY = startY
+        // ⛪ MARÉE 05/10 — la place d'origine : le geste vit dans la vue
+        // (masque + mot courant), le bitmap ne bouge qu'au PEN_UP.
+        val gid = selectedGroupId
+        moveOrigBounds = gid?.let { id ->
+            // ⛪ on ne relit pas : le groupe sélectionné est en cache.
+            engine.groupManager?.allGroups()?.find { it.id == id }?.bounds?.let {
+                android.graphics.RectF(it)
+            }
+        }
         Log.i(TAG, "→ Mode DÉPLACEMENT")
     }
 
@@ -969,7 +989,11 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     fun scrubGroup(currentX: Float) {
         val gid = targetGroupId ?: return
         val gm = engine.groupManager ?: return
-        val group = gm.allGroupsFull().find { it.id == gid } ?: return
+        // ⛪ MARÉE 05/10 — la leçon : on ne relit pas ce qui n'a pas changé.
+        // Le groupe visé est sélectionné, donc DÉJÀ en cache : allGroups()
+        // (le cache seul), jamais allGroupsFull() (le disque) dans la boucle
+        // chaude du geste — la relecture par MOVE asphyxiait les pages pleines.
+        val group = gm.allGroups().find { it.id == gid } ?: return
         if (group.strokeIds.isEmpty()) return
 
         val gb = group.bounds
@@ -979,7 +1003,12 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         val ratio = ((currentX - gb.left) / groupWidth).coerceIn(0f, 1f)
         scrubCutRatio = ratio
         scrubCutX = gb.left + groupWidth * ratio
-        invalidate()
+        // ⛪ MARÉE 05/10 — la gravure du preview se limite à la zone du mot
+        // (l'invalidate plein re-gravait la page entière à chaque pas).
+        val zone = android.graphics.Rect()
+        gb.roundOut(zone)
+        zone.inset(-20, -20)
+        invalidate(zone)
     }
 
     /** Applique la coupe au PEN_UP. */
@@ -1073,7 +1102,11 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
     fun moveGroup(dx: Float, dy: Float) {
         val gid = selectedGroupId ?: return
         val gm = engine.groupManager ?: return
-        val group = gm.allGroupsFull().find { it.id == gid } ?: return
+        // ⛪ MARÉE 05/10 — la leçon : on ne relit pas ce qui n'a pas changé.
+        // Le groupe déplacé est sélectionné, donc DÉJÀ en cache (rechargé à
+        // la sélection) : allGroups() seul — la relecture du disque à chaque
+        // MOVE asphyxiait les pages pleines (I/O empilée, frames espacées).
+        val group = gm.allGroups().find { it.id == gid } ?: return
 
         // ═══ 1. Translater les strokes ═══
         for (sid in group.strokeIds) {
@@ -1105,10 +1138,11 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             )
         }
 
-        // ═══ 3. Redraw complet (comme l'IME) ═══
-        // drawColor(CLEAR) est O(1) GPU. Redessiner tous les strokes est
-        // acceptable car isAntiAlias=false sur EPD.
-        engine.redrawBitmapInternal(fullRedraw = true)
+        // ═══ 2. ⛪ MARÉE 05/10 — le geste vit dans la VUE, le bitmap attend
+        // le PEN_UP. Plus de fullRedraw par pas (344 strokes re-gravés à
+        // chaque MOVE = la bernacle) : l'onDraw masque la place d'origine
+        // et dessine le mot à sa place courante (les strokes sont déjà
+        // translatés en mémoire). La gravure unique vient à la fin du geste.
         invalidate()
     }
 
@@ -1125,6 +1159,13 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
     /** Sortir du mode édition (effacement/déplacement). */
     fun exitGestureMode() {
+        // ⛪ MARÉE 05/10 — la gravure unique : le mot déplacé se couche au
+        // PEN_UP (un seul fullRedraw par geste, jamais par pas de MOVE).
+        if (editMode == EditMode.MOVE) {
+            engine.redrawBitmapInternal(fullRedraw = true)
+            invalidate()
+        }
+        moveOrigBounds = null
         editMode = EditMode.NONE
         Log.i(TAG, "Sortie mode édition")
     }
@@ -1141,6 +1182,31 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
 
         // 1. Bitmap (fond + strokes sauvegardés)
         engine.bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+
+        // 1b. ⛪ MARÉE 05/10 — le déplacement vit ici : la place d'origine est
+        // masquée (fond blanc) et le mot est dessiné à sa place courante (les
+        // strokes sont déjà translatés en mémoire). Le bitmap attend le PEN_UP.
+        if (editMode == EditMode.MOVE && moveOrigBounds != null && selectedGroupId != null) {
+            val masque = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
+            val zone = android.graphics.RectF(moveOrigBounds!!)
+            zone.inset(-8f, -8f)
+            canvas.drawRect(zone, masque)
+            val gDeplace = engine.groupManager?.allGroups()?.find { it.id == selectedGroupId }
+            if (gDeplace != null) {
+                val ink = Paint().apply {
+                    color = Color.BLACK; strokeWidth = 5f
+                    style = Paint.Style.STROKE
+                    strokeCap = Paint.Cap.ROUND; isAntiAlias = false
+                }
+                for (sid in gDeplace.strokeIds) {
+                    val idx = engine.inkStrokeIdToRegistryIndex[sid] ?: continue
+                    if (idx < engine.strokeRegistry.size) {
+                        val sr = engine.strokeRegistry[idx]
+                        if (!sr.isDeleted && sr.points.size >= 2) drawStrokePath(canvas, sr, ink)
+                    }
+                }
+            }
+        }
 
         // 2. Blob du groupe SELECTED uniquement (comme l'IME)
         val gm = engine.groupManager
@@ -1168,7 +1234,8 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         // 2b. Preview scrub : surbrillance des points conservés — la CIBLE, pas la sélection
         if (scrubCutRatio >= 0f && scrubCutRatio < 1f && targetGroupId != null) {
             val gm = engine.groupManager
-            val group = gm?.allGroupsFull()?.find { it.id == targetGroupId }
+            // ⛪ on ne relit pas ce qui n'a pas changé : la cible est en cache.
+            val group = gm?.allGroups()?.find { it.id == targetGroupId }
             if (group != null) {
                 val strokes = group.strokeIds.mapNotNull { sid ->
                     val idx = engine.inkStrokeIdToRegistryIndex[sid]
@@ -1347,7 +1414,9 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             var isSel = false
             if (selectedGroupId != null) {
                 val gm = engine.groupManager
-                val selGroup = gm?.allGroupsFull()?.find { it.id == selectedGroupId }
+                // ⛪ on ne relit pas ce qui n'a pas changé : le groupe
+                // sélectionné est en cache (rechargé à la sélection).
+                val selGroup = gm?.allGroups()?.find { it.id == selectedGroupId }
                 val selFirstSid = selGroup?.strokeIds?.firstOrNull()
                 val selFirstRI = selFirstSid?.let { engine.inkStrokeIdToRegistryIndex[it] }
                 isSel = selFirstRI == firstIdx
