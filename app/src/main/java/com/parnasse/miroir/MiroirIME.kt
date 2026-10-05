@@ -119,14 +119,14 @@ class MiroirIME : InputMethodService() {
     private val personalLabels = mutableSetOf<Int>()   // labels exclus du dataset (🔒)
     private val labelPaint = Paint().apply {
         color = Color.BLACK  // noir pur pour mode DU
-        textSize = 42f
+        textSize = 50f       // ⛪ MARÉE 05/10 — 20 % plus grand (comme le standalone)
         isAntiAlias = false  // mode DU : pas de gris
         typeface = Typeface.DEFAULT_BOLD
     }
     // Version estompée pour les labels non sélectionnés
     private val dimLabelPaint = Paint().apply {
         color = Color.GRAY   // gris pour contraste e-ink
-        textSize = 42f
+        textSize = 50f
         isAntiAlias = false
         typeface = Typeface.DEFAULT
     }
@@ -5385,7 +5385,7 @@ class MiroirIME : InputMethodService() {
             // ⚠️ Utiliser anchor.first directement (déjà minX du groupe, fiable)
             // allGroups().bounds peut être vide après reload → left=0 → label à gauche
             val x = anchor.first
-            val y = snapToLine(anchor.second) + labelPaint.textSize - 4f
+            val y = snapToLine(anchor.second) + labelPaint.textSize - 10f  // ⛪ 05/10 — quelques px plus bas
             // ═══ Noir gras pour le SELECTED, gris normal pour les autres ═══
             val paint = if (firstIdx == selectedFirstIdx) labelPaint else dimLabelPaint
             canvas.drawText(label, x, y, paint)

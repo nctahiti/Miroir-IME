@@ -50,7 +50,15 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
         strokeWidth = 3.5f; isAntiAlias = false  // plus épais = visuellement sélectionné
     }
     private val labelPaint = Paint().apply {
-        color = Color.argb(200, 80, 80, 180); textSize = 40f; isAntiAlias = false
+        // ⛪ MARÉE 05/10 — le label 20 % plus grand, posé quelques pixels plus
+        // bas : il vit sous l'interligne, dégagé de l'encre du mot.
+        color = Color.argb(200, 80, 80, 180); textSize = 48f; isAntiAlias = false
+        textAlign = Paint.Align.LEFT
+    }
+    /** ⛪ MARÉE 05/10 — l'encre des lettres corrigées : ce que l'oracle a changé
+     *  se dessine en NOIR dans le label, le reste garde la couleur du label. */
+    private val encreCorrigee = Paint().apply {
+        color = Color.BLACK; textSize = 48f; isAntiAlias = false
         textAlign = Paint.Align.LEFT
     }
 
@@ -1435,17 +1443,22 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
             val texte = label
             val textW = labelPaint.measureText(texte)
             val labelX = anchorX  // position de l'encre (premier point du groupe)
-            val labelY = snapY + 18f
+            val labelY = snapY + 24f   // ⛪ 05/10 — quelques pixels plus bas sous l'interligne
             val bgRect = android.graphics.RectF(
-                labelX - 4f, labelY - 24f,
-                labelX + textW + 8f, labelY + 10f
+                labelX - 4f, labelY - 28f,
+                labelX + textW + 8f, labelY + 12f
             )
             val bgColor = when {
                 isSel -> Color.argb(220, 220, 235, 255)
                 else -> Color.argb(180, 255, 255, 255)
             }
             canvas.drawRoundRect(bgRect, 6f, 6f, Paint().apply { color = bgColor; style = Paint.Style.FILL })
-            canvas.drawText(texte, labelX, labelY, labelPaint)
+            val nominal = engine.relecture.nominaux[firstIdx]
+            if (nominal != null && nominal != label) {
+                dessinerLabelDiff(canvas, texte, labelX, labelY, nominal)
+            } else {
+                canvas.drawText(texte, labelX, labelY, labelPaint)
+            }
             if (propose != null) {
                 // ⛪ LE SOULIGNEMENT SEUL (27/09, e-ink) — le transcrit reste nu,
                 // un trait sous le mot dit « une correction vit ici ». Ni couleur
@@ -1454,6 +1467,50 @@ class CaptureSurfaceView(context: Context, val engine: MiroirEngine) : View(cont
                 val marque = Paint().apply { color = Color.rgb(46, 125, 50); style = Paint.Style.FILL }
                 canvas.drawRect(labelX - 4f, labelY + 4f, labelX + textW + 8f, labelY + 8f, marque)
             }
+        }
+    }
+
+    /** ⛪ MARÉE 05/10 — les lettres corrigées en noir : le label montre ce que
+     *  l'oracle a changé. LCS entre le nominal et le courant (mots courts) :
+     *  les lettres communes gardent la couleur du label, les corrigées
+     *  (remplacées, ajoutées) passent à l'encre noire — la main voit d'un
+     *  coup d'œil ce qu'elle ratifie. */
+    private fun dessinerLabelDiff(canvas: Canvas, texte: String, x: Float, y: Float, nominal: String) {
+        val n = nominal.length
+        val m = texte.length
+        if (n == 0 || m == 0) {
+            canvas.drawText(texte, x, y, labelPaint)
+            return
+        }
+        // LCS — tableau 2D, des mots de quelques lettres.
+        val dp = Array(n + 1) { IntArray(m + 1) }
+        for (i in n - 1 downTo 0) {
+            for (j in m - 1 downTo 0) {
+                dp[i][j] = if (nominal[i] == texte[j]) dp[i + 1][j + 1] + 1
+                else maxOf(dp[i + 1][j], dp[i][j + 1])
+            }
+        }
+        // Chemin commun : chaque lettre du courant est « commune » ou « corrigée ».
+        val communes = BooleanArray(m)
+        var i = 0; var j = 0
+        while (i < n && j < m) {
+            when {
+                nominal[i] == texte[j] -> { communes[j] = true; i++; j++ }
+                dp[i + 1][j] >= dp[i][j + 1] -> i++
+                else -> j++
+            }
+        }
+        // Dessin par segments : les runs de même statut, la largeur avance.
+        var cx = x
+        var k = 0
+        while (k < m) {
+            val corrige = !communes[k]
+            var fin = k + 1
+            while (fin < m && communes[fin] == communes[k]) fin++
+            val seg = texte.substring(k, fin)
+            canvas.drawText(seg, cx, y, if (corrige) encreCorrigee else labelPaint)
+            cx += labelPaint.measureText(seg)
+            k = fin
         }
     }
 
