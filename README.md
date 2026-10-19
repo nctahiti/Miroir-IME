@@ -211,6 +211,17 @@ Flutter Parnasse
 - **La porte ↓** : dans le tiroir (vue ime de la bascule ✍), le bouton **+** devient **↓** — clic simple = remplacer ; clic long = le menu des trois (insérer sélectionné · committer en composition · remplacer). Le tiroir couche le geste dans le filesDir commun et se ferme ; **l'IME l'exécute au retour** — il est le seul porteur du champ hôte. Hors vue ime (le carnet), le + garde sa pagination.
 - **La mort du 📝** : la vue interne historique n'a plus de porte — l'IME naît clavier, la main passe par ✍ (le standalone). La coquille historique vit encore dans le code jusqu'à sa fin, sans accès.
 
+**La marée « une seule encre » (19/10/2026, branche `une-seule-encre`)** :
+
+- **La bascule naît une page neuve** — plus de capture précédente à l'ouverture ; la maison garde ses pages (📂).
+- **Le déballeur** : `cleanLabelForMdm` devient `deballeLabel` — le nettoyage retire UNIQUEMENT le marqueur interne de groupe (`*G2-4S`), jamais la matière. @, #, %, la ponctuation tracée… voyagent comme des lettres. Deux couches, deux métiers : le texte est la source, le parse du MDM est le métier du parseur.
+- **L'intimité de l'app tierce** : la liste des tiroirs (◀ long) ne montre que les maisons du package hôte (`currentHostPackage` voyage avec la bascule). La maison (lanceur, Parnasse) voit tout.
+- **Le sas du texte** : à chaque départ de la capture (même sans ↓), le transcrit se couche dans `texte-page.json` (filesDir commun) + `texte.txt` par page à chaque sauvegarde ; au retour, le clavier le lit — c'est sa matière.
+- **La ligne de texte** : au-dessus des rangées, le texte transcrit s'affiche (retours à la ligne en balises ⏎), **éditable** — quand elle tient le focus, les touches écrivent en elle (au curseur), le ⌫ efface en elle, ◄ ► naviguent dans le texte ; sans focus, les touches vont au champ hôte et ◄ ► naviguent les pages.
+- **Une seule page courante** : la bascule transmet la page que le clavier montrait (`nav_transmise`) et la capture la poursuit ; au retour, le clavier **adopte** la page que la capture a quittée (le sas fait foi, l'horloge départage). Plus de désynchronisation.
+- **Les libérations** : la prédiction côté clavier, le conduit V★, et huit séquelles (vstarWriter, savePageV2, handleToolbarTap…) sont archivées (`ARCHIVES/seau-des-sequelles-2026-10-19.md`) et retirées — le clavier ne porte plus de moteur d'encre. La voix grise, l'écriture et la sauvegarde vivent dans la capture seule.
+- **Les cases du clavier** : chaque touche expose le symbole du clic long en petit au-dessus, la lettre en dessous (minuscules réelles — `textAllCaps` levé), les labels suivent le shift ; les balises markdown ont quitté cette vue (elles auront la leur).
+
 ---
 
 ## 🖥️ EPD & Fontaine (Boox)
