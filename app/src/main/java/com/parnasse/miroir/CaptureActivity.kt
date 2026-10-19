@@ -37,6 +37,7 @@ class CaptureActivity : Activity() {
         const val EXTRA_PAGE_N          = "page_n"
         const val EXTRA_MODE            = "mode"
         const val EXTRA_HOST_PACKAGE    = "host_package"  // ⛺ l'intimité de l'app tierce
+        const val EXTRA_NAV_TRANSMISE   = "nav_transmise"  // ⛺ la bascule a transmis la page courante
         const val EXTRA_OFFSET_LEFT     = "offset_left"
         const val EXTRA_OFFSET_TOP      = "offset_top"
         const val EXTRA_SCREENSHOT_PATH = "screenshot_path"
@@ -82,6 +83,7 @@ class CaptureActivity : Activity() {
     // ── Contexte d'invocation ──────────────────────────────────────────
     private var invocBlockId: String? = null
     private var invocHostPackage: String? = null  // ⛺ l'intimité de l'app tierce — filtre la liste des maisons
+    private var invocNavTransmise: Boolean = false  // ⛺ la bascule a transmis la page courante
     private var invocPageN: Int = 0
     private var invocNoteId: String? = null
     // ⚓ MARÉE 30/08 — le focus ne détourne pas l'invocation : tant que la
@@ -125,6 +127,7 @@ class CaptureActivity : Activity() {
 
         invocBlockId = intent.getStringExtra(EXTRA_BLOCK_ID)
         invocHostPackage = intent.getStringExtra(EXTRA_HOST_PACKAGE)
+        invocNavTransmise = intent.getBooleanExtra(EXTRA_NAV_TRANSMISE, false)
         invocPageN   = intent.getIntExtra(EXTRA_PAGE_N, 0)
         invocNoteId  = intent.getStringExtra(EXTRA_NOTE_ID)
         invocMode    = intent.getStringExtra(EXTRA_MODE) ?: "bloc"
@@ -242,6 +245,12 @@ class CaptureActivity : Activity() {
                     fontaineOverlay?.activer()
                 }
             }
+        } else if (invocMode == "ime-local" && invocNavTransmise && engine.countPages() > targetPage) {
+            // ␐ LA CONTINUATION (19/10/2026) — une seule encre : la bascule
+            // transmet la page que le clavier montrait, la capture la
+            // poursuit. La page courante est UNE, partagée par le pointeur.
+            engine.goToPageFull(targetPage)
+            Log.i(TAG, "␐ Bascule: page transmise ouverte ($targetPage)")
         } else if (invocMode == "ime-local" && targetPage == 0) {
             // ␐ LA BASCILE OUVRE UNE PAGE NEUVE (19/10/2026) — la vision du
             // tiroir : « la page est vide et attend les données ». Chaque

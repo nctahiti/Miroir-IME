@@ -2088,6 +2088,10 @@ class MiroirIME : InputMethodService() {
                 blockDir?.let {
                     intent.putExtra(CaptureActivity.EXTRA_BLOCK_ID, it.name)
                     intent.putExtra(CaptureActivity.EXTRA_MODE, "ime-local")
+                    // ⛺ une seule encre (19/10/2026) — la bascule transmet la
+                    // page que le clavier montrait : la capture la poursuit.
+                    intent.putExtra(CaptureActivity.EXTRA_PAGE_N, currentPageIndex)
+                    intent.putExtra(CaptureActivity.EXTRA_NAV_TRANSMISE, true)
                 }
                 // ⛺ l'intimité voyage (19/10/2026) : le package hôte accompagne
                 // la bascule — la liste des maisons se filtre côté capture.
@@ -4669,10 +4673,19 @@ class MiroirIME : InputMethodService() {
                 sasPageN = j.optInt("page_n", -1)
                 sasTs = j.optLong("ts", 0)
             }
+            // ⛺ une seule encre (19/10/2026) : la capture fait foi de la page
+            // quittée — le clavier l'adopte, le compteur suit la navigation
+            // réelle. La page courante est UNE, portée par le pointeur.
+            val bd = blockDir
+            if (bd != null && sasBlockId == bd.name && sasTs >= lastLocalPageChange &&
+                sasPageN >= 0 && sasPageN != currentPageIndex) {
+                currentPageIndex = sasPageN
+                updatePageIndicator()
+                Log.i(TAG, "␐ Page adoptée: $sasPageN (la capture fait foi)")
+            }
             // ⛺ le sas frais (même maison, plus récent que la dernière
             // navigation locale) gagne ; sinon la source durable : le
             // texte.txt de la page courante — la ligne suit la navigation.
-            val bd = blockDir
             val texteAffiche = when {
                 bd != null && sasBlockId == bd.name && texteDuSas.isNotEmpty() &&
                     sasTs >= lastLocalPageChange -> texteDuSas
@@ -4846,9 +4859,14 @@ class MiroirIME : InputMethodService() {
             }
             // Mode Parnasse (note_id présent) → texte de LA page courante uniquement
             // Mode IME standalone (pas de note_id) → texte intégral du bloc
-            val text = if (pageNoteId != null)
-                buildReadingOrderText()
-            else
+            val text = if (pageNoteId != null) {
+                // ⛺ UNE SEULE ENCRE (19/10/2026) — le versement lit la source
+                // durable (texte.txt, couché par la capture à la sauvegarde) ;
+                // l'encre en RAM n'est plus qu'un fallback pour les pages
+                // anciennes jamais resauvées depuis la libération.
+                val tf = java.io.File(blockDir!!, "page_$currentPageIndex/texte.txt")
+                if (tf.exists()) tf.readText().trim() else buildReadingOrderText()
+            } else
                 buildAllPagesText()
             if (text.isBlank()) { Log.w(TAG, "📝 pushText: texte vide (${groupLabels.size} labels)"); return }
             val coeurUrl = ctx.coeurUrl ?: "http://127.0.0.1:8008"
