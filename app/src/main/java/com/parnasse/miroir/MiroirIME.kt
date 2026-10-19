@@ -201,12 +201,9 @@ class MiroirIME : InputMethodService() {
     private var ligneTexte: android.widget.EditText? = null  // ⛺ la vue du clavier — la ligne de texte, éditable
     private var blockTimestamp: Long = 0L
     private var blockDir: java.io.File? = null  // null = pas de bloc actif
-    // ⛺ LE CONDUIT V★ EST LIBÉRÉ (19/10/2026) — le clavier n'écrit plus de
-    // strokes ; l'écriture réelle vit dans la capture (une seule encre).
-    private var vstarWriter: VStarWriter? = null
-    private var vstarPointCount = 0
-    // Conduit V★ v2.0 — document vivant (16B tokens, GroupTable intégrée) — ⬅️ OBSOLÈTE
-    private var vstarDoc: VStarDocumentV2? = null
+    // ⛺ LES ORGANES V★ DU CLAVIER SONT LIBÉRÉS (19/10/2026) — vstarWriter,
+    // vstarPointCount, vstarDoc archivés dans ARCHIVES/seau-des-sequelles.
+    // Le clavier ne lit plus l'encre en V★ : la capture est le seul porteur.
     // Flag temporaire : active V★ v2.0 pour save/load — ⬅️ OBSOLÈTE
     private val useVStarV2 = true
 
@@ -369,9 +366,6 @@ class MiroirIME : InputMethodService() {
         if (dir.exists()) {
             Log.i(TAG, "clearPage: page $currentPageIndex existante — session reprise")
         }
-        // Fermer le document V2 s'il était ouvert (obsolète)
-        vstarDoc?.close()
-        vstarDoc = null
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -408,14 +402,6 @@ class MiroirIME : InputMethodService() {
         }
         return if (hasPoints) Pair(minX, (minY + maxY) / 2f)
         else Pair(0f, 0f)
-    }
-
-    /** Active le mode V★ v2.0 pour cette page. */
-    private fun openVStarDoc(dir: java.io.File) {
-        val vstarFile = java.io.File(dir, "page.vstar")
-        vstarDoc = VStarDocumentV2(vstarFile)
-        vstarDoc!!.open()
-        Log.i(TAG, "V★ v2.0 ouvert: ${vstarFile.absolutePath}")
     }
 
     /** Convertit un StrokeRecord en liste de VStarTokenV2. */
@@ -701,184 +687,9 @@ class MiroirIME : InputMethodService() {
         val cp = countPages()
         Log.i(TAG, "🔴 SYNC [$source] ime=$currentPageIndex parnasse_total=$tn pages_disque=$cp $extra".trim())
     }
-    @Suppress("unused")
-    private fun savePageV2() {
-        // ═══ Création paresseuse du bloc au premier stroke ═══
-        if (blockDir == null && strokeRegistry.any { !it.isDeleted && it.points.isNotEmpty() }) {
-            ensureBlockDir(currentFieldKey.ifEmpty { "standalone" }, System.currentTimeMillis())
-            Log.i(TAG, "Bloc créé paresseusement: ${blockDir?.name}")
-        }
-        val bd = blockDir ?: run {
-            Log.w(TAG, "savePageV2: pas de bloc actif")
-            return
-        }
-        val hasLiveStrokes = strokeRegistry.any { !it.isDeleted && it.points.isNotEmpty() && it.timestamps.isNotEmpty() }
-        val dir = java.io.File(bd, "page_$currentPageIndex")
-        if (!hasLiveStrokes) {
-            if (dir.exists()) { dir.deleteRecursively(); Log.i(TAG, "savePageV2: page vide — dossier supprimé") }
-            return
-        }
-        try {
-            dir.mkdirs()
-            // Bitmap
-            bitmap?.let {
-                java.io.FileOutputStream(java.io.File(dir, "bitmap.png")).use { out ->
-                    it.compress(Bitmap.CompressFormat.PNG, 90, out)
-                }
-            }
-
-            // ═══ DEBUG : sauvegarde horodatée avant écrasement ═══
-            val vstarFile = java.io.File(dir, "page.vstar")
-            val groupsFile = java.io.File(dir, "page.groups.json")
-            val debugDir = java.io.File(bd, "debug_saves")
-            debugDir.mkdirs()
-            val ts = java.text.SimpleDateFormat("HHmmss-SSS", java.util.Locale.US).format(java.util.Date())
-            val backupDir = java.io.File(debugDir, "page${currentPageIndex}_$ts")
-            backupDir.mkdirs()
-            if (vstarFile.exists()) {
-                vstarFile.copyTo(java.io.File(backupDir, "page.vstar"), true)
-            }
-            if (groupsFile.exists()) {
-                groupsFile.copyTo(java.io.File(backupDir, "page.groups.json"), true)
-            }
-            // Sauvegarder aussi l'état GroupManager (JSON lisible)
-            val gmState = org.json.JSONObject()
-            val gm = groupManager
-            if (gm != null) {
-                val groupsArr = org.json.JSONArray()
-                for (g in gm.allGroups()) {
-                    val gObj = org.json.JSONObject()
-                    gObj.put("id", g.id.take(8))
-                    gObj.put("strokeIds", org.json.JSONArray(g.strokeIds))
-                    gObj.put("state", g.state.toString())
-                    groupsArr.put(gObj)
-                }
-                gmState.put("groups", groupsArr)
-                gmState.put("cacheSize", gm.cacheSize())
-            }
-            java.io.FileWriter(java.io.File(backupDir, "gm_state.json")).use { it.write(gmState.toString(2)) }
-            Log.i(TAG, "V★ v2.0 DEBUG: backup → ${backupDir.name}")
-
-            // Ouvrir le document V2 (écrase l'ancien)
-            if (vstarFile.exists()) vstarFile.delete()
-            if (groupsFile.exists()) groupsFile.delete()  // ⚠️ éviter accumulation groupes
-            val doc = VStarDocumentV2(vstarFile)
-            doc.open()
-
-            // ═══ Encoder les strokes vivants en V★ v2.0 ═══
-            val allLiveIndices = strokeRegistry.indices
-                .filter { !strokeRegistry[it].isDeleted && strokeRegistry[it].points.isNotEmpty() && strokeRegistry[it].timestamps.isNotEmpty() }
-                .toList()
-
-            // 🔬 DIAG : ordre des strokes sauvegardés
-            if (allLiveIndices.isNotEmpty()) {
-                val firstPts = allLiveIndices.take(5).map { ri ->
-                    val p = strokeRegistry[ri].points[0]
-                    "ri$ri@(${p.first.toInt()},${p.second.toInt()})"
-                }
-                Log.i(TAG, "🔬 DIAG save: ${allLiveIndices.size} strokes, 5 premiers: $firstPts")
-            }
-
-            // Map: registryIndex → captureIndex + offset dans le fichier
-            val registryToCI = mutableMapOf<Int, Short>()
-            val ciToOffset = mutableMapOf<Short, Int>()     // offset du premier token
-            val ciToCount = mutableMapOf<Short, Int>()      // nombre de tokens
-
-            for (ri in allLiveIndices) {
-                val sr = strokeRegistry[ri]
-                val ci = doc.beginStroke()
-                registryToCI[ri] = ci
-                val startOffset = doc.activeStrokeOffset()
-                val tokens = strokeRecordToTokensV2(sr, ci)
-                for (t in tokens) doc.writeToken(t)
-                doc.endStroke(ci)
-                ciToOffset[ci] = startOffset
-                ciToCount[ci] = tokens.size
-            }
-
-            // ═══ Construire les groupes directement dans la GroupTable ═══
-            // Utiliser allGroupsFull() pour voir TOUS les groupes (cache + persistance)
-            val allGroups = (groupManager?.allGroupsFull() ?: emptyList())
-                .filter { it.strokeIds.isNotEmpty() }
-            // ═══ DIAG : état GroupManager avant sauvegarde ═══
-            Log.i(TAG, "V★ v2.0 DIAG save GM: ${allGroups.size} groupes, strokeIds=[${allGroups.joinToString(",") { "${it.id.take(4)}:${it.strokeIds.size}s" }}]")
-            // ═══ DIAG : taille cache vs full ═══
-            val cacheSize = groupManager?.cacheSize() ?: 0
-            Log.i(TAG, "V★ v2.0 DIAG save GM: cache=$cacheSize full=${allGroups.size} persistés=${allGroups.size - cacheSize}")
-
-            // Nettoyer la persistance après lecture (évite accumulation)
-            groupManager?.persistence?.deleteAll()
-
-            // Grouper les registryIndex par groupe (depuis GroupManager)
-            val groupToRIs = mutableMapOf<String, MutableList<Int>>()
-            for (group in allGroups) {
-                val ris = mutableListOf<Int>()
-                for (sid in group.strokeIds) {
-                    val ri = inkStrokeIdToRegistryIndex[sid] ?: continue
-                    if (ri in registryToCI) ris.add(ri)
-                }
-                if (ris.isNotEmpty()) groupToRIs[group.id] = ris
-            }
-
-            // Écrire chaque groupe dans la GroupTable avec ses extents
-            var groupCount = 0
-            for ((oldGid, ris) in groupToRIs) {
-                val firstRI = ris.first()
-                val firstCI = registryToCI[firstRI] ?: continue
-                val firstOffset = ciToOffset[firstCI] ?: continue
-                val firstCount = ciToCount[firstCI] ?: continue
-                val label = groupLabels[firstRI]
-                // ⚠️ Ancre = centre géométrique du groupe (stable, pas dépendant du 1er stroke)
-                val (ax, ay) = computeGroupAnchor(ris)
-                val newGid = doc.createGroupWithExtent(
-                    anchorX = ax, anchorY = ay,
-                    offset = firstOffset, count = firstCount, label = label
-                )
-                if (newGid.isEmpty()) continue
-                groupCount++
-
-                // Ajouter les extents des autres strokes du groupe
-                for (ri in ris) {
-                    if (ri == firstRI) continue
-                    val ci = registryToCI[ri] ?: continue
-                    val offset = ciToOffset[ci] ?: continue
-                    val count = ciToCount[ci] ?: continue
-                    doc.getGroupTable()?.addExtent(newGid, VStarGroupTable.Extent(offset, count))
-                }
-
-                // Labels corrigés
-                val origLabel = originalLabels[firstRI]
-                if (origLabel != null && origLabel != label) {
-                    doc.updateGroupMeta(newGid, labelCorrected = label)
-                }
-            }
-
-            // Strokes sans groupe → groupe solo
-            for (ri in allLiveIndices) {
-                if (groupToRIs.values.any { ri in it }) continue
-                val ci = registryToCI[ri] ?: continue
-                val offset = ciToOffset[ci] ?: continue
-                val count = ciToCount[ci] ?: continue
-                val label = groupLabels[ri]
-                val gid = doc.createGroupWithExtent(0f, 0f, offset, count, label)
-                if (gid.isNotEmpty()) groupCount++
-            }
-
-            doc.flush()
-            doc.close()
-            // ═══ DIAG : bounds des strokes sauvegardés ═══
-            val firstSR = strokeRegistry.firstOrNull { !it.isDeleted && it.points.isNotEmpty() }
-            if (firstSR != null) {
-                val p0 = firstSR.points.first()
-                Log.i(TAG, "V★ v2.0 DIAG save: premier point=(${p0.first}, ${p0.second}) registrySize=${strokeRegistry.size} liveIdx=${allLiveIndices.size}")
-            }
-            Log.i(TAG, "V★ v2.0 sauvegardé: ${allLiveIndices.size} strokes, $groupCount groupes → ${vstarFile.length()}B")
-            // ═══ MDM — MarkDownMiroir ═══
-            savePageMdm(dir)
-        } catch (e: Exception) {
-            Log.e(TAG, "savePageV2 erreur: ${e.message}", e)
-        }
-    }
+    // ⛺ savePageV2 est ARCHIVÉE (19/10/2026) — le corps vit dans
+    // ARCHIVES/seau-des-sequelles-2026-10-19.md. La sauvegarde réelle
+    // est MiroirEngine.savePageFull (la capture, une seule encre).
 
     // ═══════════════════════════════════════════════════════════════════
     // MDM — MarkDownMiroir — Stockage page.mdm
@@ -2095,16 +1906,8 @@ class MiroirIME : InputMethodService() {
             layoutParams = android.widget.LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
-        fun makeFmtBtn(label: String, markdown: String): android.widget.Button {
-            return android.widget.Button(this).apply {
-                text = label
-                textSize = 18f
-                setTextColor(Color.argb(255, 200, 200, 200))
-                background = borderedBg(Color.argb(100, 60, 60, 70))
-                setPadding((10 * density).toInt(), (6 * density).toInt(), (10 * density).toInt(), (6 * density).toInt())
-                setOnClickListener { injectMarkdown(markdown) }
-            }
-        }
+        // ⛺ makeFmtBtn est ARCHIVÉE (19/10/2026) — elle revivra dans l'autre
+        // vue du clavier (les balises markdown exilées). Voir ARCHIVES/.
         // ── Bouton Insertion manuscrite (sous-session capture) ──
         val insertBtn = android.widget.Button(this).apply {
             text = "✎ Insérer"
@@ -3380,7 +3183,7 @@ class MiroirIME : InputMethodService() {
         }
 
         /** Vrai si un geste d'édition est actif. */
-        fun isEditing(): Boolean = editMode != EditMode.NONE
+        // ⛺ isEditing est ARCHIVÉE (19/10/2026) — voir ARCHIVES/seau-des-sequelles.
         fun isCorrecting(): Boolean = editMode == EditMode.CORRECT_TRANSCRIPTION
 
         /** Retourne l'index de la lettre touchée, ou -1. */
@@ -3652,31 +3455,7 @@ class MiroirIME : InputMethodService() {
         private var tapStartTime = 0L; private var tapMoved = false
         private var tapStrokeStarted = false  // true si onStylusDown a été appelé
 
-        /** Vérifie si le tap est dans la toolbar et déclenche l'action. */
-        private fun handleToolbarTap(x: Float, y: Float): Boolean {
-            if (y > toolbarHeightPx) return false  // pas dans la toolbar
-            // 4 boutons : ✓ ⚙ 👁 + puis ✕
-            val btnWidth = width / 4f
-            val index = (x / btnWidth).toInt().coerceIn(0, 3)
-            Log.i(TAG, "Tap stylet bouton #$index (x=$x, y=$y)")
-            when (index) {
-                0 -> { savePage(); currentInputConnection?.commitText("\n", 1); requestHideSelf(0) }
-                1 -> {
-                    val intent = android.content.Intent(this@MiroirIME, CalibrationActivity::class.java)
-                    intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(intent)
-                }
-                2 -> { showOverlays = !showOverlays; refreshAll() }
-                3 -> {
-                    currentInputConnection?.let { ic ->
-                        ic.performContextMenuAction(android.R.id.selectAll)
-                        ic.commitText("", 1)
-                    }
-                    clearPage(); refreshAll(); requestHideSelf(0)
-                }
-            }
-            return true
-        }
+        // ⛺ handleToolbarTap est ARCHIVÉE (19/10/2026) — voir ARCHIVES/.
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -3729,11 +3508,7 @@ class MiroirIME : InputMethodService() {
         return cachedSpatialGroups ?: emptyList()
     }
 
-    private fun getSpatialBounds(): List<android.graphics.RectF> {
-        getSpatialGroups()
-        return cachedSpatialBounds ?: emptyList()
-    }
-
+    // ⛺ getSpatialBounds est ARCHIVÉE (19/10/2026) — voir ARCHIVES/.
     /**
      * 🪄 Décompose un groupe en strokes individuels.
      * Chaque stroke du groupe devient son propre groupe d'un seul stroke.
@@ -4111,12 +3886,7 @@ class MiroirIME : InputMethodService() {
     private val inferredGroupFirstIdxs = mutableSetOf<Int>()
 
     /** Annule tous les timers d'inférence en attente. */
-    private fun cancelAllGroupTimers() {
-        for ((_, timer) in groupTimers) {
-            timer.cancel(false)
-        }
-        groupTimers.clear()
-    }
+    // ⛺ cancelAllGroupTimers est ARCHIVÉE (19/10/2026) — voir ARCHIVES/.
 
     /** Arme le timer d'inférence pour UN SEUL groupe (O(1) au lieu de O(n)). */
     private fun armTimerForGroup(group: InkGroup) {
