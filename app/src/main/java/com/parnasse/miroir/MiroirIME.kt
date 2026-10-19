@@ -124,61 +124,10 @@ class MiroirIME : InputMethodService() {
     // lettres écrites (le nominal) restent noires, les prédites en gris
     // moyen. La prédiction n'écrit rien — elle attend la ratification de la
     // main (le tenir), comme la coche attend la sienne.
-    private val predictions = mutableMapOf<Int, String>()
-
-    /** La prédiction suit la pose du label (la sentinelle). Le label frais
-     *  part comme contexte : le glossaire répond s'il connaît la forme lue
-     *  (« tescte » → « texte »). Sans candidat, la voix se tait — pas de gris. */
-    private fun demanderPrediction(firstIdx: Int, label: String) {
-        if (label.isBlank() || predictions.containsKey(firstIdx)) return
-        val json = org.json.JSONObject().apply { put("contexte", label) }
-        Thread {
-            try {
-                val coeur = parnasseContext?.coeurUrl ?: "http://127.0.0.1:8008"
-                val conn = java.net.URL("$coeur/api/prediction/proposer").openConnection() as java.net.HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.doOutput = true
-                conn.outputStream.write(json.toString().toByteArray())
-                val corps = conn.inputStream.bufferedReader().readText()
-                conn.disconnect()
-                val arr = org.json.JSONObject(corps).optJSONArray("candidats") ?: org.json.JSONArray()
-                var choisie: String? = null
-                for (i in 0 until arr.length()) {
-                    val c = arr.getJSONObject(i)
-                    if (c.optString("source") == label) { choisie = c.optString("texte"); break }
-                }
-                if (choisie == null && arr.length() > 0) choisie = arr.getJSONObject(0).optString("texte")
-                if (choisie != null && choisie.isNotBlank() && choisie != label) {
-                    predictions[firstIdx] = choisie
-                    Log.i(TAG, "▸ Prédiction: '$label' → '$choisie' (voix grise, en attente de la main)")
-                    imeView?.postInvalidate()
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "▸ Prédiction: la voix ne répond pas — ${e.message}")
-            }
-        }.start()
-    }
-
     private val labelPaint = Paint().apply {
         color = Color.BLACK  // noir pur pour mode DU
         textSize = 50f       // ⛪ MARÉE 05/10 — 20 % plus grand (comme le standalone)
         isAntiAlias = false  // mode DU : pas de gris
-        typeface = Typeface.DEFAULT_BOLD
-    }
-    // Version estompée pour les labels non sélectionnés
-    private val dimLabelPaint = Paint().apply {
-        color = Color.GRAY   // gris pour contraste e-ink
-        textSize = 50f
-        isAntiAlias = false
-        typeface = Typeface.DEFAULT
-    }
-    // 🔮 LA VOIX GRISE (18/10/2026) — les lettres prédites par le proposeur :
-    // un gris moyen entre l'encre (noir) et l'estompé (gris clair).
-    private val paintPrediction = Paint().apply {
-        color = Color.rgb(110, 110, 110)
-        textSize = 50f
-        isAntiAlias = false
         typeface = Typeface.DEFAULT_BOLD
     }
     // ── Dessin ────────────────────────────────────────────────────────
@@ -4537,9 +4486,6 @@ class MiroirIME : InputMethodService() {
                     // ⚖️ La sentinelle : l'inférence pose — mais elle ne touche jamais un corrigé.
                     if (relecture.poserLabelInfere(firstIdx, result)) {
                         Log.i(TAG, "LABEL set: firstIdx=$firstIdx -> '$result' (${groupLabels.size} labels total)")
-                        // 🔮 La prédiction suit la pose : le label frais part
-                        // vers le proposeur — la voix grise reviendra (ou se taira).
-                        demanderPrediction(firstIdx, result)
                     } else {
                         Log.i(TAG, "LABEL retenu: firstIdx=$firstIdx reste '${groupLabels[firstIdx]}' — corrigé non ratifié")
                     }
@@ -5832,57 +5778,13 @@ class MiroirIME : InputMethodService() {
             // allGroups().bounds peut être vide après reload → left=0 → label à gauche
             val x = anchor.first
             val y = snapToLine(anchor.second) + labelPaint.textSize - 10f  // ⛪ 05/10 — quelques px plus bas
-            // ═══ Noir gras pour le SELECTED, gris normal pour les autres ═══
-            val paint = if (firstIdx == selectedFirstIdx) labelPaint else dimLabelPaint
-            val prediction = predictions[firstIdx]
-            if (prediction != null && prediction != label) {
-                // 🔮 LA VOIX GRISE (18/10/2026) — le label affiche la proposition :
-                // les lettres communes (l'encre écrite) en noir, les prédites
-                // en gris moyen. La main voit d'un coup d'œil ce qu'elle ratifie.
-                dessinerPrediction(canvas, prediction, x, y, label, paint)
-            } else {
-                canvas.drawText(label, x, y, paint)
-            }
+            // ⛺ la prédiction côté clavier est LIBÉRÉE (19/10/2026) — la voix
+            // grise vit dans la capture seule (une seule encre) ; la vue
+            // interne dessine le label tel quel.
+            canvas.drawText(label, x, y, labelPaint)
             drawn++
         }
         if (drawn < groupLabels.size) Log.d(TAG, "LABEL drawn: $drawn/${groupLabels.size}")
-    }
-
-    /** 🔮 Les lettres écrites gardent l'encre du label, les prédites passent
-     *  au gris moyen — LCS entre le nominal et la proposition (mots courts). */
-    private fun dessinerPrediction(canvas: Canvas, texte: String, x: Float, y: Float, nominal: String, basePaint: Paint) {
-        val n = nominal.length
-        val m = texte.length
-        if (n == 0 || m == 0) {
-            canvas.drawText(texte, x, y, basePaint)
-            return
-        }
-        val dp = Array(n + 1) { IntArray(m + 1) }
-        for (i in n - 1 downTo 0) {
-            for (j in m - 1 downTo 0) {
-                dp[i][j] = if (nominal[i] == texte[j]) dp[i + 1][j + 1] + 1 else maxOf(dp[i + 1][j], dp[i][j + 1])
-            }
-        }
-        val communes = BooleanArray(m)
-        var i = 0; var j = 0
-        while (i < n && j < m) {
-            when {
-                nominal[i] == texte[j] -> { communes[j] = true; i++; j++ }
-                dp[i + 1][j] >= dp[i][j + 1] -> i++
-                else -> j++
-            }
-        }
-        var cx = x
-        var k = 0
-        while (k < m) {
-            val predite = !communes[k]
-            var fin = k + 1
-            while (fin < m && communes[fin] == communes[k]) fin++
-            val seg = texte.substring(k, fin)
-            canvas.drawText(seg, cx, y, if (predite) paintPrediction else basePaint)
-            cx += basePaint.measureText(seg)
-            k = fin
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════════
