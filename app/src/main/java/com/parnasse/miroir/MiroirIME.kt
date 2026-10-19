@@ -244,6 +244,7 @@ class MiroirIME : InputMethodService() {
     //   - Sinon → bloc vierge à chaque ouverture (timestamp unique)
     // Le bloc est créé à l'ouverture de l'IME et fermé au ✕.
     private var currentFieldKey: String = ""
+    private var currentHostPackage: String? = null  // ⛺ l'intimité de l'app tierce — posé à l'entrée
     private var blockTimestamp: Long = 0L
     private var blockDir: java.io.File? = null  // null = pas de bloc actif
     // Conduit V★ — flux binaire parallèle (append-only, 13 octets/point) — ⬅️ OBSOLÈTE, remplacé par vstarConduit
@@ -989,7 +990,7 @@ class MiroirIME : InputMethodService() {
             for ((firstIdx, label) in groupLabels) {
                 val anchor = groupAnchor[firstIdx] ?: continue
                 // Nettoyer le label : "*G2-4S comprendre" → "comprendre"
-                val cleanLabel = cleanLabelForMdm(label)
+                val cleanLabel = deballeLabel(label)
                 if (cleanLabel.isEmpty()) continue
                 val lineIdx = if (cachedTemplateLines.isNotEmpty()) {
                     // ⛪ MARÉE 30/09 — une seule source : la ligne de l'AFFICHAGE
@@ -1044,14 +1045,17 @@ class MiroirIME : InputMethodService() {
      *  serait supprimé → MDM tronqué → loadFromMdm() ne trouve plus le label
      *  → génération de strokes synthétiques en double sur la 1ère interligne.
      *  Voir SyntheticStrokeGenerator.kt pour l'analyse du conflit. */
-    private fun cleanLabelForMdm(raw: String): String {
-        // Supprimer le préfixe de groupe : "*G{idx}-{N}S "
-        var cleaned = raw.replace(Regex("\\*G\\d+-\\d+S\\s*"), "")
-        // Supprimer les caractères parasites mais garder lettres, accents, chiffres, espaces, apostrophes, tirets
-        cleaned = cleaned.replace(Regex("[^\\p{L}\\p{N} '\\-]"), " ")
-        // Supprimer les espaces multiples
-        cleaned = cleaned.replace(Regex("\\s+"), " ").trim()
-        return cleaned
+    private fun deballeLabel(raw: String): String {
+        // ␐ LA COUCHE DÉBALLEUSE (19/10/2026) — le texte est la source : ce
+        // nettoyage retire UNIQUEMENT le marqueur interne de groupe, jamais la
+        // matière. @, #, %, &, =… voyagent comme des lettres. (L'ancienne
+        // version filtrait par liste blanche — elle a mangé le @ de
+        // « nc.tahiti@gmail.com ».) Le parse du MDM est le métier du parseur,
+        // pas du texte — deux couches, deux métiers.
+        var clean = raw.replace(Regex("\\*G\\d+-\\d+S\\s*"), "")
+        // Normaliser le blanc seulement — la substance ne bouge pas.
+        clean = clean.replace(Regex("\\s+"), " ").trim()
+        return clean
     }
 
     /** Charge page.mdm — log le markup sans repositionner (non-destructif).
@@ -2078,6 +2082,11 @@ class MiroirIME : InputMethodService() {
                     intent.putExtra(CaptureActivity.EXTRA_BLOCK_ID, it.name)
                     intent.putExtra(CaptureActivity.EXTRA_MODE, "ime-local")
                 }
+                // ⛺ l'intimité voyage (19/10/2026) : le package hôte accompagne
+                // la bascule — la liste des maisons se filtre côté capture.
+                currentHostPackage?.let {
+                    intent.putExtra(CaptureActivity.EXTRA_HOST_PACKAGE, it)
+                }
             }
             startActivity(intent)
         })
@@ -2434,6 +2443,7 @@ class MiroirIME : InputMethodService() {
             // retrouver sa maison (continuation du token d'intention), un champ
             // neuf en naît une — paresseusement, au premier trait.
             val fieldKey = buildFieldKey(info)
+            currentHostPackage = info?.packageName  // ⛺ l'hôte courant — le filtre d'intimité de la liste
             if (blockDir == null || currentFieldKey != fieldKey) {
                 val existing = findExistingBlock(fieldKey)
                 if (existing != null) {
@@ -2449,6 +2459,7 @@ class MiroirIME : InputMethodService() {
             Log.i(TAG, "Page vierge standalone — prête pour capture")
         } else {
             // ═══ Vérifier si le bloc a changé (Flutter a navigué vers un autre bloc) ═══
+            currentHostPackage = null  // ⛺ la vue Parnasse est la maison — le filtre d'intimité se lève
             val newBlockId = parnasseContext!!.blockId
             if (blockDir?.name != newBlockId) {
                 openBlockDir(newBlockId)
@@ -4618,7 +4629,7 @@ class MiroirIME : InputMethodService() {
         val words = mutableListOf<Word>()
         for ((firstIdx, text) in groupLabels) {
             val anchor = groupAnchor[firstIdx] ?: continue
-            val clean = cleanLabelForMdm(text)
+            val clean = deballeLabel(text)
             if (clean.isEmpty()) continue
             words.add(Word(snapToLine(anchor.second), anchor.first, clean))
         }
@@ -5272,8 +5283,16 @@ class MiroirIME : InputMethodService() {
     /** Clic long ◀ — Liste des blocs disponibles. */
     private fun showBlockList() {
         val blocksDir = java.io.File(filesDir, "blocks")
+        // ⛺ L'INTIMITÉ DE L'APP TIERCE (19/10/2026) — une app ne voit que ses
+        // propres notes : la liste est filtrée par le package de l'hôte qui
+        // invoque. Sans hôte (la maison : lanceur, vue Parnasse), tout est
+        // visible — l'intimité protège l'app, pas le Capitaine contre lui-même.
+        // (Le PID hôte n'est pas accessible à l'IME : le package est le seul
+        // discriminant — et c'est l'identité qui survit à la mort du processus.)
+        val hostPrefix = currentHostPackage?.replace(".", "_")
         val blocks = blocksDir.listFiles()
             ?.filter { it.isDirectory && (it.listFiles()?.any { f -> f.isDirectory && f.name.startsWith("page_") } ?: false) }
+            ?.filter { hostPrefix == null || it.name.startsWith(hostPrefix) }
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
 

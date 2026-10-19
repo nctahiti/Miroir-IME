@@ -1,6 +1,7 @@
 package com.parnasse.miroir
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.*
 import android.os.Bundle
@@ -35,6 +36,7 @@ class CaptureActivity : Activity() {
         const val EXTRA_NOTE_ID         = "note_id"
         const val EXTRA_PAGE_N          = "page_n"
         const val EXTRA_MODE            = "mode"
+        const val EXTRA_HOST_PACKAGE    = "host_package"  // ⛺ l'intimité de l'app tierce
         const val EXTRA_OFFSET_LEFT     = "offset_left"
         const val EXTRA_OFFSET_TOP      = "offset_top"
         const val EXTRA_SCREENSHOT_PATH = "screenshot_path"
@@ -79,6 +81,7 @@ class CaptureActivity : Activity() {
 
     // ── Contexte d'invocation ──────────────────────────────────────────
     private var invocBlockId: String? = null
+    private var invocHostPackage: String? = null  // ⛺ l'intimité de l'app tierce — filtre la liste des maisons
     private var invocPageN: Int = 0
     private var invocNoteId: String? = null
     // ⚓ MARÉE 30/08 — le focus ne détourne pas l'invocation : tant que la
@@ -121,6 +124,7 @@ class CaptureActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         invocBlockId = intent.getStringExtra(EXTRA_BLOCK_ID)
+        invocHostPackage = intent.getStringExtra(EXTRA_HOST_PACKAGE)
         invocPageN   = intent.getIntExtra(EXTRA_PAGE_N, 0)
         invocNoteId  = intent.getStringExtra(EXTRA_NOTE_ID)
         invocMode    = intent.getStringExtra(EXTRA_MODE) ?: "bloc"
@@ -238,6 +242,24 @@ class CaptureActivity : Activity() {
                     fontaineOverlay?.activer()
                 }
             }
+        } else if (invocMode == "ime-local" && targetPage == 0) {
+            // ␐ LA BASCILE OUVRE UNE PAGE NEUVE (19/10/2026) — la vision du
+            // tiroir : « la page est vide et attend les données ». Chaque
+            // bascule naît une page fraîche en fin de bloc ; la maison garde
+            // ses pages (la continuation passe par 📂). Une page restée vide
+            // est nettoyée à la sauvegarde — pas de trace.
+            engine.currentPageIndex = engine.countPages() - 1
+            engine.newPage()  // insère après la dernière — currentPageIndex = la nouvelle
+            engine.initGroupManager(this)
+            engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
+            captureView?.post {
+                engine.loadPageFull()
+                updatePageCounter()
+                fontaineOverlay?.desactiver()
+                captureView?.invalidate()
+                fontaineOverlay?.activer()
+            }
+            Log.i(TAG, "␐ Bascule: page neuve ouverte (${engine.countPages()} pages au tiroir)")
         } else if (isContextual && targetPage > 0 && engine.countPages() > targetPage) {
             engine.goToPageFull(targetPage)
         } else if (engine.countPages() > 0) {
@@ -441,11 +463,13 @@ class CaptureActivity : Activity() {
 
         // ── Bouton ✕ (fermer) ──
         toolbar.addView(makeToolBtn("\u2715", Color.argb(200, 150, 0, 0)) { view ->
-            if (invocBlockId != null) {
+            if (invocMode == "ime") {
                 // Lancé depuis Parnasse → retour au Flutter.
                 // finish() déclenche onPause/onDestroy → savePageFull + closeBlock (export SD).
                 finish()
             } else {
+                // ⛺ la vue capture de l'IME (ime-local) et le lanceur ouvrent
+                // LE MENU (19/10/2026) — le ✕ ne claque plus la porte sans choix.
                 showCloseMenu(view)
             }
         })
@@ -790,18 +814,45 @@ class CaptureActivity : Activity() {
         popup.menu.add("Paramètres").setOnMenuItemClickListener {
             startActivity(Intent(this, CalibrationActivity::class.java)); true
         }
-        popup.menu.add("Fermer le miroir").setOnMenuItemClickListener {
-            engine.savePageFull(); engine.closeBlock()
-            val newBlockId = java.util.UUID.randomUUID().toString()
-            engine.openBlockDir(this, newBlockId)
-            engine.initGroupManager(this)
-            engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
+        popup.menu.add("Fermer le bloc — en ouvrir un autre").setOnMenuItemClickListener {
+            // ⛺ (19/10/2026) — ferme la maison courante, puis la liste des
+            // maisons de l'app s'ouvre pour choisir l'autre ; sans choix, une
+            // neuve naîtra paresseusement au premier trait.
+            engine.savePageFull(); engine.closeBlock()  // closeBlock pose blockDir=null — la neuve naîtra au premier trait
             captureView?.clearCanvas()
             updatePageCounter()
             captureView?.invalidate()
+            choisirMaison()
             true
         }
+        popup.menu.add("Retour au clavier").setOnMenuItemClickListener {
+            finish(); true
+        }
         popup.show()
+    }
+
+    /** ⛺ Liste des maisons de l'app hôte (l'intimité tenue) — après la
+     *  fermeture du bloc, l'utilisateur choisit l'autre maison. */
+    private fun choisirMaison() {
+        val prefix = invocHostPackage?.replace(".", "_")
+        val maisons = engine.listBlocks(this)
+            .filter { prefix == null || it.id.startsWith(prefix) }
+        if (maisons.isEmpty()) return
+        val labels = maisons.map { "${it.id.take(28)}  (${it.pages} p.)" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Choisir une maison")
+            .setItems(labels) { _, i ->
+                engine.switchBlock(this, maisons[i].id)
+                engine.updateTemplateSpacing(this, resources.displayMetrics.heightPixels)
+                captureView?.clearCanvas()
+                updatePageCounter()
+                // Cycle EPD après changement de bloc
+                fontaineOverlay?.desactiver()
+                captureView?.invalidate()
+                fontaineOverlay?.activer()
+            }
+            .setNegativeButton("Une neuve", null)
+            .show()
     }
 
     // ── ␐ LA PORTE ↓ DU TIROIR (18/10/2026) — le standalone n'a pas

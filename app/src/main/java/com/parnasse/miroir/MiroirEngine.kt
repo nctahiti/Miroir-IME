@@ -2255,7 +2255,7 @@ class MiroirEngine {
         val items = mutableListOf<Triple<String, Int, Float>>()
         for ((firstIdx, label) in groupLabels) {
             val anchor = groupAnchor[firstIdx] ?: continue
-            val clean = cleanLabelForMdm(label)
+            val clean = deballeLabel(label)
             if (clean.isEmpty()) continue
             val lineIdx = if (cachedTemplateLines.isNotEmpty()) {
                 cachedTemplateLines.indexOf(snapToLine(anchor.second)).takeIf { it >= 0 } ?: 0
@@ -2357,7 +2357,7 @@ class MiroirEngine {
             val gm = groupManager
             for ((firstIdx, label) in groupLabels) {
                 val anchor = groupAnchor[firstIdx] ?: continue
-                val cleanLabel = cleanLabelForMdm(label)
+                val cleanLabel = deballeLabel(label)
                 if (cleanLabel.isEmpty()) continue
                 val lineIdx = if (cachedTemplateLines.isNotEmpty()) {
                     // ⛪ MARÉE 30/09 — une seule source : la ligne que l'AFFICHAGE a
@@ -2602,13 +2602,19 @@ class MiroirEngine {
         )
     }
 
-    private fun cleanLabelForMdm(raw: String): String {
-        var cleaned = raw.replace(Regex("\\*G\\d+-\\d+S\\s*"), "")
-        cleaned = cleaned.replace(Regex("[^\\p{L}\\p{N} '\\-]"), " ")
-        cleaned = cleaned.replace(Regex("\\s+"), " ").trim()
+    private fun deballeLabel(raw: String): String {
+        // ␐ LA COUCHE DÉBALLEUSE (19/10/2026) — le texte est la source : ce
+        // nettoyage retire UNIQUEMENT le marqueur interne de groupe, jamais la
+        // matière. @, #, %, &, =… voyagent comme des lettres. (L'ancienne
+        // version filtrait par liste blanche — elle a mangé le @ de
+        // « nc.tahiti@gmail.com ». Un filtre de matière n'a pas de place ici :
+        // le parse du MDM est le métier du parseur, pas du texte.)
+        var clean = raw.replace(Regex("\\*G\\d+-\\d+S\\s*"), "")
+        // Normaliser le blanc seulement — la substance ne bouge pas.
+        clean = clean.replace(Regex("\\s+"), " ").trim()
         // ⚠️ Ne PAS supprimer les lettres isolées : \b\p{L}\b tue le "l" de "l'eau"
         // car l'apostrophe est une frontière de mot pour \b
-        return cleaned
+        return clean
     }
 }
 
