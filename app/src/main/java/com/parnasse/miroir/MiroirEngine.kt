@@ -1715,6 +1715,17 @@ class MiroirEngine {
         // ── MDM ──
         savePageMdm(dir)
 
+        // ⛺ TEXTE.TXT (19/10/2026) — « une seule encre » : le texte transcrit
+        // de la page, couché à chaque sauvegarde — la source durable que le
+        // clavier lit pour sa ligne (la note courante), même sans passage par
+        // la capture. Écrit seulement si la page porte du texte ; effacé sinon.
+        val texteFile = File(dir, "texte.txt")
+        try {
+            val texte = buildReadingOrderText().trim()
+            if (texte.isNotEmpty()) texteFile.writeText(texte)
+            else if (texteFile.exists()) texteFile.delete()
+        } catch (e: Exception) { Log.w(TAG, "texte.txt: ${e.message}") }
+
         // ⤒ TEXTE PUR (12/10/2026) — state.json, la persistance du texte seul.
         // Une seule source : écrit seulement quand la page porte un texte sans
         // encre (pageText) ; effacé sinon (le texte des pages à encre dérive

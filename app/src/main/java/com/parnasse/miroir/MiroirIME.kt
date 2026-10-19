@@ -248,6 +248,8 @@ class MiroirIME : InputMethodService() {
     private var texteDuSas: String = ""    // ␐ la matière du clavier — le texte transcrit (le sas)
     private var sasBlockId: String = ""    // ␐ la maison et la page du texte
     private var sasPageN: Int = -1
+    private var sasTs: Long = 0            // ␐ l'horloge du sas — le frais gagne sur la navigation
+    private var ligneTexte: android.widget.TextView? = null  // ⛺ la vue du clavier — la ligne de texte
     private var blockTimestamp: Long = 0L
     private var blockDir: java.io.File? = null  // null = pas de bloc actif
     // Conduit V★ — flux binaire parallèle (append-only, 13 octets/point) — ⬅️ OBSOLÈTE, remplacé par vstarConduit
@@ -1987,6 +1989,7 @@ class MiroirIME : InputMethodService() {
                 }
                 refreshAll()
                 updatePageIndicator()
+                lireSasTexte()  // ⛺ la ligne suit la navigation
                 postMiroirState()
                 logSync("◀")
             }
@@ -2046,6 +2049,7 @@ class MiroirIME : InputMethodService() {
             }
             refreshAll()
             updatePageIndicator()
+            lireSasTexte()  // ⛺ la ligne suit la navigation
             // ═══ Toujours notifier — Flutter doit savoir qu'une nouvelle page existe ═══
             postMiroirState()
             logSync("▶")
@@ -2205,23 +2209,47 @@ class MiroirIME : InputMethodService() {
             setOnClickListener { startInsertionMode() }
         }
         formatRow1.addView(insertBtn)
-        formatRow1.addView(makeFmtBtn("B", "**"))
-        formatRow1.addView(makeFmtBtn("I", "*"))
-        formatRow1.addView(makeFmtBtn("S", "~~"))
-        formatRow1.addView(makeFmtBtn("#", "# "))
-        formatRow1.addView(makeFmtBtn("•", "- "))
-        formatRow1.addView(makeFmtBtn("1.", "1. "))
-        formatRow1.addView(makeFmtBtn(">", "> "))
+        // ⛺ LES BOUTONS DE MISE EN FORME ONT QUITTÉ CETTE VUE (19/10/2026) —
+        // les balises markdown vivront dans une autre vue du clavier ; ici,
+        // la main et le texte seuls.
         // ── Constructeur ponctuation (injectText, pas markdown — un seul caractère) ──
-        fun makePunctBtn(label: String): android.widget.Button {
-            return android.widget.Button(this).apply {
+        // ⛺ LES CASES DU CLAVIER (19/10/2026) — chaque case expose ses deux
+        // caractères : la lettre (grande, suit le shift — minuscule/majuscule)
+        // et le symbole du clic long (petit, au-dessus). Le textAllCaps des
+        // Button Android est levé : les minuscules s'exposent.
+        val letterKeyLabels = mutableListOf<android.widget.TextView>()
+        fun makePunctBtn(label: String, symbole: String? = null): android.view.View {
+            val case = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER
+                setPadding((10 * density).toInt(), (2 * density).toInt(), (10 * density).toInt(), (2 * density).toInt())
+                background = borderedBg(Color.argb(100, 60, 60, 70))
+                // ⛺ les touches s'étirent à l'espace disponible (19/10/2026)
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            if (symbole != null) {
+                val sym = android.widget.TextView(this).apply {
+                    text = symbole
+                    textSize = 9f
+                    setTextColor(Color.argb(180, 150, 150, 160))
+                    gravity = android.view.Gravity.END
+                }
+                case.addView(sym, android.widget.LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+            val keyLabel = android.widget.TextView(this).apply {
                 text = label
                 textSize = 18f
+                isAllCaps = false  // ⛺ le clavier montre la casse réelle
                 setTextColor(Color.argb(255, 200, 200, 200))
-                background = borderedBg(Color.argb(100, 60, 60, 70))
-                setPadding((10 * density).toInt(), (6 * density).toInt(), (10 * density).toInt(), (6 * density).toInt())
-                setOnClickListener { injectText(label) }
+                gravity = android.view.Gravity.CENTER
             }
+            case.addView(keyLabel)
+            if (symbole != null) letterKeyLabels.add(keyLabel)  // les lettres suivent le shift
+            case.setOnClickListener { injectText(label) }
+            if (symbole != null) case.setOnLongClickListener { injectText(symbole); true }
+            return case
         }
         // ── Rangée 2 : ponctuation ──
         val formatRow2 = android.widget.LinearLayout(this).apply {
@@ -2260,6 +2288,10 @@ class MiroirIME : InputMethodService() {
             isShiftLocked = !isShiftLocked
             shiftBtnRef?.text = if (isShiftLocked) "⇧" else "⇩"
             shiftBtnRef?.setTextColor(if (isShiftLocked) Color.argb(255, 255, 200, 100) else Color.argb(255, 180, 200, 220))
+            // ⛺ les labels suivent le shift (19/10/2026) — la casse exposée
+            letterKeyLabels.forEach { lbl ->
+                lbl.text = if (isShiftLocked) lbl.text.toString().uppercase() else lbl.text.toString().lowercase()
+            }
         }
         shiftBtnRef = shiftBtn
         // ⤒ Bascule AZERTY ↔ QWERTY (12/10/2026) : appui long sur ⇧ — la
@@ -2305,9 +2337,7 @@ class MiroirIME : InputMethodService() {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             }.also { rowView ->
                 for ((lettre, symbole) in row) {
-                    rowView.addView(makePunctBtn(lettre).apply {
-                        setOnLongClickListener { injectText(symbole); true }
-                    })
+                    rowView.addView(makePunctBtn(lettre, symbole))
                 }
             }
         }
@@ -2370,6 +2400,29 @@ class MiroirIME : InputMethodService() {
         keyboardWrapper.addView(rightColumn)
         formattingPanel?.addView(keyboardWrapper)
 
+        // ⛺ LA LIGNE DE TEXTE (19/10/2026) — la vue du clavier : le texte
+        // transcrit (le sas) s'exprime au-dessus des rangées, les retours à
+        // la ligne en balises ⏎ — la matière du clavier rendue lisible.
+        ligneTexte = android.widget.TextView(this).apply {
+            text = ""
+            textSize = 14f
+            // ⛺ l'encre de la ligne (19/10/2026) — le texte est SOMBRE sur le
+            // fond clair de mainContent (le gris clair d'avant était invisible :
+            // 220,220,230 sur blanc). Un liseré la sépare des rangées.
+            setTextColor(Color.argb(255, 30, 30, 40))
+            setBackgroundColor(Color.argb(255, 245, 245, 248))
+            setPadding((14 * density).toInt(), (6 * density).toInt(), (14 * density).toInt(), (6 * density).toInt())
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        mainContent.addView(ligneTexte)
+        // ⛺ le liseré sous la ligne (la frontière du texte et des touches)
+        mainContent.addView(android.view.View(this).apply {
+            setBackgroundColor(Color.argb(255, 200, 200, 210))
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, (1 * density).toInt())
+        })
+
         mainContent.addView(formattingPanel)
 
         root.post {
@@ -2414,11 +2467,6 @@ class MiroirIME : InputMethodService() {
         // hôte (il est le seul porteur de l'InputConnection), puis l'efface.
         lirePorteCommit()
 
-        // ␐ LE SAS DU TEXTE (19/10/2026) — « une seule encre » : la capture a
-        // couché le texte transcrit à son départ ; le clavier le lit — c'est
-        // sa matière (la future ligne de texte au-dessus du clavier).
-        lireSasTexte()
-
         // ═══ Lire le token de connexion depuis le Cœur (UUID Parnasse) ═══
         // Sur restarting, relire aussi — le bloc Parnasse a pu changer.
         if (parnasseContext == null || restarting) {
@@ -2443,6 +2491,7 @@ class MiroirIME : InputMethodService() {
             blockDir?.name == parnasseContext!!.blockId) {
             Log.i(TAG, "onStartInputView — restarting ignoré (bloc déjà actif: ${blockDir?.name})")
             updatePageIndicator()
+            lireSasTexte()  // ⛺ la ligne suit la note courante
             return
         }
         if (parnasseContext == null) {
@@ -2496,6 +2545,9 @@ class MiroirIME : InputMethodService() {
                 Log.i(TAG, "Page $currentPageIndex vierge — sera créée à la première capture")
             }
         }
+        // ⛺ la ligne de texte s'exprime — la maison est résolue, la note
+        // courante est lisible (le sas frais ou le texte.txt de la page).
+        lireSasTexte()
         // ═══ Initialisation surface — SEULEMENT à la première ouverture ═══
         if (!restarting) {
             // Mode standalone ou contexte Parnasse déjà connu → init immédiate
@@ -2717,6 +2769,7 @@ class MiroirIME : InputMethodService() {
                                                     if (!success) { clearPage() }
                                                     refreshAll()
                                                     updatePageIndicator()
+                                                    lireSasTexte()  // ⛺ la ligne suit la dictée
                                                     postMiroirState()
                                                     logSync("📄→$newPage")
                                                 }
@@ -4602,17 +4655,35 @@ class MiroirIME : InputMethodService() {
     // clavier. Le texte transcrit (la capture l'a couché dans texte-page.json)
     // entre dans le moteur de texte du clavier — l'ébauche de sa vue.
 
-    /** ␐ Lit le sas (filesDir/texte-page.json) — le texte transcrit de la
-     *  page quittée. Appelé en tête d'onStartInputView — le retour. */
+    /** ␐ La note courante (filesDir/texte-page.json + texte.txt) — le sas
+     *  frais (même maison) gagne ; sinon la source durable : le texte.txt de
+     *  la page courante de la maison, couché à chaque sauvegarde. Appelé une
+     *  fois la maison résolue — la ligne de texte s'exprime. */
     private fun lireSasTexte() {
         try {
             val f = java.io.File(filesDir, "texte-page.json")
-            if (!f.exists()) return
-            val j = org.json.JSONObject(f.readText())
-            texteDuSas = j.optString("texte")
-            sasBlockId = j.optString("block_id")
-            sasPageN = j.optInt("page_n", -1)
-            Log.i(TAG, "␐ Sas lu: ${texteDuSas.length}c — $sasBlockId page $sasPageN")
+            if (f.exists()) {
+                val j = org.json.JSONObject(f.readText())
+                texteDuSas = j.optString("texte")
+                sasBlockId = j.optString("block_id")
+                sasPageN = j.optInt("page_n", -1)
+                sasTs = j.optLong("ts", 0)
+            }
+            // ⛺ le sas frais (même maison, plus récent que la dernière
+            // navigation locale) gagne ; sinon la source durable : le
+            // texte.txt de la page courante — la ligne suit la navigation.
+            val bd = blockDir
+            val texteAffiche = when {
+                bd != null && sasBlockId == bd.name && texteDuSas.isNotEmpty() &&
+                    sasTs >= lastLocalPageChange -> texteDuSas
+                bd != null -> {
+                    val tf = java.io.File(bd, "page_$currentPageIndex/texte.txt")
+                    if (tf.exists()) tf.readText().trim() else ""
+                }
+                else -> texteDuSas
+            }
+            ligneTexte?.text = texteAffiche.replace("\n", " ⏎ ")
+            Log.i(TAG, "␐ Sas lu: ${texteAffiche.length}c — ${bd?.name ?: sasBlockId} page $currentPageIndex")
         } catch (e: Exception) {
             Log.w(TAG, "␐ Sas: ${e.message}")
         }
