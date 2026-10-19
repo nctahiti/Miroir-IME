@@ -245,6 +245,9 @@ class MiroirIME : InputMethodService() {
     // Le bloc est créé à l'ouverture de l'IME et fermé au ✕.
     private var currentFieldKey: String = ""
     private var currentHostPackage: String? = null  // ⛺ l'intimité de l'app tierce — posé à l'entrée
+    private var texteDuSas: String = ""    // ␐ la matière du clavier — le texte transcrit (le sas)
+    private var sasBlockId: String = ""    // ␐ la maison et la page du texte
+    private var sasPageN: Int = -1
     private var blockTimestamp: Long = 0L
     private var blockDir: java.io.File? = null  // null = pas de bloc actif
     // Conduit V★ — flux binaire parallèle (append-only, 13 octets/point) — ⬅️ OBSOLÈTE, remplacé par vstarConduit
@@ -2410,6 +2413,11 @@ class MiroirIME : InputMethodService() {
         // commande de commit avant de finir : l'IME l'exécute dans le champ
         // hôte (il est le seul porteur de l'InputConnection), puis l'efface.
         lirePorteCommit()
+
+        // ␐ LE SAS DU TEXTE (19/10/2026) — « une seule encre » : la capture a
+        // couché le texte transcrit à son départ ; le clavier le lit — c'est
+        // sa matière (la future ligne de texte au-dessus du clavier).
+        lireSasTexte()
 
         // ═══ Lire le token de connexion depuis le Cœur (UUID Parnasse) ═══
         // Sur restarting, relire aussi — le bloc Parnasse a pu changer.
@@ -4587,6 +4595,26 @@ class MiroirIME : InputMethodService() {
             Log.i(TAG, "␐ Porte exécutée au retour: $mode (${texte.length}c)")
         } catch (e: Exception) {
             Log.w(TAG, "␐ Porte: ${e.message}")
+        }
+    }
+
+    // ␐ LE SAS DU TEXTE (19/10/2026) — « une seule encre » : la matière du
+    // clavier. Le texte transcrit (la capture l'a couché dans texte-page.json)
+    // entre dans le moteur de texte du clavier — l'ébauche de sa vue.
+
+    /** ␐ Lit le sas (filesDir/texte-page.json) — le texte transcrit de la
+     *  page quittée. Appelé en tête d'onStartInputView — le retour. */
+    private fun lireSasTexte() {
+        try {
+            val f = java.io.File(filesDir, "texte-page.json")
+            if (!f.exists()) return
+            val j = org.json.JSONObject(f.readText())
+            texteDuSas = j.optString("texte")
+            sasBlockId = j.optString("block_id")
+            sasPageN = j.optInt("page_n", -1)
+            Log.i(TAG, "␐ Sas lu: ${texteDuSas.length}c — $sasBlockId page $sasPageN")
+        } catch (e: Exception) {
+            Log.w(TAG, "␐ Sas: ${e.message}")
         }
     }
 

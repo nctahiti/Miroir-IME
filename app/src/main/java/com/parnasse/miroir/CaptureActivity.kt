@@ -855,6 +855,28 @@ class CaptureActivity : Activity() {
             .show()
     }
 
+    // ── ␐ LE SAS DU TEXTE (19/10/2026) — « une seule encre » : à chaque
+    // départ (même sans ↓), le texte transcrit se couche dans texte-page.json
+    // (le filesDir commun) ; au retour, le clavier le lit pour sa propre vue.
+    // La porte reste le geste du commit ; le sas est l'état de la page.
+
+    /** ␐ Couche le texte transcrit (et la maison/page) dans le sas. */
+    private fun verserTexte() {
+        try {
+            val texte = engine.buildReadingOrderText().trim()
+            val f = java.io.File(filesDir, "texte-page.json")
+            f.writeText(org.json.JSONObject().apply {
+                put("block_id", engine.blockDir?.name ?: invocBlockId ?: "")
+                put("page_n", engine.currentPageIndex)
+                put("texte", texte)
+                put("ts", System.currentTimeMillis())
+            }.toString())
+            Log.i(TAG, "␐ Sas: texte couché (${texte.length}c) — ${engine.blockDir?.name ?: "sans bloc"}")
+        } catch (e: Exception) {
+            Log.w(TAG, "␐ Sas: ${e.message}")
+        }
+    }
+
     // ── ␐ LA PORTE ↓ DU TIROIR (18/10/2026) — le standalone n'a pas
     // d'InputConnection : les trois commit se couchent dans le filesDir
     // commun (porte-commit.json), l'IME les exécute au retour dans le champ
@@ -1022,6 +1044,10 @@ class CaptureActivity : Activity() {
         uiHandler.removeCallbacks(contreGravure)
         // ═══ Export complet au départ : bitmap.png + V★ + groupes + MDM ═══
         engine.savePageFull()
+        // ␐ LE SAS DU TEXTE (19/10/2026) — une seule encre : à chaque départ,
+        // même sans ↓, le texte transcrit se couche dans le sas ; au retour,
+        // le clavier le lit — sa vue (la ligne de texte) s'exprime sur lui.
+        verserTexte()
     }
 
     override fun onDestroy() {
