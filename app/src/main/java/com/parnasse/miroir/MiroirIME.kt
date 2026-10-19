@@ -249,7 +249,7 @@ class MiroirIME : InputMethodService() {
     private var sasBlockId: String = ""    // ␐ la maison et la page du texte
     private var sasPageN: Int = -1
     private var sasTs: Long = 0            // ␐ l'horloge du sas — le frais gagne sur la navigation
-    private var ligneTexte: android.widget.TextView? = null  // ⛺ la vue du clavier — la ligne de texte
+    private var ligneTexte: android.widget.EditText? = null  // ⛺ la vue du clavier — la ligne de texte, éditable
     private var blockTimestamp: Long = 0L
     private var blockDir: java.io.File? = null  // null = pas de bloc actif
     // Conduit V★ — flux binaire parallèle (append-only, 13 octets/point) — ⬅️ OBSOLÈTE, remplacé par vstarConduit
@@ -1977,7 +1977,13 @@ class MiroirIME : InputMethodService() {
         toolbar.addView(makeButton("◀", {
             showBlockList()
         }) {
-            if (currentPageIndex > 0) {
+            val ligne = ligneTexte
+            if (ligne != null && ligne.isFocused) {
+                // ⛺ la navigation de texte (19/10/2026) — la ligne tient le
+                // focus : ◄ déplace le curseur dans le texte transcrit.
+                val sel = ligne.selectionStart
+                ligne.setSelection((sel - 1).coerceAtLeast(0))
+            } else if (currentPageIndex > 0) {
                 setNavigating(true)
                 lastLocalPageChange = System.currentTimeMillis()
                 pushTextToParnasse()  // ═══ synchro : pousser la capture active avant de quitter ═══
@@ -2038,6 +2044,13 @@ class MiroirIME : InputMethodService() {
         toolbar.addView(makeButton("▶", {
             showAllTranscriptions()
         }) {
+            val ligne = ligneTexte
+            if (ligne != null && ligne.isFocused) {
+                // ⛺ la navigation de texte (19/10/2026) — ► avance le curseur
+                // dans le texte transcrit quand la ligne tient le focus.
+                val sel = ligne.selectionStart
+                ligne.setSelection((sel + 1).coerceAtMost(ligne.text.length))
+            } else {
             // ═══ POÉSIE : le Miroir crée ses pages librement. ▶ jamais bloqué. ═══
             lastLocalPageChange = System.currentTimeMillis()
             setNavigating(true)
@@ -2053,6 +2066,7 @@ class MiroirIME : InputMethodService() {
             // ═══ Toujours notifier — Flutter doit savoir qu'une nouvelle page existe ═══
             postMiroirState()
             logSync("▶")
+            }
         })
 
         toolbar.addView(makeButton("+") {
@@ -2381,9 +2395,19 @@ class MiroirIME : InputMethodService() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT)
             setOnClickListener {
-                val ic = currentInputConnection
-                if (ic != null) {
-                    ic.deleteSurroundingText(1, 0)
+                val ligne = ligneTexte
+                if (ligne != null && ligne.isFocused) {
+                    // ⛺ le ⌫ efface dans la ligne quand elle tient le focus
+                    val sel = ligne.selectionStart
+                    if (sel > 0) {
+                        ligne.text.delete(sel - 1, sel)
+                        ligne.setSelection(sel - 1)
+                    }
+                } else {
+                    val ic = currentInputConnection
+                    if (ic != null) {
+                        ic.deleteSurroundingText(1, 0)
+                    }
                 }
             }
         }
@@ -2406,18 +2430,25 @@ class MiroirIME : InputMethodService() {
 
         // ⛺ LA LIGNE DE TEXTE (19/10/2026) — la vue du clavier : le texte
         // transcrit (le sas) s'exprime au-dessus des rangées, les retours à
-        // la ligne en balises ⏎ — la matière du clavier rendue lisible.
-        ligneTexte = android.widget.TextView(this).apply {
-            text = ""
+        // la ligne en balises ⏎. La ligne est ÉDITABLE : quand elle tient le
+        // focus, les touches écrivent en elle, ◄ ► déplacent le curseur.
+        ligneTexte = android.widget.EditText(this).apply {
+            setText("")
             textSize = 14f
-            // ⛺ l'encre de la ligne (19/10/2026) — le texte est SOMBRE sur le
-            // fond clair de mainContent (le gris clair d'avant était invisible :
-            // 220,220,230 sur blanc). Un liseré la sépare des rangées.
+            // ⛺ l'encre de la ligne — le texte est SOMBRE sur le fond clair
             setTextColor(Color.argb(255, 30, 30, 40))
             setBackgroundColor(Color.argb(255, 245, 245, 248))
             setPadding((14 * density).toInt(), (6 * density).toInt(), (14 * density).toInt(), (6 * density).toInt())
             layoutParams = android.widget.LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            // ⛺ l'édition sans l'IME système (le Miroir EST le clavier) —
+            // l'inputType textuel fait vivre le curseur ; showSoftInputOnFocus
+            // empêche le clavier système de se ré-ouvrir (la boucle).
+            setTextIsSelectable(true)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            setShowSoftInputOnFocus(false)
+            setSingleLine(true)
         }
         mainContent.addView(ligneTexte)
         // ⛺ le liseré sous la ligne (la frontière du texte et des touches)
@@ -4695,7 +4726,7 @@ class MiroirIME : InputMethodService() {
                 }
                 else -> texteDuSas
             }
-            ligneTexte?.text = texteAffiche.replace("\n", " ⏎ ")
+            ligneTexte?.setText(texteAffiche.replace("\n", " ⏎ "))
             Log.i(TAG, "␐ Sas lu: ${texteAffiche.length}c — ${bd?.name ?: sasBlockId} page $currentPageIndex")
         } catch (e: Exception) {
             Log.w(TAG, "␐ Sas: ${e.message}")
@@ -5215,10 +5246,21 @@ class MiroirIME : InputMethodService() {
         }
     }
 
-    /** Injecte du texte brut dans le champ hôte. Respecte le verrou shift. */
+    /** Injecte du texte brut dans le champ hôte. Respecte le verrou shift.
+     *  ⛺ Quand la ligne de texte tient le focus, le clavier s'exprime sur SA
+     *  matière : le texte s'édite au-dessus des touches (19/10/2026). */
     private fun injectText(text: String) {
-        val ic = currentInputConnection ?: return
         val out = if (isShiftLocked) text.uppercase() else text
+        val ligne = ligneTexte
+        if (ligne != null && ligne.isFocused) {
+            val sel = ligne.selectionStart.coerceIn(0, ligne.text.length)
+            // ⛺ la ligne porte les balises : le retour devient ⏎
+            val outLigne = out.replace("\n", " ⏎ ")
+            ligne.text.insert(sel, outLigne)
+            ligne.setSelection((sel + outLigne.length).coerceAtMost(ligne.text.length))
+            return
+        }
+        val ic = currentInputConnection ?: return
         ic.finishComposingText()
         ic.commitText(out, 1)
     }
